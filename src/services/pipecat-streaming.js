@@ -306,13 +306,13 @@ export class PipecatStreamingService {
             console.log('📋 Requesting screen capture permission...');
             const streamId = await new Promise((resolve, reject) => {
                 chrome.desktopCapture.chooseDesktopMedia(
-                    ['screen'],
+                    ['screen', 'window', 'tab'], // Allow multiple source types
                     (streamId) => {
                         if (streamId) {
                             console.log('✅ Screen capture permission granted, streamId:', streamId);
                             resolve(streamId);
                         } else {
-                            console.error('❌ Screen capture permission denied');
+                            console.error('❌ Screen capture permission denied - user may have clicked Cancel or closed dialog');
                             reject(new Error('Screen capture permission denied'));
                         }
                     }
@@ -345,6 +345,15 @@ export class PipecatStreamingService {
             return true;
         } catch (error) {
             console.error('❌ Screen sharing setup failed:', error);
+            
+            if (error.message.includes('permission denied')) {
+                console.log('💡 HELP: To use the Shopping Assistant:');
+                console.log('  1. Click "Start a chat" again');
+                console.log('  2. When the screen sharing dialog appears, choose "Entire Screen" or a specific window');
+                console.log('  3. Click "Share" to grant permission');
+                console.log('  4. The Shopping Assistant will then be able to see what you\'re looking at!');
+            }
+            
             throw new Error(`Screen sharing setup failed: ${error.message}`);
         }
     }
