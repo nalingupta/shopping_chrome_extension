@@ -300,14 +300,19 @@ export class PipecatStreamingService {
 
     async setupScreenSharing() {
         try {
+            console.log('🖥️ Setting up screen sharing...');
+            
             // Request screen capture permission via Chrome extension API
+            console.log('📋 Requesting screen capture permission...');
             const streamId = await new Promise((resolve, reject) => {
                 chrome.desktopCapture.chooseDesktopMedia(
                     ['screen'],
                     (streamId) => {
                         if (streamId) {
+                            console.log('✅ Screen capture permission granted, streamId:', streamId);
                             resolve(streamId);
                         } else {
+                            console.error('❌ Screen capture permission denied');
                             reject(new Error('Screen capture permission denied'));
                         }
                     }
@@ -315,6 +320,7 @@ export class PipecatStreamingService {
             });
             
             // Get screen stream
+            console.log('🎥 Getting screen stream...');
             this.screenStream = await navigator.mediaDevices.getUserMedia({
                 video: {
                     mandatory: {
@@ -327,18 +333,30 @@ export class PipecatStreamingService {
                 }
             });
             
+            console.log('✅ Screen stream obtained:', this.screenStream);
+            console.log('📊 Video tracks:', this.screenStream.getVideoTracks().length);
+            if (this.screenStream.getVideoTracks().length > 0) {
+                const track = this.screenStream.getVideoTracks()[0];
+                console.log('🔧 Video track settings:', track.getSettings());
+                console.log('🎯 Video track ready state:', track.readyState);
+                console.log('📏 Video dimensions:', track.getSettings().width, 'x', track.getSettings().height);
+            }
+            
             return true;
         } catch (error) {
+            console.error('❌ Screen sharing setup failed:', error);
             throw new Error(`Screen sharing setup failed: ${error.message}`);
         }
     }
 
     async startScreenStreamToDaily() {
         if (!this.screenStream || !this.dailyCallObject) {
+            console.error('❌ Missing screen stream or Daily connection');
             throw new Error('Screen stream or Daily connection not available');
         }
         
         try {
+            console.log('🎤 Getting microphone audio...');
             // Create a composite stream that includes screen video and microphone audio
             const audioStream = await navigator.mediaDevices.getUserMedia({ 
                 audio: {
@@ -348,17 +366,26 @@ export class PipecatStreamingService {
                 }
             });
             
+            console.log('🎵 Audio stream obtained:', audioStream);
+            console.log('📊 Audio tracks:', audioStream.getAudioTracks().length);
+            
             // Combine screen video with microphone audio
             const combinedStream = new MediaStream([
                 ...this.screenStream.getVideoTracks(),
                 ...audioStream.getAudioTracks()
             ]);
             
+            console.log('🔗 Combined stream created:');
+            console.log('  - Video tracks:', combinedStream.getVideoTracks().length);
+            console.log('  - Audio tracks:', combinedStream.getAudioTracks().length);
+            
             // Send combined stream to Daily (which forwards to Pipecat agent)
+            console.log('🚀 Enabling Daily audio/video...');
             await this.dailyCallObject.setLocalAudio(true);
             await this.dailyCallObject.setLocalVideo(true);
             
             // Set the custom combined stream
+            console.log('📡 Sending combined stream to Daily...');
             await this.dailyCallObject.updateInputSettings({
                 video: {
                     mediaStream: combinedStream
@@ -368,9 +395,11 @@ export class PipecatStreamingService {
                 }
             });
             
-            console.log('📺 Screen + audio streaming to Pipecat via Daily');
+            console.log('✅ Screen + audio streaming to Pipecat via Daily');
+            console.log('🎯 Pipecat agent should now be receiving your screen and audio!');
             return true;
         } catch (error) {
+            console.error('❌ Failed to start screen stream:', error);
             throw new Error(`Failed to start screen stream: ${error.message}`);
         }
     }
