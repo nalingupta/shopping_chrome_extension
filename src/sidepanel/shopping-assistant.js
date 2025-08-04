@@ -1,7 +1,7 @@
 import { MESSAGE_TYPES } from '../utils/constants.js';
 import { DOMUtils, MessageRenderer } from '../utils/dom.js';
 import { ChatStateManager } from '../utils/storage.js';
-import { VoiceInputHandler } from '../services/voice-handler.js';
+import { GeminiVoiceHandler } from '../services/gemini-voice-handler.js';
 
 class ShoppingAssistant {
     constructor() {
@@ -83,7 +83,7 @@ class ShoppingAssistant {
     }
 
     initializeVoiceHandler() {
-        this.voiceHandler = new VoiceInputHandler();
+        this.voiceHandler = new GeminiVoiceHandler();
         
         this.voiceHandler.setTranscriptionCallback((transcription) => {
             this.handleTranscriptionReceived(transcription);
@@ -93,7 +93,7 @@ class ShoppingAssistant {
             this.handleInterimTranscription(interimText);
         });
 
-        // PipeChat is now auto-configured with API keys
+        // Gemini Live API is now ready for streaming
 
         // Start screen status updates
         this.startScreenStatusUpdates();
@@ -384,7 +384,7 @@ class ShoppingAssistant {
 
     async startVoiceInput() {
         try {
-            // Start voice recognition - Pipecat streaming service will handle screen permission
+            // Start voice recognition - Gemini Live API will handle screen and audio
             const result = await this.voiceHandler.startListening();
             if (result.success) {
                 this.voiceButton.classList.add("listening");
@@ -394,6 +394,7 @@ class ShoppingAssistant {
                 this.handleVoiceError(result);
             }
         } catch (error) {
+            console.error('Voice input error:', error);
             this.showTemporaryStatusThenStartChat("Voice failed", "error", 4000);
         }
     }
@@ -454,9 +455,9 @@ class ShoppingAssistant {
                 return;
             }
 
-            // Check if this is a Pipecat response (starts with 🤖 or 🎯)
+            // Check if this is a Gemini response (starts with 🤖 or 🎯)
             if (transcription.startsWith("🤖") || transcription.startsWith("🎯")) {
-                // This is a Pipecat-processed response, just display it
+                // This is a Gemini-processed response, just display it
                 this.addMessage(transcription, transcription.startsWith("🤖") ? "assistant" : "user");
                 
                 // Restore listening status if voice handler is still listening
@@ -466,10 +467,16 @@ class ShoppingAssistant {
                 return;
             }
 
-            // This is traditional transcription - process through background script
-            const videoData = this.debugMode ? this.voiceHandler.getCurrentVideoData() : null;
-            this.addMessage(transcription, "user", false, videoData);
-            this.processVoiceMessage(transcription);
+            // For all other transcriptions: Only use for UI display, never process locally
+            // Gemini handles all processing with raw audio + screen data
+            this.addMessage(transcription, "user", false, null);
+            
+            // Show that we're waiting for Gemini response
+            if (!this.isProcessing) {
+                this.showHeaderStatus("Processing with Gemini...", "info");
+            }
+            
+            // NO local processing - Gemini handles everything
             
             // Don't clear listening status here - voice handler continues listening for multi-turn conversations
         }

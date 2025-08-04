@@ -17,8 +17,6 @@ export class ShoppingAssistant {
     }
 
     static async generateGeminiResponse(query, pageInfo) {
-        console.log('🧠 Generating Gemini response for query:', query);
-        console.log('📄 Page info:', pageInfo);
         
         if (!API_CONFIG.GEMINI_API_KEY) {
             throw new Error('Gemini API key not configured');
@@ -56,7 +54,6 @@ Always be helpful, concise, and focus on the user's shopping needs.`;
 
         // Add screen capture if available
         if (pageInfo?.screenCapture) {
-            console.log('📸 Including screen capture in Gemini request');
             userContent.push({
                 type: "image_url",
                 image_url: {
@@ -71,9 +68,7 @@ Always be helpful, concise, and focus on the user's shopping needs.`;
         });
 
         // Call Gemini API
-        console.log('🚀 Calling Gemini API...');
         const response = await this.callGeminiAPI(messages);
-        console.log('✅ Gemini response received');
         
         return response;
     }
