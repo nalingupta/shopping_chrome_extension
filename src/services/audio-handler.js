@@ -81,9 +81,11 @@ export class AudioHandler {
 
             // Setup screen capture (optional)
             try {
+                console.log('Setting up screen capture...');
                 await this.screenCapture.setup();
+                console.log('Screen capture setup successful');
             } catch (error) {
-                console.log('Continuing without screen sharing - using audio only');
+                console.log('Screen capture setup failed:', error.message, '- continuing with audio only');
             }
 
             // Setup audio capture
@@ -177,7 +179,10 @@ export class AudioHandler {
         
         // Start video streaming if available
         if (this.screenCapture.hasStream()) {
+            console.log('Starting video streaming - screen capture has stream');
             this.startVideoStreaming();
+        } else {
+            console.log('No screen stream available - continuing with audio only');
         }
         
         // Start audio streaming
@@ -188,20 +193,26 @@ export class AudioHandler {
 
     startVideoStreaming() {
         const stream = this.screenCapture.getStream();
-        if (!stream) return;
+        if (!stream) {
+            console.log('startVideoStreaming: No stream available');
+            return;
+        }
 
+        console.log('startVideoStreaming: Setting up video element with stream');
         const video = document.createElement('video');
         video.srcObject = stream;
         
         video.onloadedmetadata = () => {
+            console.log('Video metadata loaded, starting playback and frame capture');
             video.play();
             
             const canvas = document.createElement('canvas');
             const ctx = canvas.getContext('2d');
             
-            // Send video frames at 2 FPS
+            // Send video frames at 2 FPS for live streaming to Gemini
             this.videoInterval = setInterval(() => {
                 if (!this.screenCapture.isActive() || !this.geminiAPI.getConnectionStatus().isConnected) {
+                    console.log('Video interval check failed - screenActive:', this.screenCapture.isActive(), 'geminiConnected:', this.geminiAPI.getConnectionStatus().isConnected);
                     return;
                 }
                 
@@ -215,6 +226,7 @@ export class AudioHandler {
                             const reader = new FileReader();
                             reader.onloadend = () => {
                                 const base64 = reader.result.split(',')[1];
+                                console.log('Sending video frame to Gemini, size:', blob.size);
                                 this.geminiAPI.sendVideoFrame(base64);
                             };
                             reader.readAsDataURL(blob);

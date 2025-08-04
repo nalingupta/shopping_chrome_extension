@@ -54,10 +54,12 @@ export class GeminiLiveAPI {
                 this.ws.binaryType = 'blob';
                 
                 this.ws.onopen = async () => {
+                    console.log('Gemini WebSocket connected successfully');
                     this.isConnected = true;
                     this.reconnectAttempts = 0;
                     
                     await new Promise(resolve => setTimeout(resolve, 100));
+                    console.log('Sending Gemini configuration...');
                     this.sendConfiguration();
                     this.startKeepAlive();
                     
@@ -165,6 +167,7 @@ Remember: You have LIVE access to their screen and audio, so you can see exactly
 
     sendVideoFrame(base64Data) {
         if (!this.isSetupComplete || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
+            console.log('Video frame queued - setup incomplete or connection not ready');
             this.pendingVideoFrames.push(base64Data);
             return;
         }
@@ -193,8 +196,10 @@ Remember: You have LIVE access to their screen and audio, so you can see exactly
     handleMessage(data) {
         try {
             const message = JSON.parse(data);
+            console.log('Received Gemini message:', message);
             
             if (message.setupComplete !== undefined || message.setup_complete !== undefined) {
+                console.log('Gemini setup complete');
                 this.isSetupComplete = true;
                 this.processBufferedChunks();
                 return;

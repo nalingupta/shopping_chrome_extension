@@ -26,9 +26,7 @@ export class ShoppingAssistant {
             sendButton: document.getElementById("sendButton"),
             voiceButton: document.getElementById("voiceButton"),
             clearChatButton: document.getElementById("clearChatButton"),
-            debugToggle: document.getElementById("debugToggle"),
             headerStatus: document.getElementById("headerStatus"),
-            screenRecordingIndicator: document.getElementById("screenRecordingIndicator"),
             welcomeScreen: document.getElementById("welcomeScreen")
         };
     }
@@ -37,7 +35,6 @@ export class ShoppingAssistant {
         this.elements.sendButton.addEventListener("click", () => this.handleSendMessage());
         this.elements.voiceButton.addEventListener("click", () => this.handleVoiceInput());
         this.elements.clearChatButton.addEventListener("click", () => this.handleClearChat());
-        this.elements.debugToggle.addEventListener("click", () => this.handleDebugToggle());
 
         this.elements.userInput.addEventListener("keydown", (e) => {
             if (e.key === "Enter" && !e.shiftKey) {
@@ -183,10 +180,10 @@ export class ShoppingAssistant {
         });
     }
 
-    addMessage(content, type, isLoading = false, videoData = null) {
+    addMessage(content, type, isLoading = false) {
         this.hideWelcomeScreen();
         
-        const messageDiv = MessageRenderer.createMessage(content, type, isLoading, videoData);
+        const messageDiv = MessageRenderer.createMessage(content, type, isLoading);
         this.elements.messages.appendChild(messageDiv);
 
         this.scrollToBottom();
@@ -295,7 +292,7 @@ export class ShoppingAssistant {
                 return;
             }
 
-            this.addMessage(transcription, "user", false, null);
+            this.addMessage(transcription, "user", false);
             
             if (!this.uiState.isProcessing) {
                 this.uiState.showStatus("Processing with Gemini...", "info");
@@ -337,17 +334,6 @@ export class ShoppingAssistant {
                transcription.includes("Error processing audio");
     }
 
-    handleDebugToggle() {
-        this.uiState.toggleDebugMode();
-        this.updateVideoVisibility();
-    }
-
-    updateVideoVisibility() {
-        const videoContainers = this.elements.messages.querySelectorAll('.video-thumbnail-container');
-        videoContainers.forEach(container => {
-            container.style.display = this.uiState.debugMode ? 'block' : 'none';
-        });
-    }
 
     scrollToBottom() {
         if (this.elements.messages) {
@@ -369,8 +355,7 @@ export class ShoppingAssistant {
         const messages = Array.from(this.elements.messages.querySelectorAll('.message:not(.interim-message):not(.status-message)'))
             .map(msg => ({
                 content: msg.querySelector('.message-content').textContent,
-                type: msg.classList.contains('user-message') ? 'user' : 'assistant',
-                hasVideo: msg.querySelector('.video-thumbnail-container') !== null
+                type: msg.classList.contains('user-message') ? 'user' : 'assistant'
             }));
         
         const isWelcomeVisible = !this.elements.welcomeScreen || !this.elements.welcomeScreen.classList.contains("hidden");
