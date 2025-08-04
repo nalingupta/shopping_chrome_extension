@@ -20,8 +20,8 @@ load_dotenv()
 logger.remove(0)
 logger.add(sys.stderr, level="DEBUG")
 
-# Shopping Assistant Prompt for multimodal analysis
-SHOPPING_ASSISTANT_PROMPT = """You are a helpful shopping assistant with access to both visual and audio input from the user.
+# Default Shopping Assistant Prompt (can be overridden via environment variable)
+DEFAULT_SHOPPING_ASSISTANT_PROMPT = """You are a helpful shopping assistant with access to both visual and audio input from the user.
 
 You can see the user's screen (including web pages, shopping sites, product listings) and hear their questions through their microphone.
 
@@ -50,6 +50,15 @@ async def bot(config=None):
     daily_api_key = os.getenv("DAILY_API_KEY")
     google_api_key = os.getenv("GOOGLE_API_KEY")  # Gemini API key
     
+    # Get custom prompt from environment variable or use default
+    system_prompt = os.getenv("SHOPPING_ASSISTANT_PROMPT", DEFAULT_SHOPPING_ASSISTANT_PROMPT)
+    
+    # Log which prompt is being used
+    if os.getenv("SHOPPING_ASSISTANT_PROMPT"):
+        logger.info("🎯 Using custom system prompt from environment variable")
+    else:
+        logger.info("📝 Using default system prompt")
+    
     if not all([daily_api_key, google_api_key]):
         logger.error("Missing required API keys (Daily + Google)")
         return
@@ -71,7 +80,7 @@ async def bot(config=None):
     llm = GoogleLLMService(
         api_key=google_api_key,
         model="gemini-2.0-flash-exp",  # Latest Gemini model with vision
-        system_prompt=SHOPPING_ASSISTANT_PROMPT
+        system_prompt=system_prompt
     )
     
     # Create assistant response aggregator
