@@ -7,6 +7,7 @@ export class PipecatStreamingService {
         this.isConnected = false;
         this.isStreaming = false;
         this.roomUrl = null;
+        this.keepAliveInterval = null;
         
         // Callbacks
         this.callbacks = {
@@ -97,15 +98,7 @@ export class PipecatStreamingService {
         try {
             console.log('🌟 Starting Pipecat Cloud session...');
             
-            // Step 1: Ensure agent exists (create if needed)
-            console.log('🔧 Ensuring agent exists...');
-            const agentResult = await this.ensureAgentExists();
-            if (!agentResult.success) {
-                console.log('⚠️ Agent creation/check failed, continuing anyway...');
-                // Don't fail here - agent might already exist
-            }
-            
-            // Step 2: Start a Pipecat Cloud agent session
+            // Step 1: Start a Pipecat Cloud agent session
             console.log('🚀 Starting agent session...');
             const sessionResponse = await this.startPipecatSession();
             if (!sessionResponse.success) {
@@ -118,7 +111,7 @@ export class PipecatStreamingService {
             
             // Step 4: Connect to Daily room created by Pipecat
             console.log('📞 Connecting to Daily room...');
-            await this.connectToDaily(sessionResponse.roomUrl);
+            await this.connectToDaily(sessionResponse.roomUrl, sessionResponse.dailyToken);
             
             // Step 5: Start screen + audio streaming
             console.log('📺 Starting screen + audio stream...');
@@ -166,27 +159,28 @@ export class PipecatStreamingService {
         }
     }
 
-    async startPipecatSession() {
+    async startPipecatSession(retryCount = 0, maxRetries = 3) {
         try {
             const agentName = API_CONFIG.PIPECAT_AGENT_NAME;
-            const apiUrl = `${API_CONFIG.PIPECAT_CLOUD_API_URL}/agents/${agentName}/start`;
+            const apiUrl = `${API_CONFIG.PIPECAT_CLOUD_API_URL}/${agentName}/start`;
             
-            console.log('🚀 Starting session with deployed agent...');
+            console.log(`🚀 Starting session with deployed agent (attempt ${retryCount + 1}/${maxRetries + 1})...`);
             console.log('📍 API URL:', apiUrl);
-            console.log('🔑 Using JWT token:', API_CONFIG.PIPECAT_JWT_TOKEN.substring(0, 10) + '...');
+            console.log('🔑 Using public API key:', API_CONFIG.PIPECAT_PUBLIC_API_KEY);
             
-            // For deployed agents, we don't send configuration - it's already deployed with config
+            // Correct payload format for public API
             const requestBody = {
-                createDailyRoom: true
-                // No config needed - agent is already deployed with API keys
+                createDailyRoom: true,
+                body: {}
             };
             
             console.log('📤 Request body:', JSON.stringify(requestBody, null, 2));
             
+            // Use public API key (stable, no expiration)
             const response = await fetch(apiUrl, {
                 method: 'POST',
                 headers: {
-                    'Authorization': `Bearer ${API_CONFIG.PIPECAT_JWT_TOKEN}`,
+                    'Authorization': `Bearer ${API_CONFIG.PIPECAT_PUBLIC_API_KEY}`,
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify(requestBody)
@@ -195,19 +189,41 @@ export class PipecatStreamingService {
             console.log('📥 Response status:', response.status);
             console.log('📥 Response headers:', [...response.headers.entries()]);
 
+            // Handle 401 errors with retry logic for cold starts
+            if (response.status === 401 && retryCount < maxRetries) {
+                const errorText = await response.text();
+                console.warn(`⚠️ 401 Error (likely cold start), retrying in ${(retryCount + 1) * 2} seconds...`);
+                console.log('🧊 Cold start detected - agent is spinning up...');
+                
+                // Exponential backoff: 2s, 4s, 6s
+                await new Promise(resolve => setTimeout(resolve, (retryCount + 1) * 2000));
+                
+                // Recursive retry
+                return await this.startPipecatSession(retryCount + 1, maxRetries);
+            }
+
             if (!response.ok) {
                 const errorText = await response.text();
                 console.error('❌ Pipecat API error response:', errorText);
+                
+                if (response.status === 401) {
+                    throw new Error(`Authentication failed after ${maxRetries + 1} attempts. Please check your JWT token.`);
+                }
+                
                 throw new Error(`Pipecat session start failed: ${response.status} - ${errorText}`);
             }
 
             const data = await response.json();
             console.log('✅ Pipecat session started with deployed agent:', data);
             
+            // Start keep-alive pings to prevent scale-to-zero
+            this.startKeepAlive();
+            
             return {
                 success: true,
-                roomUrl: data.room_url,
-                sessionId: data.session_id
+                roomUrl: data.dailyRoom,
+                dailyToken: data.dailyToken,
+                sessionId: data.sessionId
             };
         } catch (error) {
             console.error('❌ Pipecat session start error:', error);
@@ -215,7 +231,7 @@ export class PipecatStreamingService {
         }
     }
 
-    async connectToDaily(roomUrl) {
+    async connectToDaily(roomUrl, dailyToken) {
         try {
             // Import Daily.co dynamically
             const { DailyIframe } = await import('@daily-co/daily-js');
@@ -228,8 +244,10 @@ export class PipecatStreamingService {
             // Setup Daily event handlers
             this.setupDailyEventHandlers();
             
-            // Join the Daily room created by Pipecat
-            await this.dailyCallObject.join();
+            // Join the Daily room created by Pipecat with token
+            await this.dailyCallObject.join({
+                token: dailyToken
+            });
             
             this.isConnected = true;
             console.log('✅ Connected to Daily room created by Pipecat');
@@ -412,12 +430,58 @@ export class PipecatStreamingService {
         });
     }
 
+    startKeepAlive() {
+        // Clear any existing keep-alive
+        this.stopKeepAlive();
+        
+        console.log('🔄 Starting keep-alive pings to prevent agent scale-down...');
+        
+        // Ping every 30 seconds to keep the agent warm
+        this.keepAliveInterval = setInterval(async () => {
+            try {
+                const agentName = API_CONFIG.PIPECAT_AGENT_NAME;
+                const statusUrl = `${API_CONFIG.PIPECAT_CLOUD_API_URL}/${agentName}/start`;
+                
+                const response = await fetch(statusUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${API_CONFIG.PIPECAT_PUBLIC_API_KEY}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        createDailyRoom: false,
+                        body: {}
+                    })
+                });
+                
+                if (response.ok) {
+                    console.log('💓 Keep-alive ping successful');
+                } else {
+                    console.warn('⚠️ Keep-alive ping failed:', response.status);
+                }
+            } catch (error) {
+                console.warn('⚠️ Keep-alive ping error:', error.message);
+            }
+        }, 30000); // 30 seconds
+    }
+    
+    stopKeepAlive() {
+        if (this.keepAliveInterval) {
+            clearInterval(this.keepAliveInterval);
+            this.keepAliveInterval = null;
+            console.log('🛑 Keep-alive pings stopped');
+        }
+    }
+
     async stopStreaming() {
         if (!this.isStreaming) {
             return { success: false, error: 'Not currently streaming' };
         }
         
         try {
+            // Stop keep-alive pings
+            this.stopKeepAlive();
+            
             // Stop media recorder
             if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
                 this.mediaRecorder.stop();
@@ -495,6 +559,9 @@ export class PipecatStreamingService {
     }
 
     cleanup() {
+        // Stop keep-alive pings
+        this.stopKeepAlive();
+        
         if (this.mediaRecorder) {
             try {
                 if (this.mediaRecorder.state !== 'inactive') {

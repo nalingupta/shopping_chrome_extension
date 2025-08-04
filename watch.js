@@ -1,5 +1,5 @@
-const chokidar = require('chokidar');
-const fs = require('fs');
+import chokidar from 'chokidar';
+import fs from 'fs';
 
 console.log('🚀 Starting Chrome Extension Hot Reload...');
 
