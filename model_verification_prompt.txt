@@ -1,6 +1,0 @@
-
-Please identify:
-1. Your exact model name
-2. Your model ID
-3. Your knowledge cutoff date
-4. Any unique capabilities you have

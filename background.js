@@ -1,12 +1,7 @@
 // Service worker for managing the extension
-let offscreenDocumentCreated = false;
 
 chrome.runtime.onInstalled.addListener(() => {
     chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
-});
-
-chrome.runtime.onStartup.addListener(async () => {
-    offscreenDocumentCreated = false;
 });
 
 chrome.action.onClicked.addListener(async (tab) => {
@@ -43,7 +38,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                             { type: 'GET_PAGE_INFO' },
                             (response) => {
                                 if (chrome.runtime.lastError) {
-                                    // Return null if content script is not available
                                     sendResponse(null);
                                 } else {
                                     sendResponse(response);
@@ -65,41 +59,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 .catch((error) => sendResponse({ error: error.message }));
             return true;
             
-        case 'AUDIO_RECORDED':
-            console.log('Background: Audio recorded received from offscreen', {
-                dataLength: request.audioData?.length,
-                mimeType: request.mimeType
-            });
-            // Forward the audio data to the side panel
-            chrome.runtime.sendMessage({
-                type: 'AUDIO_DATA_RECEIVED',
-                audioData: request.audioData,
-                mimeType: request.mimeType,
-            });
-            console.log('Background: Audio data forwarded to sidepanel');
-            break;
-            
         case 'REQUEST_MIC_PERMISSION':
             handleMicPermissionRequest(sendResponse);
-            return true;
-            
-        case 'START_VOICE_RECORDING':
-            handleStartVoiceRecording(sendResponse);
-            return true;
-            
-        case 'STOP_VOICE_RECORDING':
-            handleStopVoiceRecording(sendResponse);
-            return true;
-            
-        case 'CHECK_OFFSCREEN_STATUS':
-            checkOffscreenStatus().then(sendResponse);
             return true;
     }
 });
 
 async function handleMicPermissionRequest(sendResponse) {
     try {
-        // Get the active tab
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
         
         if (!tab) {
@@ -107,7 +74,7 @@ async function handleMicPermissionRequest(sendResponse) {
             return;
         }
         
-        // First, try to inject the content script if not already loaded
+        // Inject the content script if not already loaded
         try {
             await chrome.scripting.executeScript({
                 target: { tabId: tab.id },
@@ -115,47 +82,22 @@ async function handleMicPermissionRequest(sendResponse) {
             });
             console.log('Injected micPermission.js into tab');
             
-            // Wait a bit for the script to initialize
+            // Wait for script to initialize
             await new Promise(resolve => setTimeout(resolve, 200));
         } catch (injectError) {
-            // Script might already be injected, continue
             console.log('Content script might already be injected:', injectError.message);
         }
         
-        // Send message to content script to request permission
+        // Send message to content script to request permission via iframe
         chrome.tabs.sendMessage(tab.id, { type: 'REQUEST_MIC_PERMISSION' }, (response) => {
             if (chrome.runtime.lastError) {
                 console.error('Content script communication error:', chrome.runtime.lastError);
-                
-                // Try direct popup approach
-                console.log('Opening permission popup directly...');
-                chrome.windows.create({
-                    url: chrome.runtime.getURL('permissionPopup.html'),
-                    type: 'popup',
-                    width: 400,
-                    height: 200,
-                    focused: true
-                }, (window) => {
-                    // Listen for result from popup
-                    const messageHandler = (request, sender) => {
-                        if (request.type === 'MIC_PERMISSION_POPUP_RESULT' && 
-                            sender.tab && sender.tab.windowId === window.id) {
-                            chrome.runtime.onMessage.removeListener(messageHandler);
-                            chrome.windows.remove(window.id);
-                            sendResponse(request);
-                        }
-                    };
-                    chrome.runtime.onMessage.addListener(messageHandler);
-                    
-                    // Timeout after 30 seconds
-                    setTimeout(() => {
-                        chrome.runtime.onMessage.removeListener(messageHandler);
-                        chrome.windows.remove(window.id).catch(() => {});
-                        sendResponse({ success: false, error: 'timeout' });
-                    }, 30000);
+                sendResponse({ 
+                    success: false, 
+                    error: 'content_script_failed',
+                    details: 'Cannot inject permission iframe on this page'
                 });
             } else {
-                console.log('Content script response:', response);
                 sendResponse(response || { success: false, error: 'no_response' });
             }
         });
@@ -169,234 +111,6 @@ async function handleMicPermissionRequest(sendResponse) {
     }
 }
 
-async function createOffscreenDocument() {
-    // Check if document already exists
-    const existingContexts = await chrome.runtime.getContexts({
-        contextTypes: ['OFFSCREEN_DOCUMENT'],
-        documentUrls: [chrome.runtime.getURL('offscreen.html')]
-    });
-    
-    if (existingContexts.length > 0) {
-        console.log('Offscreen document already exists');
-        return;
-    }
-    
-    try {
-        console.log('Creating new offscreen document...');
-        await chrome.offscreen.createDocument({
-            url: 'offscreen.html',
-            reasons: ['AUDIO_PLAYBACK'],
-            justification: 'Recording audio for voice input feature'
-        });
-        
-        // Wait for initialization
-        await new Promise(resolve => setTimeout(resolve, 300));
-        
-        // Verify the offscreen document is ready
-        const pingResponse = await new Promise((resolve, reject) => {
-            chrome.runtime.sendMessage({ type: 'PING' }, (response) => {
-                if (chrome.runtime.lastError) {
-                    reject(chrome.runtime.lastError);
-                } else {
-                    resolve(response);
-                }
-            });
-        });
-        
-        if (pingResponse && pingResponse.ready) {
-            console.log('Offscreen document created and verified');
-        }
-    } catch (error) {
-        console.error('Error creating offscreen document:', error);
-        throw error;
-    }
-}
-
-async function handleMicPermissionRequestInternal() {
-    try {
-        console.log('Opening permission page...');
-        
-        // Create a new tab with the permission page
-        const tab = await chrome.tabs.create({
-            url: chrome.runtime.getURL('permissionPage.html'),
-            active: true
-        });
-        
-        // Wait for permission result
-        return new Promise((resolve) => {
-            const messageHandler = (request, sender) => {
-                if (request.type === 'MIC_PERMISSION_GRANTED' && 
-                    sender.tab && sender.tab.id === tab.id) {
-                    chrome.runtime.onMessage.removeListener(messageHandler);
-                    
-                    // Close the permission tab
-                    chrome.tabs.remove(tab.id).catch(() => {});
-                    
-                    resolve({ success: true });
-                }
-            };
-            
-            chrome.runtime.onMessage.addListener(messageHandler);
-            
-            // Timeout after 60 seconds
-            setTimeout(() => {
-                chrome.runtime.onMessage.removeListener(messageHandler);
-                chrome.tabs.remove(tab.id).catch(() => {});
-                resolve({ 
-                    success: false, 
-                    error: 'timeout',
-                    details: 'Permission request timed out' 
-                });
-            }, 60000);
-        });
-    } catch (error) {
-        return { 
-            success: false, 
-            error: 'permission_request_failed',
-            details: error.message 
-        };
-    }
-}
-
-async function checkOffscreenStatus() {
-    try {
-        const contexts = await chrome.runtime.getContexts({
-            contextTypes: ['OFFSCREEN_DOCUMENT'],
-            documentUrls: [chrome.runtime.getURL('offscreen.html')]
-        });
-        
-        if (contexts.length === 0) {
-            return { exists: false };
-        }
-        
-        // Check if it's responsive
-        const statusResponse = await new Promise((resolve) => {
-            chrome.runtime.sendMessage({ type: 'CHECK_STATUS' }, (response) => {
-                if (chrome.runtime.lastError) {
-                    resolve({ exists: true, responsive: false });
-                } else {
-                    resolve({ exists: true, responsive: true, ...response });
-                }
-            });
-        });
-        
-        return statusResponse;
-    } catch (error) {
-        console.error('Error checking offscreen status:', error);
-        return { exists: false, error: error.message };
-    }
-}
-
-async function handleStartVoiceRecording(sendResponse) {
-    try {
-        console.log('Background: Starting voice recording...');
-        
-        // Ensure offscreen document exists
-        await createOffscreenDocument();
-        
-        // First initialize audio if needed
-        const initResponse = await new Promise((resolve) => {
-            chrome.runtime.sendMessage({ type: 'INIT_AUDIO' }, (response) => {
-                if (chrome.runtime.lastError) {
-                    resolve({ 
-                        success: false, 
-                        error: 'init_failed',
-                        details: chrome.runtime.lastError.message 
-                    });
-                } else {
-                    resolve(response || { success: false, error: 'no_response' });
-                }
-            });
-        });
-        
-        if (!initResponse.success && initResponse.error === 'permission_denied') {
-            // Permission was denied in offscreen, need to request via content script
-            console.log('Permission denied in offscreen, requesting via content script...');
-            
-            const permissionResponse = await handleMicPermissionRequestInternal();
-            if (!permissionResponse.success) {
-                sendResponse(permissionResponse);
-                return;
-            }
-            
-            // Try to initialize audio again after permission granted
-            const retryInitResponse = await new Promise((resolve) => {
-                chrome.runtime.sendMessage({ type: 'INIT_AUDIO' }, (response) => {
-                    if (chrome.runtime.lastError) {
-                        resolve({ 
-                            success: false, 
-                            error: 'init_failed',
-                            details: chrome.runtime.lastError.message 
-                        });
-                    } else {
-                        resolve(response || { success: false, error: 'no_response' });
-                    }
-                });
-            });
-            
-            if (!retryInitResponse.success) {
-                sendResponse(retryInitResponse);
-                return;
-            }
-        }
-        
-        if (!initResponse.success) {
-            sendResponse(initResponse);
-            return;
-        }
-        
-        // Now start recording
-        const recordResponse = await new Promise((resolve) => {
-            chrome.runtime.sendMessage({ type: 'START_RECORDING' }, (response) => {
-                if (chrome.runtime.lastError) {
-                    resolve({ 
-                        success: false, 
-                        error: 'recording_failed',
-                        details: chrome.runtime.lastError.message 
-                    });
-                } else {
-                    resolve(response || { success: false, error: 'no_response' });
-                }
-            });
-        });
-        
-        sendResponse(recordResponse);
-    } catch (error) {
-        console.error('Error starting voice recording:', error);
-        sendResponse({ 
-            success: false, 
-            error: 'offscreen_error',
-            details: error.message 
-        });
-    }
-}
-
-async function handleStopVoiceRecording(sendResponse) {
-    try {
-        const response = await new Promise((resolve) => {
-            chrome.runtime.sendMessage({ type: 'STOP_RECORDING' }, (response) => {
-                if (chrome.runtime.lastError) {
-                    resolve({ 
-                        success: false, 
-                        error: 'communication_error',
-                        details: chrome.runtime.lastError.message 
-                    });
-                } else {
-                    resolve(response || { success: false, error: 'no_response' });
-                }
-            });
-        });
-        
-        sendResponse(response);
-    } catch (error) {
-        console.error('Error stopping voice recording:', error);
-        sendResponse({ 
-            success: false, 
-            error: 'offscreen_error',
-            details: error.message 
-        });
-    }
-}
 
 async function processUserQuery(data) {
     const { query, pageInfo } = data;

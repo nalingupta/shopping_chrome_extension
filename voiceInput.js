@@ -1,22 +1,16 @@
-// Voice input handler for the sidePanel
-// This manages voice recording through the offscreen document
+// Voice input handler for the sidePanel using Web Speech API
 
 class VoiceInputHandler {
     constructor() {
         this.isListening = false;
         this.transcriptionCallback = null;
+        this.interimCallback = null;
         this.recognition = null;
         this.continuousRestartTimer = null;
         this.isProcessingResponse = false;
 
         // Initialize Web Speech API
         this.initializeWebSpeechAPI();
-
-        // Set up message listener for audio data (keeping for backward compatibility)
-        this.setupMessageListener();
-
-        // Check initial offscreen status
-        this.checkOffscreenStatus();
     }
 
     initializeWebSpeechAPI() {
@@ -114,69 +108,13 @@ class VoiceInputHandler {
         }
     }
 
-    // Configuration no longer needed - using Web Speech API
-
-    setupMessageListener() {
-        chrome.runtime.onMessage.addListener(
-            (message, sender, sendResponse) => {
-                if (message.type === "AUDIO_DATA_RECEIVED") {
-                    this.handleAudioDataReceived(
-                        message.audioData,
-                        message.mimeType
-                    );
-                }
-            }
-        );
-    }
-
-    async checkOffscreenStatus() {
-        try {
-            const status = await chrome.runtime.sendMessage({
-                type: "CHECK_OFFSCREEN_STATUS",
-            });
-            console.log("Offscreen status:", status);
-            return status;
-        } catch (error) {
-            console.error("Error checking offscreen status:", error);
-            return { exists: false };
-        }
-    }
-
     async requestMicrophonePermission() {
         try {
-            // First try to start recording to see if permission is already granted
-            const testResponse = await chrome.runtime.sendMessage({
-                type: "START_VOICE_RECORDING",
+            const permissionResponse = await chrome.runtime.sendMessage({
+                type: "REQUEST_MIC_PERMISSION",
             });
 
-            if (testResponse.success) {
-                // Permission already granted, stop the test recording
-                await chrome.runtime.sendMessage({
-                    type: "STOP_VOICE_RECORDING",
-                });
-                this.permissionGranted = true;
-                return { success: true, alreadyGranted: true };
-            }
-
-            if (
-                testResponse.error === "permission_required" ||
-                testResponse.error === "permission_denied"
-            ) {
-                // Need to request permission through content script
-                const permissionResponse = await chrome.runtime.sendMessage({
-                    type: "REQUEST_MIC_PERMISSION",
-                });
-
-                if (permissionResponse.success) {
-                    this.permissionGranted = true;
-                    return { success: true };
-                } else {
-                    return permissionResponse;
-                }
-            }
-
-            // Other error
-            return testResponse;
+            return permissionResponse;
         } catch (error) {
             console.error("Error requesting microphone permission:", error);
             return {
@@ -249,15 +187,6 @@ class VoiceInputHandler {
         }
     }
 
-    async handleAudioDataReceived(base64Audio, mimeType) {
-        // This method is kept for backward compatibility but no longer used
-        // Web Speech API handles transcription directly in the event handlers
-        console.log("Audio data received (legacy method):", {
-            dataLength: base64Audio?.length,
-            mimeType,
-            hasCallback: !!this.transcriptionCallback,
-        });
-    }
 
     setTranscriptionCallback(callback) {
         this.transcriptionCallback = callback;
@@ -295,8 +224,6 @@ class VoiceInputHandler {
         }
     }
 
-    // Legacy methods removed - now using Web Speech API directly
-
     getErrorHelp(errorType) {
         const errorHelp = {
             permission_denied:
@@ -304,11 +231,9 @@ class VoiceInputHandler {
             no_microphone:
                 "No microphone found. Please connect a microphone and try again.",
             not_supported:
-                "Voice input is not supported in this browser context. Please try updating Chrome.",
-            communication_error:
-                "Failed to communicate with the extension. Please refresh the page and try again.",
-            offscreen_error:
-                "Failed to initialize audio capture. Please refresh the page and try again.",
+                "Voice input is not supported in this browser. Please try Chrome or Edge.",
+            content_script_failed:
+                "Cannot request microphone permission on this page. Try on a different website.",
         };
 
         return errorHelp[errorType] || "An error occurred. Please try again.";
