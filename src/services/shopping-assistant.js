@@ -1,11 +1,14 @@
+import { API_CONFIG } from '../config/api-keys.js';
+
 export class ShoppingAssistant {
     static async processQuery(data) {
         const { query, pageInfo } = data;
 
         try {
-            const response = await this.generateResponse(query, pageInfo);
+            const response = await this.generateGeminiResponse(query, pageInfo);
             return { success: true, response };
         } catch (error) {
+            console.error('❌ Gemini API error:', error);
             return {
                 success: false,
                 response: "I'm sorry, I encountered an error while processing your request. Please try again."
@@ -13,81 +16,131 @@ export class ShoppingAssistant {
         }
     }
 
-    static async generateResponse(query, pageInfo) {
-        if (!pageInfo) {
-            return "I'm not able to see the current page information. Please make sure you're on a website and try again.";
+    static async generateGeminiResponse(query, pageInfo) {
+        console.log('🧠 Generating Gemini response for query:', query);
+        console.log('📄 Page info:', pageInfo);
+        
+        if (!API_CONFIG.GEMINI_API_KEY) {
+            throw new Error('Gemini API key not configured');
         }
 
-        const lowerQuery = query.toLowerCase();
-        const { title, siteInfo } = pageInfo;
-        const isShopping = siteInfo?.type === "shopping";
-        const siteName = siteInfo?.name || "this site";
+        // Prepare the multimodal request
+        const messages = [];
+        
+        // System prompt for shopping assistant
+        const systemPrompt = `You are an AI shopping assistant that helps users with product recommendations, price comparisons, and shopping decisions. You can see what the user is looking at on their screen and respond accordingly.
 
-        const intent = this.detectIntent(lowerQuery);
-        return this.getResponseForIntent(intent, isShopping, siteName, title);
+Key capabilities:
+- Analyze products visible on screen
+- Compare prices and features
+- Recommend similar or alternative products
+- Explain product details and specifications
+- Help with shopping decisions
+- Analyze reviews and ratings
+
+Always be helpful, concise, and focus on the user's shopping needs.`;
+
+        messages.push({
+            role: "system",
+            content: systemPrompt
+        });
+
+        // User message with text and optional screen capture
+        const userContent = [];
+        
+        // Add text
+        userContent.push({
+            type: "text",
+            text: `User query: "${query}"\n\nPage context: ${pageInfo?.title || 'Unknown page'} at ${pageInfo?.url || 'Unknown URL'}`
+        });
+
+        // Add screen capture if available
+        if (pageInfo?.screenCapture) {
+            console.log('📸 Including screen capture in Gemini request');
+            userContent.push({
+                type: "image_url",
+                image_url: {
+                    url: pageInfo.screenCapture
+                }
+            });
+        }
+
+        messages.push({
+            role: "user",
+            content: userContent
+        });
+
+        // Call Gemini API
+        console.log('🚀 Calling Gemini API...');
+        const response = await this.callGeminiAPI(messages);
+        console.log('✅ Gemini response received');
+        
+        return response;
     }
 
-    static detectIntent(lowerQuery) {
-        const intents = {
-            price: ["price", "cost"],
-            similar: ["similar", "alternative"],
-            review: ["review", "rating"],
-            product: ["product", "about"],
-            compare: ["compare"],
-            deal: ["deal", "discount", "sale"]
-        };
+    static async callGeminiAPI(messages) {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${API_CONFIG.GEMINI_API_KEY}`;
+        
+        // Convert messages to Gemini format
+        const contents = messages.filter(msg => msg.role !== 'system').map(msg => ({
+            role: msg.role === 'user' ? 'user' : 'model',
+            parts: Array.isArray(msg.content) 
+                ? msg.content.map(part => {
+                    if (part.type === 'text') {
+                        return { text: part.text };
+                    } else if (part.type === 'image_url') {
+                        // Convert base64 image to Gemini format
+                        const base64Data = part.image_url.url.split(',')[1];
+                        return {
+                            inlineData: {
+                                mimeType: 'image/jpeg',
+                                data: base64Data
+                            }
+                        };
+                    }
+                    return part;
+                })
+                : [{ text: msg.content }]
+        }));
 
-        return Object.keys(intents).find(key => 
-            intents[key].some(keyword => lowerQuery.includes(keyword))
-        );
-    }
-
-    static getResponseForIntent(intent, isShopping, siteName, title) {
-        const responses = {
-            price: {
-                shopping: `I can help you with pricing information on ${siteName}. To get the best price analysis, I'd need to examine the current product page. Are you looking at a specific product right now?`,
-                general: "It looks like you're not currently on a shopping site. To help with price comparisons, try visiting a product page on sites like Amazon, eBay, or other retailers."
-            },
-            similar: {
-                shopping: `I can help you find similar products! Based on the current page "${title}", I can suggest alternatives. What specific features or price range are you looking for?`,
-                general: "To find similar products, it would be helpful if you're viewing a product page. Try navigating to a specific product on a shopping site first."
-            },
-            review: {
-                shopping: `I can help you analyze reviews and ratings. Since you're on ${siteName}, I can help interpret the reviews and ratings on this page.`,
-                general: "I can help you analyze reviews and ratings. For the best review analysis, try visiting the product page on a major retailer."
-            },
-            product: {
-                shopping: `You're currently on ${siteName}. Based on the page "${title}", I can help explain product details, specifications, and features. What would you like to know more about?`,
-                general: "I don't see a product page currently. To get detailed product information, try visiting a specific product page on a shopping website."
-            },
-            compare: {
-                shopping: "I can help you compare products! To get started, I'd need to know what type of products you're interested in comparing. Are you looking at any specific items right now?",
-                general: "I can help you compare products! To get started, I'd need to know what type of products you're interested in comparing. Are you looking at any specific items right now?"
-            },
-            deal: {
-                shopping: `I can help you find deals and discounts on ${siteName}! I'd recommend checking the current page for any promotional offers, and I can help you understand if it's a good deal.`,
-                general: "To find the best deals, try visiting major shopping sites and product pages. I can then help analyze if the prices and discounts are competitive."
+        // Add system instruction
+        const systemMessage = messages.find(msg => msg.role === 'system');
+        const requestBody = {
+            contents: contents,
+            generationConfig: {
+                temperature: 0.7,
+                topK: 40,
+                topP: 0.95,
+                maxOutputTokens: 1024,
             }
         };
 
-        if (intent && responses[intent]) {
-            return responses[intent][isShopping ? 'shopping' : 'general'];
+        if (systemMessage) {
+            requestBody.systemInstruction = {
+                parts: [{ text: systemMessage.content }]
+            };
         }
 
-        return this.getDefaultResponse(isShopping, siteName, title);
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(requestBody)
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`Gemini API error: ${response.status} - ${errorText}`);
+        }
+
+        const data = await response.json();
+        
+        if (!data.candidates || !data.candidates[0] || !data.candidates[0].content) {
+            throw new Error('Invalid response from Gemini API');
+        }
+
+        return data.candidates[0].content.parts[0].text;
     }
 
-    static getDefaultResponse(isShopping, siteName, title) {
-        const baseMessage = `I'm your shopping assistant! I can help you with:
-    
-📦 Product information and specifications
-💰 Price comparisons and deals
-🔍 Finding similar or alternative products  
-⭐ Review and rating analysis
-🛒 General shopping advice
-
-${isShopping ? `You're currently on ${siteName} viewing "${title}". ` : ""}What would you like help with?`;
-
-        return baseMessage;
-    }
 }

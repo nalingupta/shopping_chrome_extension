@@ -383,18 +383,8 @@ class ShoppingAssistant {
     }
 
     async startVoiceInput() {
-        // Request screen capture permission first, before starting voice recognition
-        
         try {
-            // Check if screen permission is already available
-            const hasScreenPermission = await this.voiceHandler.screenRecorder.requestScreenPermissionIfNeeded();
-            
-            if (!hasScreenPermission) {
-                this.showTemporaryStatusThenStartChat("Permission required", "warning", 6000);
-                return;
-            }
-            
-            // Now start voice recognition
+            // Start voice recognition - Pipecat streaming service will handle screen permission
             const result = await this.voiceHandler.startListening();
             if (result.success) {
                 this.voiceButton.classList.add("listening");

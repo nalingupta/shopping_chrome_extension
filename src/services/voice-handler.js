@@ -455,7 +455,7 @@ export class VoiceInputHandler {
     }
 
     isRealTimeStreamingConfigured() {
-        return !!(API_CONFIG.GEMINI_API_KEY && API_CONFIG.DAILY_API_KEY && API_CONFIG.PIPECAT_JWT_TOKEN);
+        return !!(API_CONFIG.GEMINI_API_KEY && API_CONFIG.DAILY_API_KEY && API_CONFIG.PIPECAT_PUBLIC_API_KEY);
     }
 
     getRealTimeStreamingStatus() {
@@ -466,7 +466,7 @@ export class VoiceInputHandler {
             config: {
                 hasGeminiKey: !!API_CONFIG.GEMINI_API_KEY,
                 hasDailyKey: !!API_CONFIG.DAILY_API_KEY,
-                hasPipecatKey: !!API_CONFIG.PIPECAT_JWT_TOKEN,
+                hasPipecatKey: !!API_CONFIG.PIPECAT_PUBLIC_API_KEY,
                 cloudApiUrl: API_CONFIG.PIPECAT_CLOUD_API_URL
             }
         };

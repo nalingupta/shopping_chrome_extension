@@ -119,21 +119,16 @@ export class PipecatStreamingService {
                 // Don't throw here - let it continue with audio only
             }
             
-            // Step 3: Connect to Daily room created by Pipecat
-            console.log('📞 Step 3: Connecting to Daily room...');
-            await this.connectToDaily(sessionResponse.roomUrl, sessionResponse.dailyToken);
-            console.log('✅ Step 3 SUCCESS: Connected to Daily room');
-            
-            // Step 4: Start screen + audio streaming
-            console.log('📺 Step 4: Starting screen + audio stream...');
+            // Step 3: Connect to the Daily room that Pipecat created
+            console.log('📞 Step 3: Connecting to Daily room for real-time streaming...');
             try {
-                await this.startScreenStreamToDaily();
-                console.log('✅ Step 4 SUCCESS: Multimodal streaming active (screen + audio)');
+                await this.connectAndStreamToDaily(sessionResponse.roomUrl, sessionResponse.dailyToken);
+                console.log('✅ Step 3 SUCCESS: Connected to Daily room and streaming');
             } catch (streamError) {
-                console.error('💥 Step 4 FAILED:', streamError.message);
-                console.log('⚠️ AUDIO-ONLY MODE - enabling audio without screen');
-                // Try audio-only mode
-                await this.startAudioOnlyMode();
+                console.error('💥 Step 3 FAILED:', streamError.message);
+                console.log('⚠️ FALLING BACK TO LOCAL SPEECH RECOGNITION');
+                // Fallback to local processing
+                await this.startMediaCapture();
             }
             
             this.isStreaming = true;
@@ -251,77 +246,428 @@ export class PipecatStreamingService {
         }
     }
 
-    async connectToDaily(roomUrl, dailyToken) {
+    async connectAndStreamToDaily(roomUrl, dailyToken) {
         try {
-            // Import Daily.co dynamically
-            const { DailyIframe } = await import('@daily-co/daily-js');
+            console.log('🔗 Connecting to Pipecat via WebRTC data channel...');
+            console.log('📍 Room URL:', roomUrl);
+            console.log('🎫 Daily Token:', dailyToken ? 'Present' : 'Missing');
             
-            // Create Daily call object
-            this.dailyCallObject = DailyIframe.createCallObject({
-                url: roomUrl
-            });
+            // Initialize Pipecat JavaScript client
+            if (typeof window.PipecatClient === 'undefined') {
+                throw new Error('Pipecat JavaScript client not loaded - check CDN script tag');
+            }
             
-            // Setup Daily event handlers
-            this.setupDailyEventHandlers();
-            
-            // Join the Daily room created by Pipecat with token
-            await this.dailyCallObject.join({
+            // Create Pipecat client instance
+            console.log('🎯 Creating PipecatClient with roomUrl:', roomUrl);
+            this.pipecatClient = new window.PipecatClient({
+                roomUrl: roomUrl,
                 token: dailyToken
             });
             
-            this.isConnected = true;
-            console.log('✅ Connected to Daily room created by Pipecat');
+            // Set up Pipecat client event handlers
+            this.setupPipecatClientHandlers();
+            
+            // Connect to the Pipecat session
+            console.log('🚀 Joining Pipecat session...');
+            await this.pipecatClient.join();
+            
+            console.log('✅ Connected to Pipecat via WebRTC data channel');
+            
+            // Now start media capture and streaming
+            await this.startMediaStreamingToPipecat();
             
         } catch (error) {
-            throw new Error(`Daily connection failed: ${error.message}`);
+            console.error('❌ Pipecat connection failed:', error);
+            throw new Error(`Pipecat connection failed: ${error.message}`);
         }
     }
 
-    setupDailyEventHandlers() {
-        if (!this.dailyCallObject) return;
+    setupPipecatClientHandlers() {
+        if (!this.pipecatClient) return;
         
-        this.dailyCallObject.on('joined-meeting', () => {
-            console.log('📞 Joined Daily meeting');
+        console.log('📡 Setting up Pipecat client event handlers...');
+        
+        // Handle bot responses
+        this.pipecatClient.on('botResponse', (data) => {
+            console.log('🤖 Bot response received:', data);
+            if (this.callbacks.onBotResponse) {
+                this.callbacks.onBotResponse(data);
+            }
+        });
+        
+        // Handle user transcript acknowledgments
+        this.pipecatClient.on('userTranscript', (data) => {
+            console.log('🎯 User transcript acknowledged:', data);
+            if (this.callbacks.onUserTranscript) {
+                this.callbacks.onUserTranscript(data);
+            }
+        });
+        
+        // Handle connection state changes
+        this.pipecatClient.on('connectionStateChange', (state) => {
+            console.log('🔄 Pipecat connection state:', state);
             if (this.callbacks.onConnectionStateChange) {
-                this.callbacks.onConnectionStateChange('connected');
+                this.callbacks.onConnectionStateChange(state);
             }
         });
         
-        this.dailyCallObject.on('left-meeting', () => {
-            console.log('📞 Left Daily meeting');
-            if (this.callbacks.onConnectionStateChange) {
-                this.callbacks.onConnectionStateChange('disconnected');
-            }
-        });
-        
-        // Handle AI responses from Pipecat agent
-        this.dailyCallObject.on('participant-joined', (event) => {
-            if (event.participant.user_name === 'Pipecat-Agent') {
-                console.log('🤖 Pipecat AI agent joined');
-            }
-        });
-        
-        // Handle transcription events if available
-        this.dailyCallObject.on('app-message', (event) => {
-            if (event.data.type === 'transcript') {
-                if (event.data.is_final && this.callbacks.onBotResponse) {
-                    this.callbacks.onBotResponse(event.data);
-                }
-            }
-        });
-        
-        this.dailyCallObject.on('error', (error) => {
-            console.error('Daily error:', error);
+        // Handle errors
+        this.pipecatClient.on('error', (error) => {
+            console.error('❌ Pipecat client error:', error);
             if (this.callbacks.onError) {
                 this.callbacks.onError(error);
             }
         });
+        
+        console.log('✅ Pipecat client event handlers set up');
+    }
+    
+    async startMediaStreamingToPipecat() {
+        try {
+            console.log('🎤 Starting media streaming to Pipecat...');
+            
+            // Get microphone audio
+            const audioStream = await navigator.mediaDevices.getUserMedia({ 
+                audio: {
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    sampleRate: 16000
+                }
+            });
+            
+            console.log('🎵 Audio stream obtained');
+            
+            // Create combined stream with screen video and microphone audio
+            let combinedTracks = [];
+            
+            // Add audio tracks
+            audioStream.getAudioTracks().forEach(track => {
+                combinedTracks.push(track);
+                console.log('🎵 Added audio track to combined stream');
+            });
+            
+            // Add screen video tracks if available
+            if (this.screenStream) {
+                this.screenStream.getVideoTracks().forEach(track => {
+                    combinedTracks.push(track);
+                    console.log('📹 Added video track to combined stream');
+                });
+            }
+            
+            // Create combined MediaStream
+            const combinedStream = new MediaStream(combinedTracks);
+            console.log('🔗 Combined stream created with', combinedTracks.length, 'tracks');
+            
+            // Hook up MediaStream tracks to PipecatClient (as per ChatGPT suggestion)
+            console.log('📡 Connecting MediaStream tracks to PipecatClient...');
+            if (this.pipecatClient && typeof this.pipecatClient.addTrack === 'function') {
+                // If PipecatClient has addTrack method
+                combinedTracks.forEach((track, index) => {
+                    this.pipecatClient.addTrack(track, combinedStream);
+                    console.log(`✅ Added ${track.kind} track ${index + 1} to PipecatClient`);
+                });
+            } else if (this.pipecatClient && typeof this.pipecatClient.setLocalMediaStream === 'function') {
+                // Alternative method - set entire stream
+                await this.pipecatClient.setLocalMediaStream(combinedStream);
+                console.log('✅ Set combined MediaStream on PipecatClient');
+            } else {
+                console.warn('⚠️ PipecatClient track methods not found - falling back to speech recognition');
+                // Fallback to speech recognition approach
+                this.setupSpeechRecognitionForPipecat();
+                return true;
+            }
+            
+            // Set up additional callbacks for real-time transcription
+            this.setupPipecatMediaHandlers();
+            
+            this.isConnected = true;
+            console.log('🎉 Media streaming to Pipecat completed successfully!');
+            return true;
+            
+        } catch (error) {
+            console.error('❌ Media streaming to Pipecat failed:', error);
+            throw new Error(`Media streaming failed: ${error.message}`);
+        }
+    }
+    
+    setupPipecatMediaHandlers() {
+        console.log('🎧 Setting up Pipecat media handlers for real-time transcription...');
+        
+        // Listen for real-time transcription events from Pipecat
+        if (this.pipecatClient) {
+            // These event names might vary - check Pipecat client documentation
+            const eventNames = ['transcript', 'userSpeech', 'botResponse', 'audioTranscript'];
+            
+            eventNames.forEach(eventName => {
+                if (typeof this.pipecatClient.on === 'function') {
+                    this.pipecatClient.on(eventName, (data) => {
+                        console.log(`🎯 Received ${eventName} from Pipecat:`, data);
+                        
+                        if (eventName.includes('transcript') || eventName.includes('Speech')) {
+                            // Handle user transcription
+                            if (this.callbacks.onUserTranscript) {
+                                this.callbacks.onUserTranscript(data);
+                            }
+                        } else if (eventName.includes('bot') || eventName.includes('Response')) {
+                            // Handle bot response
+                            if (this.callbacks.onBotResponse) {
+                                this.callbacks.onBotResponse(data);
+                            }
+                        }
+                    });
+                }
+            });
+        }
+        
+        console.log('✅ Pipecat media handlers set up');
     }
 
-    async setupScreenSharing() {
+    async startMediaCapture() {
+        // Fallback method for when Pipecat connection fails
         try {
-            console.log('🖥️ Setting up screen sharing...');
+            console.log('🎤 Starting fallback media capture...');
             
+            // Get microphone audio
+            const audioStream = await navigator.mediaDevices.getUserMedia({ 
+                audio: {
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    sampleRate: 16000
+                }
+            });
+            
+            console.log('🎵 Audio stream obtained for fallback processing');
+            
+            // Set up speech recognition for local processing
+            this.setupSpeechRecognition();
+            
+            this.isConnected = true;
+            return true;
+            
+        } catch (error) {
+            throw new Error(`Media capture failed: ${error.message}`);
+        }
+    }
+
+    setupSpeechRecognitionForPipecat() {
+        console.log('🗣️ Setting up speech recognition for Pipecat WebRTC communication...');
+        
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SpeechRecognition) {
+            console.warn('⚠️ Speech recognition not supported');
+            return;
+        }
+        
+        this.speechRecognition = new SpeechRecognition();
+        this.speechRecognition.continuous = true;
+        this.speechRecognition.interimResults = true;
+        this.speechRecognition.lang = 'en-US';
+        
+        this.speechRecognition.onresult = (event) => {
+            for (let i = event.resultIndex; i < event.results.length; i++) {
+                const transcript = event.results[i][0].transcript;
+                const isFinal = event.results[i].isFinal;
+                
+                if (isFinal) {
+                    console.log('🎯 Final transcript for Pipecat:', transcript);
+                    this.sendTextToPipecatViaDataChannel(transcript);
+                } else {
+                    console.log('💭 Interim transcript:', transcript);
+                    if (this.callbacks.onUserTranscript) {
+                        this.callbacks.onUserTranscript({ text: transcript, final: false });
+                    }
+                }
+            }
+        };
+        
+        this.speechRecognition.onerror = (event) => {
+            console.error('🚨 Speech recognition error:', event.error);
+        };
+        
+        // Start listening
+        this.speechRecognition.start();
+        console.log('✅ Speech recognition started for Pipecat');
+    }
+
+    setupSpeechRecognition() {
+        // Fallback speech recognition for local processing
+        console.log('🗣️ Setting up fallback speech recognition...');
+        
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SpeechRecognition) {
+            console.warn('⚠️ Speech recognition not supported');
+            return;
+        }
+        
+        this.speechRecognition = new SpeechRecognition();
+        this.speechRecognition.continuous = true;
+        this.speechRecognition.interimResults = true;
+        this.speechRecognition.lang = 'en-US';
+        
+        this.speechRecognition.onresult = (event) => {
+            for (let i = event.resultIndex; i < event.results.length; i++) {
+                const transcript = event.results[i][0].transcript;
+                const isFinal = event.results[i].isFinal;
+                
+                if (isFinal) {
+                    console.log('🎯 Final transcript for local processing:', transcript);
+                    this.sendTextToBackground(transcript);
+                } else {
+                    console.log('💭 Interim transcript:', transcript);
+                    if (this.callbacks.onUserTranscript) {
+                        this.callbacks.onUserTranscript({ text: transcript, final: false });
+                    }
+                }
+            }
+        };
+        
+        this.speechRecognition.onerror = (event) => {
+            console.error('🚨 Speech recognition error:', event.error);
+        };
+        
+        // Start listening
+        this.speechRecognition.start();
+        console.log('✅ Fallback speech recognition started');
+    }
+    
+    setupScreenCapture() {
+        console.log('📸 Setting up screen capture for context...');
+        // Screen capture will be sent with text queries for context
+    }
+    
+    async sendTextToPipecatViaDataChannel(text) {
+        try {
+            console.log('📤 Sending text to Pipecat via WebRTC data channel:', text);
+            
+            if (!this.pipecatClient) {
+                throw new Error('Pipecat client not connected');
+            }
+            
+            // Prepare payload with text and optional screen capture
+            let payload = {
+                text: text,
+                timestamp: Date.now()
+            };
+            
+            // If screen stream is available, capture a frame and include it
+            if (this.screenStream) {
+                const screenFrame = await this.captureScreenFrame();
+                if (screenFrame) {
+                    payload.screenshot = screenFrame;
+                    console.log('📸 Including screen capture with text');
+                }
+            }
+            
+            // Send message via Pipecat WebRTC data channel
+            console.log('📡 Sending via Pipecat client data channel...');
+            await this.pipecatClient.sendClientMessage('user-text', payload);
+            
+            console.log('✅ Message sent to Pipecat via WebRTC data channel');
+            
+            // Trigger user transcript callback to show the text was sent
+            if (this.callbacks.onUserTranscript) {
+                this.callbacks.onUserTranscript({ text: text, final: true });
+            }
+            
+        } catch (error) {
+            console.error('❌ Error sending text to Pipecat:', error);
+            
+            // Fallback to local processing
+            console.log('⚠️ Falling back to local processing...');
+            this.sendTextToBackground(text);
+        }
+    }
+    
+    async sendTextToBackground(text) {
+        try {
+            console.log('📤 Sending text to background script for local processing:', text);
+            
+            // Trigger user transcript callback
+            if (this.callbacks.onUserTranscript) {
+                this.callbacks.onUserTranscript({ text: text, final: true });
+            }
+            
+            // Capture screen frame if available
+            let screenCapture = null;
+            if (this.screenStream) {
+                screenCapture = await this.captureScreenFrame();
+                if (screenCapture) {
+                    console.log('📸 Including screen capture with background message');
+                }
+            }
+            
+            // Send to background script for processing (which can use Gemini API)
+            chrome.runtime.sendMessage({
+                type: 'PROCESS_USER_QUERY',
+                data: {
+                    query: text,
+                    pageInfo: {
+                        url: window.location.href,
+                        title: document.title,
+                        screenCapture: screenCapture
+                    }
+                }
+            }, (response) => {
+                if (response && response.success && this.callbacks.onBotResponse) {
+                    this.callbacks.onBotResponse({ 
+                        text: response.response,
+                        timestamp: Date.now()
+                    });
+                }
+            });
+            
+            console.log('✅ Text sent to background script with screen capture');
+            
+        } catch (error) {
+            console.error('❌ Error sending text to background:', error);
+        }
+    }
+    
+    async captureScreenFrame() {
+        // Ensure we have a fresh, live screen stream
+        try {
+            const screenStream = await this.getFreshScreenStream();
+            if (!screenStream) return null;
+            
+            // Create a video element to capture the current frame
+            const video = document.createElement('video');
+            video.srcObject = screenStream;
+            video.play();
+            
+            return new Promise((resolve) => {
+                video.addEventListener('loadedmetadata', () => {
+                    const canvas = document.createElement('canvas');
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(video, 0, 0);
+                    
+                    // Convert to base64
+                    const imageData = canvas.toDataURL('image/jpeg', 0.8);
+                    resolve(imageData);
+                });
+            });
+        } catch (error) {
+            console.error('❌ Screen frame capture failed:', error);
+            return null;
+        }
+    }
+
+    async getFreshScreenStream() {
+        // If we have a live track, just return it (ChatGPT's suggestion)
+        if (this.screenStream && 
+            this.screenStream.getVideoTracks().length > 0 &&
+            this.screenStream.getVideoTracks()[0].readyState === 'live') {
+            console.log('♻️ Reusing existing live screen stream');
+            return this.screenStream;
+        }
+        
+        // Otherwise clear and re-request
+        console.log('🆕 Requesting fresh screen stream...');
+        this.screenStream = null;
+        
+        try {
             // Request screen capture permission via Chrome extension API
             console.log('📋 Requesting screen capture permission...');
             const streamId = await new Promise((resolve, reject) => {
@@ -332,15 +678,14 @@ export class PipecatStreamingService {
                             console.log('✅ Screen capture permission granted, streamId:', streamId);
                             resolve(streamId);
                         } else {
-                            console.error('❌ Screen capture permission denied - user may have clicked Cancel or closed dialog');
+                            console.error('❌ Screen capture permission denied');
                             reject(new Error('Screen capture permission denied'));
                         }
                     }
                 );
             });
             
-            // Get screen stream
-            console.log('🎥 Getting screen stream...');
+            // Get screen stream with the new streamId
             this.screenStream = await navigator.mediaDevices.getUserMedia({
                 video: {
                     mandatory: {
@@ -352,6 +697,35 @@ export class PipecatStreamingService {
                     }
                 }
             });
+            
+            // Watch for the user hitting "stop sharing" (ChatGPT's suggestion)
+            if (this.screenStream.getVideoTracks().length > 0) {
+                this.screenStream.getVideoTracks()[0].onended = () => {
+                    console.log('👤 User stopped screen sharing - clearing stream');
+                    this.screenStream = null;
+                };
+            }
+            
+            console.log('✅ Fresh screen stream obtained');
+            return this.screenStream;
+            
+        } catch (error) {
+            console.error('❌ Failed to get fresh screen stream:', error);
+            this.screenStream = null;
+            throw error;
+        }
+    }
+
+    async setupScreenSharing() {
+        try {
+            console.log('🖥️ Setting up screen sharing...');
+            
+            // Get fresh screen stream (following ChatGPT's suggestion)
+            this.screenStream = await this.getFreshScreenStream();
+            
+            if (!this.screenStream) {
+                throw new Error('No screen stream available');
+            }
             
             console.log('✅ Screen stream obtained:', this.screenStream);
             console.log('📊 Video tracks:', this.screenStream.getVideoTracks().length);
@@ -379,9 +753,9 @@ export class PipecatStreamingService {
     }
 
     async startScreenStreamToDaily() {
-        if (!this.screenStream || !this.dailyCallObject) {
-            console.error('❌ Missing screen stream or Daily connection');
-            throw new Error('Screen stream or Daily connection not available');
+        if (!this.screenStream || !this.peerConnection) {
+            console.error('❌ Missing screen stream or WebRTC connection');
+            throw new Error('Screen stream or WebRTC connection not available');
         }
         
         try {
@@ -408,23 +782,14 @@ export class PipecatStreamingService {
             console.log('  - Video tracks:', combinedStream.getVideoTracks().length);
             console.log('  - Audio tracks:', combinedStream.getAudioTracks().length);
             
-            // Send combined stream to Daily (which forwards to Pipecat agent)
-            console.log('🚀 Enabling Daily audio/video...');
-            await this.dailyCallObject.setLocalAudio(true);
-            await this.dailyCallObject.setLocalVideo(true);
-            
-            // Set the custom combined stream
-            console.log('📡 Sending combined stream to Daily...');
-            await this.dailyCallObject.updateInputSettings({
-                video: {
-                    mediaStream: combinedStream
-                },
-                audio: {
-                    mediaStream: combinedStream
-                }
+            // Add tracks to WebRTC peer connection
+            console.log('📡 Adding stream tracks to WebRTC connection...');
+            combinedStream.getTracks().forEach(track => {
+                this.peerConnection.addTrack(track, combinedStream);
+                console.log(`✅ Added ${track.kind} track to WebRTC`);
             });
             
-            console.log('✅ Screen + audio streaming to Pipecat via Daily');
+            console.log('✅ Screen + audio streaming to Pipecat via WebRTC');
             console.log('🎯 Pipecat agent should now be receiving your screen and audio!');
             return true;
         } catch (error) {
