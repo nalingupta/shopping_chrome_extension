@@ -1,5 +1,5 @@
-# Use official Pipecat base image
-FROM dailyco/pipecat-base:latest-py3.11
+# Use official Pipecat base image (fix: use 'latest' tag instead of 'latest-py3.11')
+FROM dailyco/pipecat-base:latest
 
 # Set working directory
 WORKDIR /app

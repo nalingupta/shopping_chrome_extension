@@ -9,7 +9,7 @@ from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_response import LLMAssistantResponseAggregator
 from pipecat.processors.frame_processor import FrameProcessor, FrameDirection
-from pipecat.services.google import GoogleLLMService
+from pipecat.services.google.llm import GoogleLLMService
 from pipecat.transports.services.daily import DailyParams, DailyTransport
 
 from loguru import logger
@@ -20,16 +20,30 @@ load_dotenv()
 logger.remove(0)
 logger.add(sys.stderr, level="DEBUG")
 
-# Simple Test Prompt - Just respond "yes" to verify connectivity
-SHOPPING_ASSISTANT_PROMPT = """You are a simple test assistant. 
+# Shopping Assistant Prompt for multimodal analysis
+SHOPPING_ASSISTANT_PROMPT = """You are a helpful shopping assistant with access to both visual and audio input from the user.
 
-No matter what input you receive (audio, video, text, or any combination), always respond with exactly one word: "yes"
+You can see the user's screen (including web pages, shopping sites, product listings) and hear their questions through their microphone.
 
-This is a connectivity test to verify that Pipecat and Gemini are working together properly."""
+Your capabilities:
+- Analyze product listings, prices, and reviews on any website
+- Compare products across different sites
+- Provide shopping recommendations based on what you see
+- Answer questions about products visible on the screen
+- Help with price comparisons and deal analysis
+- Identify product features from images/videos
+
+When the user asks questions or shows you products:
+1. Look at what's currently displayed on their screen
+2. Analyze any products, prices, or shopping content visible
+3. Provide helpful, specific recommendations based on what you can see
+4. If you can't see specific shopping content, ask them to navigate to the product or website they want help with
+
+Be conversational, helpful, and specific in your responses. Reference what you can actually see on their screen."""
 
 # Simplified approach - let Pipecat handle the multimodal processing automatically
 
-async def bot():
+async def bot(config=None):
     """Main bot function - entry point for Pipecat Cloud deployment"""
     
     # Get API keys from environment  
