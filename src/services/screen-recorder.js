@@ -132,7 +132,7 @@ export class ScreenRecorder {
                         chromeMediaSourceId: streamId,
                         maxWidth: 1280,
                         maxHeight: 720,
-                        maxFrameRate: 30
+                        maxFrameRate: 10  // Reduced from 30 to 10 FPS for smaller files
                     }
                 }
             });

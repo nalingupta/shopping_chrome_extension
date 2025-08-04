@@ -105,50 +105,67 @@ export class MessageRenderer {
     }
 
     static expandVideo(videoData) {
-        // Create modal overlay
+        // Create simple modal overlay
         const modal = DOMUtils.createElement('div', 'video-modal');
+        modal.setAttribute('role', 'dialog');
+        modal.setAttribute('aria-modal', 'true');
         
-        const modalContent = DOMUtils.createElement('div', 'video-modal-content');
-        
-        // Close button
-        const closeButton = DOMUtils.createElement('button', 'video-modal-close');
-        closeButton.innerHTML = `
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <line x1="18" y1="6" x2="6" y2="18"></line>
-                <line x1="6" y1="6" x2="18" y2="18"></line>
-            </svg>
-        `;
-        
-        // Full-size video
+        // Full-size video - no wrapper div
         const video = document.createElement('video');
         video.className = 'video-modal-player';
         video.src = videoData.url;
         video.controls = true;
-        video.autoplay = true;
+        video.autoplay = false;
+        video.muted = false; // Ensure sound is enabled by default
+        video.volume = 1.0; // Full volume
+        video.preload = 'metadata';
+        video.disablePictureInPicture = false; // Allow picture-in-picture
         
-        modalContent.appendChild(closeButton);
-        modalContent.appendChild(video);
-        modal.appendChild(modalContent);
+        // Enable fullscreen capability - the browser's video controls will handle fullscreen
+        video.setAttribute('allowfullscreen', '');
+        video.setAttribute('webkitallowfullscreen', '');
+        video.setAttribute('mozallowfullscreen', '');
+        
+        modal.appendChild(video);
         
         // Close handlers
         const closeModal = () => {
             video.pause();
+            document.body.style.overflow = ''; // Restore body scroll
+            document.removeEventListener('keydown', escHandler);
             modal.remove();
         };
         
-        closeButton.addEventListener('click', closeModal);
+        // Click anywhere outside video to close
         modal.addEventListener('click', (e) => {
-            if (e.target === modal) closeModal();
-        });
-        
-        document.addEventListener('keydown', function escHandler(e) {
-            if (e.key === 'Escape') {
+            if (e.target === modal) {
                 closeModal();
-                document.removeEventListener('keydown', escHandler);
             }
         });
         
+        // Escape key handler
+        const escHandler = (e) => {
+            if (e.key === 'Escape') {
+                closeModal();
+            }
+        };
+        document.addEventListener('keydown', escHandler);
+        
+        // Prevent body scroll when modal is open
+        document.body.style.overflow = 'hidden';
+        
+        // Add to body
         document.body.appendChild(modal);
+        
+        // Ensure video is unmuted when loaded
+        video.addEventListener('loadedmetadata', () => {
+            video.muted = false;
+            video.volume = 1.0;
+        });
+        
+        video.addEventListener('error', (e) => {
+            console.error('Video failed to load:', e);
+        });
     }
 
     static createInterimMessage(content) {

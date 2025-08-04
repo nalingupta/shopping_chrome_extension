@@ -20,7 +20,7 @@ export class VoiceInputHandler {
         this.voiceStartTime = null;
         this.voiceEndTime = null;
         this.inactivityTimer = null;
-        this.INACTIVITY_TIMEOUT = 5 * 60 * 1000; // 5 minutes in milliseconds
+        this.INACTIVITY_TIMEOUT = 20 * 60 * 1000; // 20 minutes in milliseconds
         this.currentVideoData = null; // Store video data for current transcription
 
         // Set up callback for when screen sharing ends
