@@ -203,6 +203,17 @@ export class ScreenRecorder {
         return recordingData.videoBlob;
     }
 
+    createVideoData(videoBlob, filename, duration) {
+        const url = URL.createObjectURL(videoBlob);
+        return {
+            url,
+            filename,
+            duration,
+            blob: videoBlob,
+            size: videoBlob.size
+        };
+    }
+
     downloadVideo(videoBlob, filename) {
         const url = URL.createObjectURL(videoBlob);
         const a = document.createElement('a');

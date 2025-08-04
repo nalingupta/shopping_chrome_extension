@@ -21,6 +21,7 @@ export class VoiceInputHandler {
         this.voiceEndTime = null;
         this.inactivityTimer = null;
         this.INACTIVITY_TIMEOUT = 5 * 60 * 1000; // 5 minutes in milliseconds
+        this.currentVideoData = null; // Store video data for current transcription
 
         // Set up callback for when screen sharing ends
         this.screenRecorder.onScreenSharingEnded = () => {
@@ -66,7 +67,7 @@ export class VoiceInputHandler {
         this.clearInactivityTimer();
     }
 
-    handleResult(event) {
+    async handleResult(event) {
         const { finalTranscript, interimTranscript } = this.processResults(event);
         
         // Start screen recording on first speech detection
@@ -76,8 +77,15 @@ export class VoiceInputHandler {
         
         if (finalTranscript && this.callbacks.transcription) {
             this.voiceEndTime = Date.now();
-            this.stopScreenRecordingAndCreateVideo();
+            const videoResult = await this.stopScreenRecordingAndCreateVideo();
+            
+            // Store video data for the transcription callback
+            this.currentVideoData = videoResult.success ? videoResult.videoData : null;
+            
             this.callbacks.transcription(finalTranscript.trim());
+            
+            // Clear video data after callback
+            this.currentVideoData = null;
             
             if (this.state.isListening && !this.state.isProcessingResponse) {
                 this.scheduleRestart();
@@ -87,6 +95,10 @@ export class VoiceInputHandler {
         if (interimTranscript && this.callbacks.interim) {
             this.callbacks.interim(interimTranscript);
         }
+    }
+
+    getCurrentVideoData() {
+        return this.currentVideoData;
     }
 
     handleError(event) {
@@ -252,10 +264,12 @@ export class VoiceInputHandler {
                 const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
                 const filename = `voice-screen-recording-${timestamp}.webm`;
                 
-                this.screenRecorder.downloadVideo(videoBlob, filename);
+                // Create video data for display instead of downloading
+                const videoData = this.screenRecorder.createVideoData(videoBlob, filename, recordingData.duration);
                 
                 return {
                     success: true,
+                    videoData,
                     filename,
                     duration: recordingData.duration,
                     hasAudio: recordingData.hasAudio,

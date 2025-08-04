@@ -11,6 +11,7 @@ class ShoppingAssistant {
         this.initializeEventListeners();
         
         this.trackSidePanelOpened();
+        this.checkHotReloadClear();
         this.restoreState();
         this.getCurrentPageInfo();
     }
@@ -21,12 +22,62 @@ class ShoppingAssistant {
         this.sendButton = DOMUtils.getElementById("sendButton");
         this.voiceButton = DOMUtils.getElementById("voiceButton");
         this.clearChatButton = DOMUtils.getElementById("clearChatButton");
+        this.debugToggle = DOMUtils.getElementById("debugToggle");
+        this.headerStatus = DOMUtils.getElementById("headerStatus");
         this.screenRecordingIndicator = DOMUtils.getElementById("screenRecordingIndicator");
     }
 
     initializeState() {
         this.currentPageInfo = null;
         this.isProcessing = false;
+        this.debugMode = this.loadDebugMode();
+        this.statusTimer = null;
+        this.updateDebugToggle();
+    }
+
+    loadDebugMode() {
+        try {
+            const saved = localStorage.getItem('shoppingAssistant_debugMode');
+            return saved ? JSON.parse(saved) : false;
+        } catch {
+            return false;
+        }
+    }
+
+    saveDebugMode() {
+        try {
+            localStorage.setItem('shoppingAssistant_debugMode', JSON.stringify(this.debugMode));
+        } catch {
+            // Handle storage errors silently
+        }
+    }
+
+    updateDebugToggle() {
+        if (this.debugToggle) {
+            if (this.debugMode) {
+                this.debugToggle.classList.add('active');
+            } else {
+                this.debugToggle.classList.remove('active');
+            }
+        }
+    }
+
+    async checkHotReloadClear() {
+        try {
+            const result = await new Promise((resolve) => {
+                chrome.storage.local.get(['clearChatOnNextLoad'], resolve);
+            });
+            
+            if (result.clearChatOnNextLoad) {
+                // Clear localStorage chat state
+                ChatStateManager.clearState();
+                
+                // Clear the flag
+                chrome.storage.local.remove(['clearChatOnNextLoad']);
+            }
+        } catch (error) {
+            // Ignore errors
+        }
     }
 
     initializeVoiceHandler() {
@@ -97,6 +148,7 @@ class ShoppingAssistant {
         this.sendButton.addEventListener("click", () => this.handleSendMessage());
         this.voiceButton.addEventListener("click", () => this.handleVoiceInput());
         this.clearChatButton.addEventListener("click", () => this.handleClearChat());
+        this.debugToggle.addEventListener("click", () => this.handleDebugToggle());
 
         this.userInput.addEventListener("keydown", (e) => {
             if (e.key === "Enter" && !e.shiftKey) {
@@ -112,6 +164,26 @@ class ShoppingAssistant {
         chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             if (request.type === MESSAGE_TYPES.PAGE_INFO_BROADCAST) {
                 this.updatePageInfo(request.data);
+            }
+        });
+    }
+
+    handleDebugToggle() {
+        this.debugMode = !this.debugMode;
+        this.updateDebugToggle();
+        this.saveDebugMode();
+        
+        // Update existing messages to show/hide video thumbnails
+        this.updateVideoVisibility();
+    }
+
+    updateVideoVisibility() {
+        const videoContainers = this.messagesContainer.querySelectorAll('.video-thumbnail-container');
+        videoContainers.forEach(container => {
+            if (this.debugMode) {
+                container.style.display = 'block';
+            } else {
+                container.style.display = 'none';
             }
         });
     }
@@ -187,10 +259,10 @@ class ShoppingAssistant {
         });
     }
 
-    addMessage(content, type, isLoading = false) {
+    addMessage(content, type, isLoading = false, videoData = null) {
         this.hideWelcomeScreen();
         
-        const messageDiv = MessageRenderer.createMessage(content, type, isLoading);
+        const messageDiv = MessageRenderer.createMessage(content, type, isLoading, videoData);
         this.messagesContainer.appendChild(messageDiv);
 
         DOMUtils.scrollToBottom(this.messagesContainer);
@@ -202,6 +274,51 @@ class ShoppingAssistant {
         return messageDiv;
     }
 
+    addStatusMessage(content) {
+        // Show status in header instead of chat
+        this.showHeaderStatus(content);
+    }
+
+    showHeaderStatus(message, type = 'info', duration = null) {
+        if (!this.headerStatus) return;
+
+        // Clear existing status classes and timer
+        this.clearHeaderStatus();
+
+        // Set the message and type
+        this.headerStatus.textContent = message;
+        this.headerStatus.className = `header-status ${type}`;
+        
+        // Auto-hide after duration if specified (for temporary messages)
+        if (duration) {
+            this.statusTimer = setTimeout(() => {
+                this.clearHeaderStatus();
+            }, duration);
+        }
+        // Otherwise, keep the status persistent (for states like "Listening..." or "Start a chat")
+    }
+
+    clearHeaderStatus() {
+        if (!this.headerStatus) return;
+        
+        if (this.statusTimer) {
+            clearTimeout(this.statusTimer);
+            this.statusTimer = null;
+        }
+        
+        this.headerStatus.className = 'header-status hidden';
+        this.headerStatus.textContent = '';
+    }
+
+    showTemporaryStatusThenStartChat(message, type, duration) {
+        this.showHeaderStatus(message, type, duration);
+        
+        // After the message disappears, show "Start a chat"
+        setTimeout(() => {
+            this.showHeaderStatus("Start a chat", "info");
+        }, duration);
+    }
+
     removeMessage(messageElement) {
         DOMUtils.removeElement(messageElement);
     }
@@ -210,6 +327,8 @@ class ShoppingAssistant {
         const welcomeScreen = DOMUtils.getElementById("welcomeScreen");
         if (welcomeScreen && !welcomeScreen.classList.contains("hidden")) {
             welcomeScreen.classList.add("hidden");
+            // Clear start chat status when user begins chatting
+            this.clearHeaderStatus();
         }
     }
 
@@ -218,11 +337,14 @@ class ShoppingAssistant {
         if (welcomeScreen && welcomeScreen.classList.contains("hidden")) {
             welcomeScreen.classList.remove("hidden");
         }
+        // Show start chat status when welcome screen is visible
+        this.showHeaderStatus("Start a chat", "info");
     }
 
     handleClearChat() {
         this.messagesContainer.innerHTML = "";
         MessageRenderer.clearInterimMessage();
+        this.clearHeaderStatus();
         
         this.userInput.value = "";
         DOMUtils.adjustTextareaHeight(this.userInput);
@@ -260,7 +382,7 @@ class ShoppingAssistant {
             const hasScreenPermission = await this.voiceHandler.screenRecorder.requestScreenPermissionIfNeeded();
             
             if (!hasScreenPermission) {
-                this.addMessage("Screen recording permission is required for voice conversations. Please grant permission and try again.", "assistant");
+                this.showTemporaryStatusThenStartChat("Permission required", "warning", 6000);
                 return;
             }
             
@@ -269,11 +391,12 @@ class ShoppingAssistant {
             if (result.success) {
                 this.voiceButton.classList.add("listening");
                 this.voiceButton.title = "";
+                this.showHeaderStatus("Listening...", "info");
             } else {
                 this.handleVoiceError(result);
             }
         } catch (error) {
-            this.addMessage("Failed to start voice conversation. Please try again.", "assistant");
+            this.showTemporaryStatusThenStartChat("Voice failed", "error", 4000);
         }
     }
 
@@ -282,11 +405,27 @@ class ShoppingAssistant {
         this.voiceButton.title = "";
         await this.voiceHandler.stopListening();
         MessageRenderer.clearInterimMessage();
+        
+        // Show "Start a chat" status after voice input ends
+        this.showHeaderStatus("Start a chat", "info");
     }
 
     handleVoiceError(result) {
-        let errorMessage = this.getVoiceErrorMessage(result);
-        this.addMessage(errorMessage, "assistant");
+        let shortMessage = this.getShortVoiceErrorMessage(result);
+        this.showTemporaryStatusThenStartChat(shortMessage, "error", 5000);
+    }
+
+    getShortVoiceErrorMessage(result) {
+        const shortMessages = {
+            "permission_denied": "Mic denied",
+            "permission_dismissed": "Mic dismissed",
+            "no_microphone": "No mic",
+            "not_supported": "Not supported",
+            "tab_capture_failed": "Unavailable here",
+            "not_secure_context": "HTTPS required"
+        };
+
+        return shortMessages[result.error] || "Voice error";
     }
 
     getVoiceErrorMessage(result) {
@@ -313,12 +452,16 @@ class ShoppingAssistant {
             }
 
             if (this.isErrorTranscription(transcription)) {
-                this.addMessage(transcription, "assistant");
+                this.showHeaderStatus("Speech failed", "error", 4000);
                 return;
             }
 
-            this.addMessage(transcription, "user");
+            // Get video data from voice handler if available and debug mode is enabled
+            const videoData = this.debugMode ? this.voiceHandler.getCurrentVideoData() : null;
+            this.addMessage(transcription, "user", false, videoData);
             this.processVoiceMessage(transcription);
+            
+            // Don't clear listening status here - voice handler continues listening for multi-turn conversations
         }
     }
 
@@ -336,8 +479,8 @@ class ShoppingAssistant {
         // Clear any interim messages
         MessageRenderer.clearInterimMessage();
         
-        // Show the message to user
-        this.addMessage(transcription, "assistant");
+        // Show succinct status message in header, then return to "Start a chat" after timeout
+        this.showTemporaryStatusThenStartChat("Screen ended", "warning", 6000);
         
     }
 
@@ -366,13 +509,19 @@ class ShoppingAssistant {
         this.voiceHandler.notifyResponseProcessing(true);
         await this.processMessage(message);
         this.voiceHandler.notifyResponseProcessing(false);
+        
+        // Restore listening status if voice handler is still listening after processing
+        if (this.voiceHandler.state.isListening) {
+            this.showHeaderStatus("Listening...", "info");
+        }
     }
 
     saveState() {
-        const messages = Array.from(this.messagesContainer.querySelectorAll('.message:not(.interim-message)'))
+        const messages = Array.from(this.messagesContainer.querySelectorAll('.message:not(.interim-message):not(.status-message)'))
             .map(msg => ({
                 content: msg.querySelector('.message-content').textContent,
-                type: msg.classList.contains('user-message') ? 'user' : 'assistant'
+                type: msg.classList.contains('user-message') ? 'user' : 'assistant',
+                hasVideo: msg.querySelector('.video-thumbnail-container') !== null
             }));
         
         const welcomeScreen = DOMUtils.getElementById("welcomeScreen");
@@ -383,10 +532,16 @@ class ShoppingAssistant {
 
     restoreState() {
         const state = ChatStateManager.restoreState();
-        if (!state) return;
+        if (!state) {
+            // No saved state, show start chat status
+            this.showHeaderStatus("Start a chat", "info");
+            return;
+        }
 
         if (state.messages && state.messages.length > 0) {
             state.messages.forEach(msg => {
+                // Don't show video placeholders when restoring messages
+                // Videos are session-specific and won't be available after restart
                 const messageDiv = MessageRenderer.createMessage(msg.content, msg.type);
                 this.messagesContainer.appendChild(messageDiv);
             });
@@ -395,6 +550,9 @@ class ShoppingAssistant {
             DOMUtils.scrollToBottom(this.messagesContainer);
         } else if (!state.isWelcomeVisible) {
             this.hideWelcomeScreen();
+        } else {
+            // Welcome screen is visible, show start chat status
+            this.showHeaderStatus("Start a chat", "info");
         }
     }
 

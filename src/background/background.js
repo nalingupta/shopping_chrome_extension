@@ -34,6 +34,9 @@ class BackgroundService {
                     
                     if (timeSinceReload < 10000) {
                         await this.showReloadNotification();
+                        
+                        // Ensure chat state is cleared after hot reload
+                        await this.clearChatState();
                     }
                     
                     await StorageManager.remove('hotReloadState');
@@ -167,6 +170,9 @@ class BackgroundService {
 
     async handleHotReload() {
         try {
+            // Clear chat state before reloading to ensure fresh start
+            await this.clearChatState();
+            
             await StorageManager.set('hotReloadState', {
                 shouldRestore: true,
                 timestamp: Date.now()
@@ -174,6 +180,27 @@ class BackgroundService {
             
             chrome.runtime.reload();
         } catch (error) {
+        }
+    }
+
+    async clearChatState() {
+        try {
+            // Set a flag for the sidepanel to clear localStorage on next load
+            await StorageManager.set('clearChatOnNextLoad', true);
+            
+            // Clear any chrome.storage.local chat-related data
+            const storage = await chrome.storage.local.get();
+            const keysToRemove = Object.keys(storage).filter(key => 
+                key.includes('chatState') || 
+                key.includes('messages') ||
+                key.includes('conversation')
+            );
+            
+            if (keysToRemove.length > 0) {
+                await chrome.storage.local.remove(keysToRemove);
+            }
+        } catch (error) {
+            // Ignore errors during cleanup
         }
     }
 
