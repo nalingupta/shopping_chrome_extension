@@ -34,14 +34,13 @@ class BackgroundService {
                     
                     if (timeSinceReload < 10000) {
                         await this.showReloadNotification();
-                        
-                        // Ensure chat state is cleared after hot reload
                         await this.clearChatState();
                     }
                     
                     await StorageManager.remove('hotReloadState');
                 }
             } catch (error) {
+                // Ignore errors
             }
         }, 500);
     }
@@ -122,7 +121,6 @@ class BackgroundService {
         }
     }
 
-
     async handleSidePanelOpened(request, sender, sendResponse) {
         try {
             await StorageManager.set('sidePanelOpen', true);
@@ -148,6 +146,7 @@ class BackgroundService {
                 files
             });
         } catch (error) {
+            // Ignore injection errors
         }
     }
 
@@ -170,7 +169,6 @@ class BackgroundService {
 
     async handleHotReload() {
         try {
-            // Clear chat state before reloading to ensure fresh start
             await this.clearChatState();
             
             await StorageManager.set('hotReloadState', {
@@ -180,15 +178,14 @@ class BackgroundService {
             
             chrome.runtime.reload();
         } catch (error) {
+            // Ignore errors
         }
     }
 
     async clearChatState() {
         try {
-            // Set a flag for the sidepanel to clear localStorage on next load
             await StorageManager.set('clearChatOnNextLoad', true);
             
-            // Clear any chrome.storage.local chat-related data
             const storage = await chrome.storage.local.get();
             const keysToRemove = Object.keys(storage).filter(key => 
                 key.includes('chatState') || 
@@ -213,9 +210,9 @@ class BackgroundService {
                 chrome.action.setBadgeText({ text: "" }).catch(() => {});
             }, 3000);
         } catch (error) {
+            // Ignore errors
         }
     }
-
 }
 
 // Initialize the background service

@@ -1,177 +1,156 @@
 # Shopping Assistant Chrome Extension
 
-An AI-powered shopping assistant with **real-time voice input** that helps users with product recommendations, price comparisons, and shopping insights.
+An AI-powered shopping assistant with **real-time voice and visual input** using Gemini Live API that helps users with product recommendations, price comparisons, and shopping insights.
 
 ## ✨ Features
 
-- 🤖 **Smart Shopping Assistant** - Context-aware product help and recommendations
-- 🎤 **Real-time Voice Input** - Browser-native speech recognition with auto-restart
-- 💰 **Price Analysis** - Deal detection and price comparison guidance  
-- 🔍 **Product Discovery** - Find similar products and alternatives
-- ⭐ **Review Analysis** - Help interpreting ratings and reviews
-- 📱 **Modern Interface** - Clean, responsive side panel design
-- 🌐 **Cross-Domain Support** - Works on all major shopping sites
+- 🤖 **AI Shopping Assistant** - Powered by Google Gemini 2.0 Flash with real-time multimodal input
+- 🎤 **Voice Input** - Continuous conversation with live transcription feedback
+- 👁️ **Screen Sharing** - AI can see your screen for visual product analysis
+- 💰 **Smart Analysis** - Real-time price comparisons and product insights
+- 🔍 **Product Discovery** - Find alternatives and make informed decisions
+- 📱 **Modern Interface** - Clean, modular design with proper architecture
+- 🌐 **Cross-Platform** - Works on all major shopping sites
 
 ## 🚀 Quick Start
 
 ### Installation
 1. **Download/Clone** this repository
-2. **Open Chrome** and navigate to `chrome://extensions/`
-3. **Enable Developer Mode** (toggle in top right)
-4. **Click "Load unpacked"** and select this extension folder
-5. **Extension ready!** Click the icon in your toolbar
+2. **Configure API Key** in `src/config/api-keys.js`
+3. **Open Chrome** and navigate to `chrome://extensions/`
+4. **Enable Developer Mode** (toggle in top right)
+5. **Click "Load unpacked"** and select this extension folder
+6. **Extension ready!** Click the icon in your toolbar
 
 ### First Use
 1. **Open side panel** by clicking the extension icon
 2. **Start voice chat** with the microphone button
-3. **Grant permissions** when prompted (one-time setup)
-4. **Ask questions** about products on any shopping site!
+3. **Grant permissions** for microphone and screen sharing
+4. **Ask questions** about products - AI can see your screen and hear you!
 
-## 🎤 Voice System
+## 🎤 Multimodal AI System
 
-### Simplified Architecture (Post-Optimization)
-- **Primary Method**: Web Speech API for real-time transcription
-- **Permission System**: Iframe-based for cross-domain compatibility
-- **No External APIs**: Fully browser-native, no API keys needed
-- **Auto-Recovery**: Smart restart and comprehensive error handling
+### Architecture Overview
+- **Voice Input**: Web Speech API for live transcription + Gemini Live API for processing
+- **Visual Input**: Screen capture sent to Gemini for real-time analysis
+- **Dual Processing**: Local transcription for UI feedback, Gemini for actual responses
+- **Real-time Streaming**: Continuous audio/video streaming to Gemini 2.0 Flash
 
-### Browser Compatibility
-| Browser | Voice Support | Status |
-|---------|--------------|--------|
-| Chrome  | ✅ Full | **Recommended** |
-| Edge    | ✅ Full | **Recommended** |
-| Firefox | ⚠️ Limited | Basic functionality |
-| Safari  | ❌ None | Text input only |
+### How It Works
+1. **User speaks** → Web Speech API shows live transcription in UI
+2. **Simultaneously** → Audio + screen capture streams to Gemini Live API
+3. **Gemini processes** → Audio and visual context for comprehensive understanding
+4. **Response delivered** → Text response displayed and optionally spoken
 
-### Voice Features
-- **Continuous Listening** - Auto-restart for natural conversation
-- **Live Feedback** - See transcription as you speak
-- **Smart Error Recovery** - Helpful tips for common issues
-- **Permission Management** - Seamless cross-site microphone access
+## 🛠️ Refactored Architecture
 
-## 🛠️ Technical Implementation
-
-### Optimized Architecture (70% Code Reduction)
+### Clean Modular Structure
 ```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Side Panel    │    │   Background    │    │ Content Script  │
-│  (sidepanel.*)  │◄──►│ (background.js) │◄──►│(mic-permission.*│
-│                 │    │                 │    │                 │
-│ • Voice UI      │    │ • Query routing │    │ • Permissions   │
-│ • Web Speech API│    │ • Intent parsing│    │ • Page analysis │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
+src/
+├── core/
+│   ├── app.js              # Main ShoppingAssistant class
+│   └── background.js       # Background service worker
+├── services/
+│   ├── gemini-api.js       # Gemini Live API service
+│   ├── audio-handler.js    # Audio processing & Web Speech
+│   ├── screen-capture.js   # Screen sharing functionality
+│   └── shopping-assistant.js # Text-based assistant (fallback)
+├── ui/
+│   ├── message-renderer.js # Message display utilities
+│   └── ui-state.js         # UI state management
+├── utils/
+│   ├── constants.js        # Application constants
+│   ├── storage.js          # Storage utilities
+│   └── dom-utils.js        # DOM helpers
+└── config/
+    └── api-keys.js         # API configuration
 ```
 
 ### Key Components
 
-#### Background Service (`background.js`)
-- **BackgroundService**: Clean class-based message routing
-- **MicrophonePermission**: Iframe-based permission handling  
-- **ShoppingAssistant**: Intent-based query processing with contextual responses
+#### Core (`core/`)
+- **`app.js`**: Main application orchestrator, manages UI and coordinates services
+- **`background.js`**: Clean service worker with proper message routing
 
-#### Voice Handler (`voice-handler.js`)
-- **Web Speech API Integration**: Real-time browser-native transcription
-- **Enhanced Error Handling**: User-friendly messages with recovery tips
-- **State Management**: Robust listening state with auto-restart logic
+#### Services (`services/`)
+- **`gemini-api.js`**: Streamlined Gemini Live API integration with WebSocket handling
+- **`audio-handler.js`**: Combines Web Speech API (UI feedback) + Gemini Live (processing)
+- **`screen-capture.js`**: Simple screen sharing with proper cleanup
+- **`shopping-assistant.js`**: Fallback text-based responses
 
-#### UI Components (`sidepanel.*`)
-- **Modern CSS**: Custom properties, organized component structure
-- **Responsive Design**: Clean chat interface with voice button
-- **Visual Feedback**: Live transcription and listening indicators
+#### UI (`ui/`)
+- **`message-renderer.js`**: Message display and formatting
+- **`ui-state.js`**: Centralized UI state management (debug mode, status, etc.)
 
-### File Structure
-```
-shopping_chrome_extension/
-├── manifest.json                    # Extension configuration
-├── sidepanel.html                   # Main UI HTML
-├── sidepanel.css                    # Main UI styles
-├── src/
-│   ├── background/
-│   │   └── background.js           # Service worker
-│   ├── content/
-│   │   ├── content.js              # Page analysis
-│   │   └── mic-permission.js       # Permission content script
-│   ├── services/
-│   │   ├── microphone-service.js   # Microphone handling
-│   │   ├── page-analyzer.js        # Page content analysis
-│   │   ├── screen-recorder.js      # Desktop capture & recording
-│   │   ├── shopping-assistant.js   # AI assistant logic
-│   │   └── voice-handler.js        # Voice input processing
-│   ├── sidepanel/
-│   │   └── shopping-assistant.js   # Main sidepanel logic
-│   └── utils/
-│       ├── constants.js            # Configuration constants
-│       ├── dom.js                  # DOM utilities
-│       └── storage.js              # Storage management
-├── docs/                           # Technical documentation
-│   ├── CLAUDE.md                   # Development guidelines
-│   ├── SCREEN_RECORDING.md         # Screen recording docs
-│   └── VOICE_SYSTEM.md             # Voice system details
-├── icons/                          # Extension icons
-└── watch.js                        # Development hot reload
-```
+### Optimization Results
+- **🧹 Removed 70% redundant code** - Eliminated verbose debugging and fallback systems
+- **🚀 Improved modularity** - Clear separation of concerns and single responsibility
+- **📁 Better organization** - Logical file structure with proper naming
+- **🔧 Cleaner APIs** - Simplified interfaces and reduced complexity
+- **⚡ Enhanced performance** - Removed unnecessary processing and logs
 
-## 🎯 Optimization Highlights
+## 🎯 User Flow
 
-### Performance Improvements
-- **Faster Startup**: No external API initialization
-- **Lower Memory**: Removed persistent offscreen documents  
-- **Better Reliability**: Browser-native voice recognition
-- **Enhanced UX**: Improved error recovery and user feedback
+### Voice + Visual Input Flow
+1. **User clicks voice button** → Starts listening
+2. **Permissions granted** → Screen sharing + microphone access
+3. **User speaks** → Live transcription appears immediately
+4. **Background processing** → Audio + screen sent to Gemini Live API
+5. **Gemini responds** → Text response based on audio + visual context
+6. **Continuous conversation** → Session stays active for natural interaction
 
-### Code Quality Enhancements
-- **Class-based Architecture**: Clear separation of concerns
-- **CSS Custom Properties**: Maintainable styling system
-- **Enhanced Error Handling**: Comprehensive error types with recovery guidance
-- **Consistent Naming**: Improved file organization and conventions
-
-### Removed Complexity
-- ❌ External API dependencies (Cartesia/OpenAI)
-- ❌ MediaRecorder + offscreen document system
-- ❌ Multiple permission methods  
-- ❌ Debugging console statements
-- ❌ Outdated test files
-- ❌ Complex dual-system approach
-- ❌ Redundant test HTML file
+### Text Input Flow (Fallback)
+1. **User types message** → Text input processing
+2. **Background processing** → Text + optional screen capture sent to Gemini
+3. **Gemini responds** → Standard text-based response
 
 ## 🐛 Troubleshooting
 
 ### Voice Input Issues
-
 **"Microphone access denied"**
 - Click microphone icon in browser address bar
 - Select "Allow" for microphone access
-- Refresh page and try again
 
-**"Voice input not working"**
-- Ensure you're using Chrome or Edge browser
-- Check that microphone is connected and working
-- Try on a different website (some sites block extensions)
+**"Screen sharing failed"**
+- Grant screen sharing permission when prompted
+- Extension works audio-only if screen sharing is declined
 
-**"No speech detected"**
-- Speak clearly and closer to microphone
-- Check microphone volume in system settings
-- Ensure other apps aren't using microphone
+**"Connection error"**
+- Check your internet connection
+- Verify Gemini API key is configured correctly
 
-### Extension Issues
+### Common Issues
+**Extension not working**
+- Ensure API key is set in `src/config/api-keys.js`
+- Check Chrome extensions page for any errors
+- Try refreshing the page and restarting the extension
 
-**Side panel not opening**
-- Right-click extension icon → select "Show side panel"
-- Try reloading the extension in chrome://extensions/
+## 🔧 Development
 
-**Not working on certain sites**
-- Some sites (banking, etc.) block extension content scripts
-- Try the extension on shopping sites like Amazon, eBay
+### File Structure
+```
+shopping_chrome_extension/
+├── manifest.json           # Extension configuration
+├── sidepanel.html         # Main UI
+├── sidepanel.css          # Styles
+├── src/main.js            # Entry point
+├── src/core/              # Core application logic
+├── src/services/          # Business logic services
+├── src/ui/                # UI components
+├── src/utils/             # Utilities
+├── src/config/            # Configuration
+├── src/content/           # Content scripts
+├── src/audio/             # Audio processing workers
+├── docs/                  # Documentation
+└── icons/                 # Extension icons
+```
 
-## 🤝 Contributing
-
-This extension follows clean coding practices:
-- Modular architecture with single responsibility principle
-- Comprehensive error handling and user feedback
-- Modern CSS with custom properties
-- Class-based JavaScript with clear method organization
-
-See `docs/CLAUDE.md` for development guidelines and `docs/VOICE_SYSTEM.md` for technical voice implementation details.
+### Key Features
+- **Modular Design**: Each file has a single, clear responsibility
+- **Clean APIs**: Simple, well-defined interfaces between components
+- **Error Handling**: Proper error management throughout the system
+- **Performance**: Optimized for real-time multimodal processing
+- **Maintainability**: Easy to understand, modify, and extend
 
 ## 📝 License
 
@@ -179,4 +158,5 @@ MIT License - feel free to use and modify as needed.
 
 ---
 
-**Built with modern web technologies and optimized for performance and reliability.** 🚀
+**Built with Google Gemini 2.0 Flash for cutting-edge multimodal AI capabilities.** 🚀
+

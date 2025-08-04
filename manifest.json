@@ -12,7 +12,7 @@
     ],
     "host_permissions": ["https://*/*", "http://*/*"],
     "background": {
-        "service_worker": "src/background/background.js",
+        "service_worker": "src/core/background.js",
         "type": "module"
     },
     "content_scripts": [
