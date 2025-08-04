@@ -25,7 +25,7 @@
     ],
     "web_accessible_resources": [
         {
-            "resources": [".reload-signal"],
+            "resources": [".reload-signal", "src/audio/pcm-processor.js"],
             "matches": ["<all_urls>"]
         }
     ],
@@ -39,5 +39,8 @@
         "16": "icons/icon16.png",
         "48": "icons/icon48.png",
         "128": "icons/icon128.png"
+    },
+    "content_security_policy": {
+        "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' wss://generativelanguage.googleapis.com https://generativelanguage.googleapis.com;"
     }
 }

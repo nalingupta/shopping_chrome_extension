@@ -11,6 +11,11 @@ export class GeminiLiveStreamingService {
         this.screenStream = null;
         this.audioStream = null;
         
+        // Speech detection state
+        this.isSpeaking = false;
+        this.speechStartTime = 0;
+        this.lastAudioActivity = 0;
+        
         // Debug counters
         this.audioChunksSent = 0;
         this.videoFramesSent = 0;
@@ -18,6 +23,11 @@ export class GeminiLiveStreamingService {
         // Buffer for media chunks until setup is complete
         this.pendingAudioChunks = [];
         this.pendingVideoFrames = [];
+        
+        // Response queue for multi-turn conversations (like Google example)
+        this.responseQueue = [];
+        this.currentTurn = [];
+        this.isProcessingTurn = false;
         
         // Callbacks
         this.callbacks = {
@@ -141,10 +151,13 @@ export class GeminiLiveStreamingService {
                     this.isConnected = false;
                     this.isSetupComplete = false;
                     
-                    // Clear any buffered chunks on disconnect
+                    // Clear any buffered chunks and response queue on disconnect
                     this.pendingAudioChunks = [];
                     this.pendingVideoFrames = [];
-                    console.log('🧹 Cleared buffered chunks on disconnect');
+                    this.responseQueue = [];
+                    this.currentTurn = [];
+                    this.isProcessingTurn = false;
+                    console.log('🧹 Cleared buffered chunks and response queue on disconnect');
                     
                     // Log close codes for debugging
                     if (event.code === 1006) {
@@ -320,12 +333,19 @@ Remember: You have LIVE access to their screen and audio, so you can see exactly
             const canvas = document.createElement('canvas');
             const ctx = canvas.getContext('2d');
             
-            // Send video frames at 2 FPS (every 500ms)
+            // Send video frames at 2 FPS (every 500ms) but only during speech
             this.videoInterval = setInterval(() => {
-                if (!this.isConnected || !this.screenStream || !this.isSetupComplete) {
-                    console.log('Skipping frame - not ready');
+                // Check if screen stream is still active
+                if (!this.screenStream || this.screenStream.getVideoTracks().length === 0 || 
+                    this.screenStream.getVideoTracks()[0].readyState !== 'live') {
+                    return; // Skip if screen sharing has ended
+                }
+                
+                if (!this.isConnected || !this.isSetupComplete) {
                     return;
                 }
+                
+                // Send video frames continuously - let server correlate with speech
                 
                 try {
                     // Set canvas size to match video
@@ -406,65 +426,8 @@ Remember: You have LIVE access to their screen and audio, so you can see exactly
         try {
             console.log('🎤 Using modern AudioWorkletNode...');
             
-            // Create the AudioWorklet processor inline
-            const processorCode = `
-                class PCMProcessor extends AudioWorkletProcessor {
-                    constructor() {
-                        super();
-                        this.processEventCount = 0;
-                    }
-                    
-                    process(inputs, outputs, parameters) {
-                        const input = inputs[0];
-                        const output = outputs[0];
-                        
-                        if (input.length > 0) {
-                            const inputChannel = input[0];
-                            const outputChannel = output[0];
-                            
-                            this.processEventCount++;
-                            
-                            // Check for audio activity
-                            let hasSpeech = false;
-                            let maxAmplitude = 0;
-                            
-                            for (let i = 0; i < inputChannel.length; i++) {
-                                const amplitude = Math.abs(inputChannel[i]);
-                                maxAmplitude = Math.max(maxAmplitude, amplitude);
-                                if (amplitude > 0.02) { // Higher threshold for actual speech
-                                    hasSpeech = true;
-                                }
-                                // Copy input to output
-                                outputChannel[i] = inputChannel[i];
-                            }
-                            
-                            // ALWAYS send audio data to main thread for continuous processing
-                            // Convert float32 to int16 PCM
-                            const pcmData = new Int16Array(inputChannel.length);
-                            for (let i = 0; i < inputChannel.length; i++) {
-                                const sample = Math.max(-1, Math.min(1, inputChannel[i]));
-                                pcmData[i] = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
-                            }
-                            
-                            this.port.postMessage({
-                                type: 'audioData',
-                                pcmData: pcmData,
-                                maxAmplitude: maxAmplitude,
-                                hasSpeech: hasSpeech,
-                                eventCount: this.processEventCount
-                            });
-                        }
-                        
-                        return true; // Keep processing
-                    }
-                }
-                
-                registerProcessor('pcm-processor', PCMProcessor);
-            `;
-            
-            // Create blob URL for the processor
-            const blob = new Blob([processorCode], { type: 'application/javascript' });
-            const processorUrl = URL.createObjectURL(blob);
+            // Load the AudioWorklet processor from a separate file
+            const processorUrl = chrome.runtime.getURL('src/audio/pcm-processor.js');
             
             // Add the AudioWorklet module
             await this.audioContext.audioWorklet.addModule(processorUrl);
@@ -474,27 +437,21 @@ Remember: You have LIVE access to their screen and audio, so you can see exactly
             const workletNode = new AudioWorkletNode(this.audioContext, 'pcm-processor');
             console.log('🎤 Created AudioWorkletNode');
             
-            // Handle messages from the worklet
-            let lastLogTime = 0;
+            // Handle messages from the worklet - pure audio streaming
             workletNode.port.onmessage = (event) => {
-                const { type, pcmData, maxAmplitude, eventCount, hasSpeech } = event.data;
+                const { type, pcmData, maxAmplitude, eventCount } = event.data;
                 
                 if (type === 'audioData') {
-                    // Show continuous audio processing heartbeat
-                    const now = Date.now();
-                    if (now - lastLogTime > 2000) { // Every 2 seconds
-                        console.log(`🎤 Listening... (event #${eventCount}, amp: ${maxAmplitude.toFixed(3)})`);
-                        lastLogTime = now;
-                    }
-                    
-                    // Only send to Gemini when there's actual speech
-                    if (hasSpeech && this.isConnected && this.isSetupComplete) {
+                    // Send ALL audio continuously - let server handle speech detection completely
+                    if (this.isConnected && this.isSetupComplete) {
                         // Convert to base64 and send
                         const uint8Array = new Uint8Array(pcmData.buffer);
                         const base64 = btoa(String.fromCharCode(...uint8Array));
                         
                         this.audioChunksSent++;
-                        console.log(`🎤 SPEECH #${this.audioChunksSent} (amp: ${maxAmplitude.toFixed(3)}) → GEMINI`);
+                        if (this.audioChunksSent % 100 === 0) { // Log every 100th chunk
+                            console.log(`🎤 AUDIO #${this.audioChunksSent} (amp: ${maxAmplitude.toFixed(3)}) → GEMINI`);
+                        }
                         this.sendAudioChunk(base64);
                     }
                 }
@@ -508,7 +465,6 @@ Remember: You have LIVE access to their screen and audio, so you can see exactly
             // Store references
             this.audioWorkletNode = workletNode;
             this.audioSource = source;
-            this.processorUrl = processorUrl;
             
             console.log('✅ AudioWorklet PCM streaming started successfully');
             console.log('🎤 Audio processing chain: MediaStream → Source → AudioWorkletNode → Destination');
@@ -531,39 +487,100 @@ Remember: You have LIVE access to their screen and audio, so you can see exactly
             const processor = this.audioContext.createScriptProcessor(4096, 1, 1);
             console.log('🎤 Created ScriptProcessorNode with 4096 buffer size');
             
+            // Adaptive threshold calibration for fallback
             let processEventCount = 0;
             let lastLogTime = 0;
+            let isCalibrating = true;
+            let calibrationBuffer = [];
+            let calibrationStartTime = 0;
+            let silenceThreshold = 0.015; // Default
+            
+            const computeRMS = (data) => {
+                let sum = 0;
+                for (let v of data) sum += v * v;
+                return Math.sqrt(sum / data.length);
+            };
+            
+            const finalizeCalibration = () => {
+                if (calibrationBuffer.length === 0) {
+                    console.warn('No calibration data collected, using default threshold');
+                    silenceThreshold = 0.015;
+                } else {
+                    const ambientRMS = computeRMS(calibrationBuffer);
+                    const raw = ambientRMS * 2;
+                    silenceThreshold = Math.min(0.02, Math.max(0.01, raw));
+                    console.log(`✅ FALLBACK CALIBRATION COMPLETE: Ambient RMS=${ambientRMS.toFixed(4)}, Threshold=${silenceThreshold.toFixed(4)} (${calibrationBuffer.length} samples)`);
+                }
+                isCalibrating = false;
+                calibrationBuffer = null; // Free memory
+            };
             processor.onaudioprocess = (event) => {
                 processEventCount++;
                 
                 const inputData = event.inputBuffer.getChannelData(0);
                 const outputData = event.outputBuffer.getChannelData(0);
+                const now = Date.now();
                 
                 // Always copy input to output to keep chain active
                 for (let i = 0; i < inputData.length; i++) {
                     outputData[i] = inputData[i];
                 }
                 
-                // Check for speech activity
+                // Handle calibration phase
+                if (isCalibrating) {
+                    if (calibrationStartTime === 0) {
+                        calibrationStartTime = now;
+                        console.log('🎙️ FALLBACK CALIBRATION: Recording ambient noise for 1 second...');
+                    }
+                    
+                    // Collect calibration data
+                    for (let i = 0; i < inputData.length; i++) {
+                        calibrationBuffer.push(inputData[i]);
+                    }
+                    
+                    // Check if calibration is complete
+                    if (now - calibrationStartTime >= 1000) { // 1 second
+                        finalizeCalibration();
+                    }
+                    return; // Don't do speech detection during calibration
+                }
+                
+                // Check for speech activity using adaptive threshold
                 let hasSpeech = false;
                 let maxAmplitude = 0;
                 for (let i = 0; i < inputData.length; i++) {
                     const amplitude = Math.abs(inputData[i]);
                     maxAmplitude = Math.max(maxAmplitude, amplitude);
-                    if (amplitude > 0.02) { // Higher threshold for actual speech
+                    if (amplitude > silenceThreshold) {
                         hasSpeech = true;
                     }
                 }
                 
                 // Show continuous audio processing heartbeat
-                const now = Date.now();
                 if (now - lastLogTime > 2000) { // Every 2 seconds
                     console.log(`🎤 Listening... (event #${processEventCount}, amp: ${maxAmplitude.toFixed(3)})`);
                     lastLogTime = now;
                 }
                 
-                // Only send to Gemini when there's actual speech
-                if (hasSpeech && this.isConnected && this.isSetupComplete) {
+                // Simple speech detection for fallback mode
+                if (hasSpeech) {
+                    if (!this.isSpeaking) {
+                        console.log('🎤 SPEECH STARTED (fallback) - Beginning audio/video streaming');
+                        this.isSpeaking = true;
+                        this.speechStartTime = Date.now();
+                    }
+                    this.lastAudioActivity = now;
+                } else if (this.isSpeaking && this.lastAudioActivity && (now - this.lastAudioActivity > 500)) {
+                    // End speech after 500ms of silence
+                    console.log('🎤 SPEECH ENDED (fallback) - Stopping audio/video streaming');
+                    this.isSpeaking = false;
+                    this.speechStartTime = 0;
+                    
+                    // Let server handle end-of-speech automatically
+                }
+                
+                // Only send to Gemini during active speech
+                if (this.isSpeaking && this.isConnected && this.isSetupComplete) {
                     // Convert float32 to int16 PCM
                     const pcmData = new Int16Array(inputData.length);
                     for (let i = 0; i < inputData.length; i++) {
@@ -687,8 +704,7 @@ Remember: You have LIVE access to their screen and audio, so you can see exactly
         this.videoFramesSent++;
         console.log(`📹 VIDEO #${this.videoFramesSent}`);
         
-        // For video, we might need to use a different structure or mediaChunks
-        // For now, let's try the mediaChunks format for images
+        // Use correct Gemini Live API format for images  
         const message = {
             realtimeInput: {
                 mediaChunks: [{
@@ -715,7 +731,7 @@ Remember: You have LIVE access to their screen and audio, so you can see exactly
             realtimeInput: {
                 audio: {
                     data: base64Data,
-                    mimeType: "audio/pcm;rate=16000"  // Correct format from docs
+                    mimeType: "audio/pcm;rate=16000"
                 }
             }
         };
@@ -761,6 +777,7 @@ Remember: You have LIVE access to their screen and audio, so you can see exactly
                 // Removed success logging to reduce noise
             } catch (error) {
                 console.error('❌ Failed to send message:', error);
+                console.error('❌ Message that failed:', JSON.stringify(message, null, 2));
             }
         } else {
             console.error('❌ WebSocket not open! ReadyState:', this.ws ? this.ws.readyState : 'null', 'Cannot send message');
@@ -789,57 +806,76 @@ Remember: You have LIVE access to their screen and audio, so you can see exactly
                 return;
             }
             
-            // Handle server content (bot responses) - match JavaScript SDK format
+            // Add message to response queue (following Google example pattern)
+            this.responseQueue.push(message);
+            
+            // Process messages from queue
+            this.processResponseQueue();
+            
+        } catch (error) {
+            console.error('❌ Error parsing Gemini message:', error);
+            console.error('🔍 Raw data that failed to parse:', data);
+        }
+    }
+
+    async processResponseQueue() {
+        if (this.isProcessingTurn) {
+            return; // Already processing a turn
+        }
+
+        // Process messages until we find a complete turn (following Google example)
+        while (this.responseQueue.length > 0) {
+            const message = this.responseQueue.shift();
+            this.currentTurn.push(message);
+
+            // Check for turn completion (following Google example pattern)
+            if (message.serverContent && message.serverContent.turnComplete) {
+                console.log('✅ Turn complete received, processing turn with', this.currentTurn.length, 'messages');
+                this.isProcessingTurn = true;
+                
+                await this.handleCompleteTurn(this.currentTurn);
+                
+                // Reset for next turn
+                this.currentTurn = [];
+                this.isProcessingTurn = false;
+                break;
+            }
+        }
+    }
+
+    async handleCompleteTurn(turnMessages) {
+        console.log('🤖 PROCESSING COMPLETE TURN with', turnMessages.length, 'messages');
+        
+        let combinedText = '';
+        let combinedAudioData = [];
+        
+        // Process all messages in the turn (following Google example pattern)
+        turnMessages.forEach((message, index) => {
+            console.log(`📝 Processing turn message ${index + 1}/${turnMessages.length}`);
+            
+            // Handle server content (bot responses)
             if (message.serverContent) {
-                console.log('🤖 PROCESSING BOT RESPONSE from serverContent...');
-                
-                // Check for turn completion (matches JavaScript SDK pattern)
-                if (message.serverContent.turnComplete) {
-                    console.log('✅ Turn complete received');
-                }
-                
                 // Process model turn content
                 if (message.serverContent.modelTurn && message.serverContent.modelTurn.parts) {
-                    console.log('📝 Found modelTurn with parts, processing...');
-                    message.serverContent.modelTurn.parts.forEach((part, index) => {
-                        console.log(`📝 Processing part ${index}:`, part);
+                    message.serverContent.modelTurn.parts.forEach((part, partIndex) => {
+                        console.log(`📝 Processing part ${partIndex}:`, part);
                         if (part.text) {
-                            console.log('✅ GEMINI BOT RESPONSE TEXT:', part.text);
-                            // Bot text response
-                            if (this.callbacks.onBotResponse) {
-                                console.log('🔄 Calling onBotResponse callback...');
-                                this.callbacks.onBotResponse({
-                                    text: part.text,
-                                    timestamp: Date.now()
-                                });
-                                console.log('✅ onBotResponse callback called successfully');
-                            } else {
-                                console.error('❌ No onBotResponse callback set!');
-                            }
+                            console.log('✅ GEMINI TEXT RESPONSE:', part.text);
+                            combinedText += part.text;
                         } else if (part.inlineData) {
                             if (part.inlineData.mimeType && part.inlineData.mimeType.includes('audio')) {
                                 console.log('🔊 GEMINI AUDIO RESPONSE received');
-                                // TODO: Handle audio playback
+                                // TODO: Handle audio playback like Google example
                             }
-                        } else {
-                            console.log('❓ Unknown part type:', part);
                         }
                     });
-                } else {
-                    console.log('❌ No modelTurn.parts found in serverContent');
-                    console.log('🔍 Full serverContent:', JSON.stringify(message.serverContent, null, 2));
                 }
             }
             
-            // Also handle if using direct message.data format (for audio responses)
+            // Handle direct audio data (like Google example)
             if (message.data) {
                 console.log('🔊 GEMINI AUDIO DATA received, length:', message.data.length);
-                // This would be base64 audio data like in the JavaScript example
-            }
-            
-            // Handle tool calls
-            if (message.toolCall) {
-                console.log('🔧 Tool call received:', message.toolCall);
+                combinedAudioData.push(message.data);
             }
             
             // Handle errors
@@ -849,18 +885,23 @@ Remember: You have LIVE access to their screen and audio, so you can see exactly
                     this.callbacks.onError(message.error);
                 }
             }
-            
-            // Log if message doesn't match any known pattern
-            const knownKeys = ['setupComplete', 'setup_complete', 'serverContent', 'server_content', 'candidates', 'toolCall', 'error'];
-            const messageKeys = Object.keys(message);
-            const unknownKeys = messageKeys.filter(key => !knownKeys.includes(key));
-            if (unknownKeys.length > 0) {
-                console.log('❓ Unknown message keys detected:', unknownKeys);
-            }
-            
-        } catch (error) {
-            console.error('❌ Error parsing Gemini message:', error);
-            console.error('🔍 Raw data that failed to parse:', data);
+        });
+
+        // Send combined response to callback (if we have text)
+        if (combinedText && this.callbacks.onBotResponse) {
+            console.log('🔄 Calling onBotResponse callback with combined text...');
+            this.callbacks.onBotResponse({
+                text: combinedText,
+                timestamp: Date.now(),
+                audioData: combinedAudioData.length > 0 ? combinedAudioData : null
+            });
+            console.log('✅ onBotResponse callback called successfully');
+        }
+
+        // TODO: Handle combined audio data like Google example (save as wave file, etc.)
+        if (combinedAudioData.length > 0) {
+            console.log('🔊 Combined audio response with', combinedAudioData.length, 'chunks');
+            // Could implement audio playback here following Google's pattern
         }
     }
 
@@ -898,11 +939,6 @@ Remember: You have LIVE access to their screen and audio, so you can see exactly
                 this.audioSource = null;
             }
             
-            // Clean up processor URL
-            if (this.processorUrl) {
-                URL.revokeObjectURL(this.processorUrl);
-                this.processorUrl = null;
-            }
             
             // Stop audio recorder if it exists (legacy)
             if (this.audioRecorder && this.audioRecorder.state !== 'inactive') {
@@ -938,10 +974,13 @@ Remember: You have LIVE access to their screen and audio, so you can see exactly
             this.isConnected = false;
             this.isSetupComplete = false;
             
-            // Clear any buffered chunks
+            // Clear any buffered chunks and response queue
             this.pendingAudioChunks = [];
             this.pendingVideoFrames = [];
-            console.log('🧹 Cleared buffered chunks on stop');
+            this.responseQueue = [];
+            this.currentTurn = [];
+            this.isProcessingTurn = false;
+            console.log('🧹 Cleared buffered chunks and response queue on stop');
             
             return { success: true, message: 'Streaming stopped' };
         } catch (error) {
@@ -966,42 +1005,11 @@ Remember: You have LIVE access to their screen and audio, so you can see exactly
         this.callbacks.onError = callback;
     }
 
-    // Send text message to Gemini
+    // Send text message to Gemini (not supported in Live API - use audio instead)
     sendTextMessage(text) {
-        if (!this.isSetupComplete) {
-            console.error('Cannot send text - setup not complete');
-            return;
-        }
-        
-        const message = {
-            client_content: {
-                turn_complete: true,
-                turns: [{
-                    role: "user",
-                    parts: [{
-                        text: text
-                    }]
-                }]
-            }
-        };
-        
-        console.log('Sending text to Gemini:', text);
-        this.sendMessage(message);
+        console.warn('Text messages not supported in Live API - use audio input instead');
     }
     
-    // Send end of turn signal
-    sendEndOfTurn() {
-        if (!this.isSetupComplete) return;
-        
-        const message = {
-            client_content: {
-                turn_complete: true
-            }
-        };
-        
-        console.log('Sending end of turn signal');
-        this.sendMessage(message);
-    }
     
     // Status methods
     getConnectionStatus() {
@@ -1047,15 +1055,6 @@ Remember: You have LIVE access to their screen and audio, so you can see exactly
             this.audioSource = null;
         }
         
-        // Clean up processor URL
-        if (this.processorUrl) {
-            try {
-                URL.revokeObjectURL(this.processorUrl);
-            } catch (error) {
-                console.error('Error revoking processor URL:', error);
-            }
-            this.processorUrl = null;
-        }
         
         if (this.screenStream) {
             this.screenStream.getTracks().forEach(track => track.stop());
