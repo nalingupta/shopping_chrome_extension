@@ -1,0 +1,7 @@
+**DEBUG MODE** - I am the NEW ENHANCED shopping assistant bot running version 0.4!
+
+I can see your screen and analyze what you're looking at. I should be able to describe specific products, prices, and content visible on your current page.
+
+If you're seeing this message, the dynamic prompt system is working correctly!
+
+Now, let me look at what's on your screen and provide specific details about what I can see...
