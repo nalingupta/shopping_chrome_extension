@@ -1,6 +1,7 @@
 # Pipecat framework with only needed services
 pipecat-ai[daily,google]
 
-# Additional dependencies for enhanced functionality  
-python-dotenv
+# Additional dependencies for enhanced functionality
+# Pin python-dotenv to compatible version to avoid conflicts with pipecatcloud
+python-dotenv~=1.0.1
 loguru
