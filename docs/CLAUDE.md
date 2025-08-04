@@ -30,6 +30,19 @@
 3. Run linting and type checking (if available)
 4. Refactor any code smells
 5. Verify the solution works end-to-end
+6. **IMPORTANT**: Run `git commit` at good milestones to track progress
+
+## Git Commit Strategy
+- **Automatically commit at good milestones** without asking
+- Good milestones include:
+  - Completing a major feature or component
+  - Fixing significant bugs or issues
+  - Refactoring or architectural improvements
+  - Adding comprehensive tests
+  - Completing user-requested tasks
+- Use descriptive commit messages that explain the "why" not just the "what"
+- Always include co-authored attribution with Claude Code
+- Push to remote only when explicitly requested
 
 ## File Organization
 - `/src` - Source code
