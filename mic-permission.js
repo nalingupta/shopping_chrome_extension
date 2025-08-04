@@ -34,7 +34,7 @@ class MicPermissionHandler {
 
             // Create an invisible iframe that loads our extension page
             this.iframe = document.createElement('iframe');
-            this.iframe.src = chrome.runtime.getURL('permissionRequest.html');
+            this.iframe.src = chrome.runtime.getURL('mic-permission-page.html');
             this.iframe.style.display = 'none';
             this.iframe.style.position = 'fixed';
             this.iframe.style.top = '0';

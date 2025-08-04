@@ -16,13 +16,13 @@
     "content_scripts": [
         {
             "matches": ["<all_urls>"],
-            "js": ["content.js", "micPermission.js"],
+            "js": ["content.js", "mic-permission.js"],
             "run_at": "document_idle"
         }
     ],
     "web_accessible_resources": [
         {
-            "resources": ["permissionRequest.html", "permissionRequest.js"],
+            "resources": ["mic-permission-page.html", "mic-permission-page.js"],
             "matches": ["<all_urls>"]
         }
     ],
