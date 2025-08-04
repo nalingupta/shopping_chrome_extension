@@ -207,10 +207,18 @@ export class VoiceInputHandler {
         }
 
         try {
+            console.log('🔍 DEBUGGING: Checking streaming configuration...');
+            console.log('  - useRealTimeStreaming:', this.useRealTimeStreaming);
+            console.log('  - isRealTimeStreamingConfigured():', this.isRealTimeStreamingConfigured());
+            console.log('  - API_CONFIG.ENABLE_REAL_TIME_STREAMING:', API_CONFIG.ENABLE_REAL_TIME_STREAMING);
+            
             // Check if real-time streaming is configured and available
             if (this.useRealTimeStreaming && this.isRealTimeStreamingConfigured()) {
+                console.log('✅ USING REAL-TIME STREAMING - Should see detailed logs now...');
                 return await this.startRealTimeStreaming();
             } else {
+                console.log('⚠️ FALLING BACK TO TRADITIONAL VOICE RECOGNITION');
+                console.log('  - Reason: useRealTimeStreaming=' + this.useRealTimeStreaming + ', isConfigured=' + this.isRealTimeStreamingConfigured());
                 // Fallback to traditional voice recognition
                 return await this.startTraditionalVoiceRecognition();
             }
@@ -221,25 +229,26 @@ export class VoiceInputHandler {
 
     async startRealTimeStreaming() {
         try {
-            console.log('🎤 Starting real-time streaming...');
+            console.log('🎤 VOICE HANDLER: Starting real-time streaming...');
+            console.log('🔍 VOICE HANDLER: About to call pipecatService.initialize()');
             
             // Initialize Pipecat Cloud (no configuration needed)
-            console.log('⚙️ Initializing Pipecat Cloud...');
+            console.log('⚙️ VOICE HANDLER: Initializing Pipecat Cloud...');
             const initResult = await this.pipecatService.initialize();
             if (!initResult.success) {
-                console.error('❌ Pipecat initialization failed:', initResult.error);
+                console.error('❌ VOICE HANDLER: Pipecat initialization failed:', initResult.error);
                 throw new Error(initResult.error);
             }
-            console.log('✅ Pipecat Cloud initialized');
+            console.log('✅ VOICE HANDLER: Pipecat Cloud initialized');
 
             // Start real-time streaming with Pipecat Cloud
-            console.log('🚀 Starting Pipecat streaming...');
+            console.log('🚀 VOICE HANDLER: About to call pipecatService.startStreaming() - THIS SHOULD SHOW DETAILED LOGS');
             const streamResult = await this.pipecatService.startStreaming();
             if (!streamResult.success) {
-                console.error('❌ Pipecat streaming failed:', streamResult.error);
+                console.error('❌ VOICE HANDLER: Pipecat streaming failed:', streamResult.error);
                 throw new Error(streamResult.error);
             }
-            console.log('✅ Pipecat streaming started');
+            console.log('✅ VOICE HANDLER: Pipecat streaming started successfully!');
 
             this.state.isListening = true;
             this.clearInactivityTimer();
