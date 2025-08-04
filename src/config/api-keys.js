@@ -20,7 +20,7 @@ export const API_CONFIG = {
 };
 
 // Validate API keys are present
-if (!API_CONFIG.GEMINI_API_KEY || !API_CONFIG.DAILY_API_KEY || !API_CONFIG.PIPECAT_JWT_TOKEN) {
+if (!API_CONFIG.GEMINI_API_KEY || !API_CONFIG.DAILY_API_KEY || !API_CONFIG.PIPECAT_PUBLIC_API_KEY) {
     console.error('❌ API keys missing in configuration');
 } else {
     console.log('✅ All API keys configured for deployed agent');
