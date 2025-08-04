@@ -23,6 +23,11 @@ export class GeminiVoiceHandler {
         this.inactivityTimer = null;
         this.INACTIVITY_TIMEOUT = 20 * 60 * 1000; // 20 minutes
         
+        // Speech recognition keep-alive mechanism
+        this.speechKeepAliveTimer = null;
+        this.SPEECH_KEEP_ALIVE_INTERVAL = 45 * 1000; // Restart every 45 seconds to prevent browser timeout
+        this.lastSpeechActivity = null;
+        
         // Set up callback for when screen sharing ends
         this.screenRecorder.onScreenSharingEnded = () => {
             this.handleScreenSharingEnded();
@@ -46,13 +51,11 @@ export class GeminiVoiceHandler {
     }
 
     setupGeminiCallbacks() {
-        // Handle user transcript
+        // Handle user transcript from Gemini - LOG ONLY, DON'T USE FOR UI
         this.geminiService.setUserTranscriptCallback((data) => {
-            if (this.callbacks.transcription && data.final) {
-                this.callbacks.transcription(data.text);
-            } else if (this.callbacks.interim && !data.final) {
-                this.callbacks.interim(data.text);
-            }
+            // Log Gemini's transcription for debugging, but don't use for UI
+            console.log('Gemini transcript (not used for UI):', data.text, 'final:', data.final);
+            // UI transcription is handled by local Web Speech API only
         });
         
         // Handle bot response
@@ -95,6 +98,9 @@ export class GeminiVoiceHandler {
                 // Also start local speech recognition for UI feedback
                 this.startLocalSpeechRecognition();
                 
+                // Start proactive keep-alive mechanism
+                this.startSpeechKeepAlive();
+                
                 // Update UI to show listening state
                 const voiceButton = document.getElementById('voiceButton');
                 if (voiceButton) {
@@ -124,16 +130,22 @@ export class GeminiVoiceHandler {
         try {
             this.voiceEndTime = Date.now();
             
+            // Set state to false first to prevent auto-restart
+            this.state.isListening = false;
+            
             // Stop local speech recognition
             if (this.speechRecognition) {
-                this.speechRecognition.stop();
+                try {
+                    this.speechRecognition.stop();
+                } catch (err) {
+                    console.warn('Error stopping speech recognition:', err);
+                }
                 this.speechRecognition = null;
             }
             
             // Stop Gemini streaming
             await this.geminiService.stopStreaming();
             
-            this.state.isListening = false;
             console.log('Stopped listening');
             
             // Update UI
@@ -145,8 +157,9 @@ export class GeminiVoiceHandler {
             // Update screen recording indicator
             this.updateScreenRecordingIndicator(false);
             
-            // Clear inactivity timer
+            // Clear inactivity timer and keep-alive timer
             this.clearInactivityTimer();
+            this.clearSpeechKeepAlive();
             
             return { success: true, message: 'Stopped listening' };
             
@@ -158,6 +171,8 @@ export class GeminiVoiceHandler {
     }
 
     handleBotResponse(text) {
+        console.log('Gemini bot response received:', text);
+        
         // Display bot response in chat
         const messagesContainer = document.getElementById('messages');
         if (messagesContainer) {
@@ -174,6 +189,13 @@ export class GeminiVoiceHandler {
         
         // Play audio response if available
         this.playBotAudio(text);
+        
+        // Update UI status to show we're still listening
+        const headerStatus = document.getElementById('headerStatus');
+        if (headerStatus && this.state.isListening) {
+            headerStatus.textContent = 'Listening...';
+            headerStatus.classList.remove('hidden');
+        }
     }
 
     formatMessage(text) {
@@ -316,6 +338,12 @@ export class GeminiVoiceHandler {
         this.speechRecognition.lang = 'en-US';
 
         this.speechRecognition.onresult = (event) => {
+            // Reset inactivity timer when we get speech input
+            this.resetInactivityTimer();
+            
+            // Track speech activity for keep-alive mechanism
+            this.lastSpeechActivity = Date.now();
+            
             for (let i = event.resultIndex; i < event.results.length; i++) {
                 const transcript = event.results[i][0].transcript;
                 const isFinal = event.results[i].isFinal;
@@ -336,11 +364,76 @@ export class GeminiVoiceHandler {
         };
 
         this.speechRecognition.onerror = (event) => {
-            console.error('Speech recognition error:', event.error);
+            console.warn('Speech recognition error:', event.error);
+            
+            // Don't restart on these error types
+            const nonRecoverableErrors = ['aborted', 'not-allowed', 'service-not-allowed'];
+            if (nonRecoverableErrors.includes(event.error)) {
+                return;
+            }
+            
+            // Only auto-restart on timeout-like errors that the keep-alive mechanism should handle
+            const timeoutErrors = ['no-speech', 'network'];
+            if (this.state.isListening && timeoutErrors.includes(event.error)) {
+                console.log('Restarting speech recognition due to timeout-related error:', event.error);
+                setTimeout(() => {
+                    if (this.state.isListening) {
+                        this.restartSpeechRecognition();
+                    }
+                }, 1000);
+            }
         };
 
-        this.speechRecognition.start();
-        console.log('Local speech recognition started');
+        this.speechRecognition.onend = () => {
+            console.log('Speech recognition ended');
+            // The keep-alive mechanism will handle restarts proactively
+            // Only restart immediately if this was an unexpected stop
+            if (this.state.isListening) {
+                const now = Date.now();
+                const timeSinceLastActivity = now - (this.lastSpeechActivity || now);
+                
+                // Only restart immediately if it's been less than 30 seconds since last activity
+                // Otherwise, let the keep-alive mechanism handle it
+                if (timeSinceLastActivity < 30000) {
+                    console.log('Restarting speech recognition after unexpected end during active speech');
+                    setTimeout(() => {
+                        if (this.state.isListening) {
+                            this.restartSpeechRecognition();
+                        }
+                    }, 100);
+                } else {
+                    console.log('Speech recognition ended during silence - keep-alive will handle restart');
+                }
+            }
+        };
+
+        try {
+            this.speechRecognition.start();
+            console.log('Local speech recognition started');
+        } catch (error) {
+            console.error('Failed to start speech recognition:', error);
+        }
+    }
+
+    restartSpeechRecognition() {
+        try {
+            // Stop current recognition if it exists
+            if (this.speechRecognition) {
+                this.speechRecognition.stop();
+            }
+            
+            // Silent restart - no UI feedback needed
+            console.log('Silently restarting speech recognition');
+            
+            // Start new recognition after a brief delay
+            setTimeout(() => {
+                if (this.state.isListening) {
+                    this.startLocalSpeechRecognition();
+                }
+            }, 200);
+        } catch (error) {
+            console.error('Error restarting speech recognition:', error);
+        }
     }
 
     // Setters for callbacks
@@ -369,8 +462,40 @@ export class GeminiVoiceHandler {
         return this.geminiService.getConnectionStatus();
     }
 
+    startSpeechKeepAlive() {
+        this.clearSpeechKeepAlive(); // Clear any existing timer
+        this.lastSpeechActivity = Date.now();
+        
+        this.speechKeepAliveTimer = setInterval(() => {
+            if (!this.state.isListening) {
+                this.clearSpeechKeepAlive();
+                return;
+            }
+            
+            const now = Date.now();
+            const timeSinceLastActivity = now - (this.lastSpeechActivity || now);
+            
+            // Only restart if there's been no recent speech activity
+            // This prevents interrupting ongoing speech
+            if (timeSinceLastActivity > 30000) { // 30 seconds of silence
+                console.log('Proactively restarting speech recognition to prevent timeout');
+                this.restartSpeechRecognition();
+            }
+        }, this.SPEECH_KEEP_ALIVE_INTERVAL);
+        
+        console.log('Speech keep-alive started - will prevent timeouts during silence');
+    }
+    
+    clearSpeechKeepAlive() {
+        if (this.speechKeepAliveTimer) {
+            clearInterval(this.speechKeepAliveTimer);
+            this.speechKeepAliveTimer = null;
+        }
+    }
+
     cleanup() {
         this.clearInactivityTimer();
+        this.clearSpeechKeepAlive();
         this.geminiService.cleanup();
         this.screenRecorder.cleanup();
     }

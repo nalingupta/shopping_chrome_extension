@@ -444,41 +444,31 @@ class ShoppingAssistant {
         if (transcription) {
             MessageRenderer.clearInterimMessage();
 
-            // Check if this is a screen sharing ended notification
-            if (transcription.includes("Voice input stopped - screen sharing ended")) {
-                this.handleScreenSharingEndedFromVoice(transcription);
-                return;
-            }
+            // This method ONLY receives transcriptions from local Web Speech API
+            // Gemini responses come through handleBotResponse() method in GeminiVoiceHandler
+            
+            console.log('Web Speech API transcription:', transcription);
 
+            // Check for error messages from speech recognition
             if (this.isErrorTranscription(transcription)) {
                 this.showHeaderStatus("Speech failed", "error", 4000);
                 return;
             }
 
-            // Check if this is a Gemini response (starts with 🤖 or 🎯)
-            if (transcription.startsWith("🤖") || transcription.startsWith("🎯")) {
-                // This is a Gemini-processed response, just display it
-                this.addMessage(transcription, transcription.startsWith("🤖") ? "assistant" : "user");
-                
-                // Restore listening status if voice handler is still listening
-                if (this.voiceHandler.state.isListening) {
-                    this.showHeaderStatus("Listening...", "info");
-                }
-                return;
-            }
-
-            // For all other transcriptions: Only use for UI display, never process locally
-            // Gemini handles all processing with raw audio + screen data
+            // Display user's transcribed speech in the UI immediately
+            // This provides instant feedback while Gemini processes the actual audio/video
             this.addMessage(transcription, "user", false, null);
             
-            // Show that we're waiting for Gemini response
+            // Show that we're waiting for Gemini's response to the actual audio/video
             if (!this.isProcessing) {
                 this.showHeaderStatus("Processing with Gemini...", "info");
             }
             
-            // NO local processing - Gemini handles everything
+            // NOTE: We don't send this text to Gemini for processing
+            // Gemini processes the raw audio + screen capture directly
+            // This transcription is ONLY for immediate UI feedback
             
-            // Don't clear listening status here - voice handler continues listening for multi-turn conversations
+            // Keep voice handler listening for continuous conversation
         }
     }
 
@@ -502,7 +492,10 @@ class ShoppingAssistant {
     }
 
     handleInterimTranscription(interimText) {
+        // This method ONLY receives interim transcriptions from local Web Speech API
+        // This provides real-time typing feedback while the user is speaking
         if (interimText && this.voiceHandler.state.isListening) {
+            console.log('Web Speech API interim:', interimText);
             this.showInterimText(interimText);
         }
     }

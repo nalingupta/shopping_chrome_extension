@@ -36,6 +36,17 @@ export class GeminiLiveStreamingService {
             onConnectionStateChange: null,
             onError: null
         };
+        
+        // Connection management
+        this.connectionStartTime = null;
+        this.lastActivityTime = null;
+        this.reconnectAttempts = 0;
+        this.maxReconnectAttempts = 5;
+        this.reconnectTimer = null;
+        this.keepAliveTimer = null;
+        this.KEEP_ALIVE_INTERVAL = 30000; // Send keep-alive every 30 seconds
+        // No connection timeout - keep alive indefinitely while streaming
+        this.isManualStop = false;
     }
 
     async initialize() {
@@ -59,6 +70,10 @@ export class GeminiLiveStreamingService {
         }
         
         try {
+            // Reset manual stop flag
+            this.isManualStop = false;
+            this.reconnectAttempts = 0;
+            
             console.log('Starting Gemini Live streaming...');
             
             // Step 1: Get screen sharing permission
@@ -110,6 +125,9 @@ export class GeminiLiveStreamingService {
                     console.log('🔗 WEBSOCKET CONNECTED to Gemini Live API');
                     console.log('🔗 WebSocket readyState:', this.ws.readyState, '(OPEN=1)');
                     this.isConnected = true;
+                    this.connectionStartTime = Date.now();
+                    this.lastActivityTime = Date.now();
+                    this.reconnectAttempts = 0; // Reset on successful connection
                     
                     // Small delay to ensure connection is stable
                     await new Promise(resolve => setTimeout(resolve, 100));
@@ -118,6 +136,9 @@ export class GeminiLiveStreamingService {
                     console.log('🔧 Sending initial configuration to Gemini...');
                     this.sendConfiguration();
                     
+                    // Start keep-alive mechanism
+                    this.startKeepAlive();
+                    
                     if (this.callbacks.onConnectionStateChange) {
                         this.callbacks.onConnectionStateChange('connected');
                     }
@@ -125,6 +146,9 @@ export class GeminiLiveStreamingService {
                 };
                 
                 this.ws.onmessage = async (event) => {
+                    // Update activity timestamp
+                    this.lastActivityTime = Date.now();
+                    
                     // Handle both text and blob data
                     let data;
                     if (event.data instanceof Blob) {
@@ -151,6 +175,9 @@ export class GeminiLiveStreamingService {
                     this.isConnected = false;
                     this.isSetupComplete = false;
                     
+                    // Stop keep-alive timer
+                    this.stopKeepAlive();
+                    
                     // Clear any buffered chunks and response queue on disconnect
                     this.pendingAudioChunks = [];
                     this.pendingVideoFrames = [];
@@ -174,6 +201,11 @@ export class GeminiLiveStreamingService {
                     
                     if (this.callbacks.onConnectionStateChange) {
                         this.callbacks.onConnectionStateChange('disconnected');
+                    }
+                    
+                    // Attempt reconnection if not manually stopped and still streaming
+                    if (!this.isManualStop && this.isStreaming) {
+                        this.scheduleReconnection(event.code);
                     }
                 };
                 
@@ -766,6 +798,9 @@ Remember: You have LIVE access to their screen and audio, so you can see exactly
 
     sendMessage(message) {
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            // Update activity timestamp on send
+            this.lastActivityTime = Date.now();
+            
             // Log all outgoing messages with detailed info
             // Simplified logging - detailed logs handled in individual methods
             if (!message.realtimeInput) {
@@ -786,6 +821,86 @@ Remember: You have LIVE access to their screen and audio, so you can see exactly
             }
         }
     }
+
+    startKeepAlive() {
+        this.stopKeepAlive(); // Clear any existing timer
+        
+        this.keepAliveTimer = setInterval(() => {
+            // Only send keep-alive if connection is open and we're still streaming
+            if (this.ws && this.ws.readyState === WebSocket.OPEN && this.isStreaming && !this.isManualStop) {
+                // Send a small realtimeInput message as keep-alive
+                const keepAliveMessage = {
+                    realtimeInput: {
+                        mediaChunks: []
+                    }
+                };
+                
+                try {
+                    this.ws.send(JSON.stringify(keepAliveMessage));
+                    console.log('💓 Keep-alive ping sent');
+                } catch (error) {
+                    console.error('❌ Keep-alive ping failed:', error);
+                }
+            }
+        }, this.KEEP_ALIVE_INTERVAL);
+        
+        console.log('💓 Keep-alive mechanism started - will keep connection alive indefinitely while streaming');
+    }
+
+    stopKeepAlive() {
+        if (this.keepAliveTimer) {
+            clearInterval(this.keepAliveTimer);
+            this.keepAliveTimer = null;
+            console.log('💓 Keep-alive mechanism stopped');
+        }
+    }
+
+    scheduleReconnection(closeCode) {
+        // Don't reconnect on certain close codes
+        const nonRecoverableCloseCodes = [1000, 1001]; // Normal closure, going away
+        if (nonRecoverableCloseCodes.includes(closeCode)) {
+            console.log('🚫 Not scheduling reconnection due to close code:', closeCode);
+            return;
+        }
+        
+        if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+            console.error('❌ Max reconnection attempts reached. Stopping.');
+            if (this.callbacks.onError) {
+                this.callbacks.onError(new Error('Connection lost - max reconnection attempts reached'));
+            }
+            return;
+        }
+        
+        // Clear any existing reconnection timer
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+        }
+        
+        // Exponential backoff: 2^attempts * 1000ms, max 30 seconds
+        const delay = Math.min(Math.pow(2, this.reconnectAttempts) * 1000, 30000);
+        this.reconnectAttempts++;
+        
+        console.log(`🔄 Scheduling reconnection attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${delay}ms`);
+        
+        this.reconnectTimer = setTimeout(async () => {
+            if (!this.isManualStop && this.isStreaming) {
+                console.log(`🔄 Attempting reconnection ${this.reconnectAttempts}/${this.maxReconnectAttempts}...`);
+                try {
+                    await this.connectToGeminiLive();
+                    console.log('✅ Reconnection successful!');
+                    
+                    // Restart media streaming after reconnection
+                    if (this.isSetupComplete) {
+                        await this.startMediaStreaming();
+                    }
+                } catch (error) {
+                    console.error('❌ Reconnection failed:', error);
+                    // scheduleReconnection will be called again by onclose handler
+                }
+            }
+        }, delay);
+    }
+
 
     handleGeminiMessage(data) {
         // Log ALL incoming data first
@@ -911,6 +1026,15 @@ Remember: You have LIVE access to their screen and audio, so you can see exactly
         }
         
         try {
+            // Set manual stop flag to prevent reconnection
+            this.isManualStop = true;
+            
+            // Stop keep-alive and reconnection timers
+            this.stopKeepAlive();
+            if (this.reconnectTimer) {
+                clearTimeout(this.reconnectTimer);
+                this.reconnectTimer = null;
+            }
             // Stop video streaming
             if (this.videoInterval) {
                 clearInterval(this.videoInterval);
@@ -1022,6 +1146,16 @@ Remember: You have LIVE access to their screen and audio, so you can see exactly
     }
 
     cleanup() {
+        // Set manual stop to prevent reconnection during cleanup
+        this.isManualStop = true;
+        
+        // Clean up connection management timers
+        this.stopKeepAlive();
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
+        }
+        
         if (this.videoInterval) {
             clearInterval(this.videoInterval);
             this.videoInterval = null;
