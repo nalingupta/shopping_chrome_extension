@@ -1,190 +1,232 @@
-# Voice Input System - Simplified Architecture
+# Voice Input System - Gemini Live API Integration
 
 ## Overview
-The Chrome extension uses a **streamlined, single-method approach** for voice input:
-- **Primary**: Browser-native Web Speech API for real-time transcription
-- **Permission**: Iframe-based microphone access for cross-domain compatibility
-- **No external APIs, no persistent documents, no complex fallbacks**
+The Chrome extension uses **direct integration with Gemini Live API** for voice input:
+- **Primary**: Direct WebSocket connection to Gemini Live API
+- **Audio Processing**: Native AudioWorkletNode/ScriptProcessorNode for PCM conversion
+- **Screen Capture**: Chrome desktopCapture API for real-time video streaming
+- **No external dependencies** - Pure Gemini integration
 
 ## Architecture Components
 
-### 1. Voice Recognition (`voiceInput.js`)
+### 1. Gemini Voice Handler (`gemini-voice-handler.js`)
 ```javascript
-class VoiceInputHandler {
-    // Core: Browser Web Speech API
-    this.recognition = new SpeechRecognition();
-    this.recognition.continuous = true;     // Keep listening
-    this.recognition.interimResults = true; // Live feedback
+class GeminiVoiceHandler {
+    // Core: Gemini Live Streaming Service
+    this.geminiService = new GeminiLiveStreamingService();
+    // Local speech recognition for UI feedback only
+    this.speechRecognition = new SpeechRecognition();
 }
 ```
 
 **Features:**
-- Real-time speech-to-text transcription
-- Auto-restart for continuous listening
-- Interim results for live feedback
-- Built-in error handling and recovery
+- Real-time audio/video streaming to Gemini Live API
+- Local speech recognition for UI transcription display
+- Screen capture integration for multimodal AI
+- Direct conversation with Gemini without intermediaries
 
-### 2. Permission System (`micPermission.js` + `permissionRequest.*`)
+### 2. Gemini Live Streaming Service (`gemini-live-streaming.js`)
 ```javascript
-// Content script injects iframe → Extension page calls getUserMedia()
-iframe.src = chrome.runtime.getURL('permissionRequest.html');
-navigator.mediaDevices.getUserMedia({ audio: true });
+class GeminiLiveStreamingService {
+    // Direct WebSocket to Gemini Live API
+    const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent`;
+    this.ws = new WebSocket(wsUrl);
+}
 ```
 
-**Flow:**
-1. Side panel requests permission via background script
-2. Background injects content script into current tab
-3. Content script creates invisible iframe
-4. Iframe loads extension page that calls getUserMedia()
-5. Permission granted/denied, iframe removed
+**Core Functions:**
+- WebSocket connection to Gemini Live API
+- PCM audio encoding and streaming
+- JPEG video frame capture and streaming  
+- Response processing and callback handling
 
-### 3. Message Coordination (`background.js`)
+### 3. Audio Processing Pipeline
 ```javascript
-// Simplified routing: only essential messages
-case 'REQUEST_MIC_PERMISSION': handleMicPermissionRequest()
-case 'GET_CURRENT_TAB_INFO': getCurrentTabInfo()  
-case 'PROCESS_USER_QUERY': processUserQuery()
+// Modern approach: AudioWorkletNode
+const workletNode = new AudioWorkletNode(this.audioContext, 'pcm-processor');
+
+// Fallback: ScriptProcessorNode
+const processor = this.audioContext.createScriptProcessor(4096, 1, 1);
+```
+
+**Audio Flow:**
+1. Microphone → MediaStream
+2. AudioContext → AudioWorkletNode/ScriptProcessorNode
+3. Float32 → Int16 PCM conversion
+4. Base64 encoding → WebSocket to Gemini
+
+### 4. Video Processing Pipeline
+```javascript
+// Screen capture via Chrome API
+const streamId = await chrome.desktopCapture.chooseDesktopMedia(['screen', 'window', 'tab']);
+const screenStream = await navigator.mediaDevices.getUserMedia({...});
+
+// Frame extraction
+canvas.drawImage(video, 0, 0);
+canvas.toBlob((blob) => {
+    // Convert to base64 JPEG → WebSocket to Gemini
+});
 ```
 
 ## Message Flow Diagram
 
 ```
-┌─────────────┐  startListening()  ┌─────────────┐
-│ Side Panel  │────────────────────│Web Speech   │
-│ (UI)        │◄──transcription────│API (Browser)│
-└─────────────┘                    └─────────────┘
-       │
-       │ REQUEST_MIC_PERMISSION (if needed)
-       ▼
-┌─────────────┐  inject script    ┌─────────────┐
-│ Background  │──────────────────►│Content      │
-│ (service    │                   │Script       │
-│ worker)     │◄──result──────────│(tab context)│
-└─────────────┘                   └─────────────┘
-                                         │
-                                         │ create iframe
-                                         ▼
-                                  ┌─────────────┐
-                                  │Permission   │
-                                  │Page (iframe)│
-                                  │getUserMedia │
-                                  └─────────────┘
+┌─────────────┐  startListening()  ┌─────────────────┐
+│ Side Panel  │────────────────────│GeminiVoiceHandler│
+│ (UI)        │◄──responses────────│                 │
+└─────────────┘                    └─────────────────┘
+                                           │
+                                           │ startStreaming()
+                                           ▼
+                                  ┌─────────────────┐
+                                  │GeminiLiveStreaming│
+                                  │Service          │
+                                  └─────────────────┘
+                                           │
+                                    ┌──────┴──────┐
+                           WebSocket│             │Screen/Audio
+                                   ▼             ▼
+                          ┌─────────────┐ ┌─────────────┐
+                          │Gemini Live  │ │Native APIs  │
+                          │API          │ │- desktopCapture│
+                          │(WebSocket)  │ │- getUserMedia │
+                          └─────────────┘ └─────────────┘
 ```
 
 ## Implementation Details
 
-### Web Speech API Configuration
+### WebSocket Connection Setup
 ```javascript
-this.recognition.continuous = true;        // Don't stop after one phrase
-this.recognition.interimResults = true;    // Show partial results
-this.recognition.lang = 'en-US';          // Language setting
-this.recognition.maxAlternatives = 1;     // Only best match
-```
+const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${API_KEY}`;
 
-### Auto-Restart Logic
-```javascript
-this.recognition.onend = () => {
-    // Auto-restart if still in listening mode
-    if (this.isListening && !this.isProcessingResponse) {
-        this.scheduleRestart(); // Restart after 1s delay
+const setupMessage = {
+    setup: {
+        model: "models/gemini-2.0-flash-exp",
+        systemInstruction: { parts: [{ text: "You are a helpful shopping assistant..." }] },
+        generationConfig: {
+            responseModalities: ["TEXT"],
+            temperature: 0.7
+        }
     }
 };
 ```
 
-### Error Handling
+### Audio Data Format
 ```javascript
-this.recognition.onerror = (event) => {
-    switch (event.error) {
-        case 'not-allowed': // Permission denied
-        case 'no-speech':   // No audio detected  
-        case 'network':     // Connection issues
-        // Provide user-friendly error messages
+const message = {
+    realtimeInput: {
+        audio: {
+            data: base64PCMData,
+            mimeType: "audio/pcm;rate=16000"
+        }
+    }
+};
+```
+
+### Video Data Format
+```javascript
+const message = {
+    realtimeInput: {
+        mediaChunks: [{
+            mimeType: "image/jpeg", 
+            data: base64JPEGData
+        }]
     }
 };
 ```
 
 ## Browser Compatibility
 
-| Browser | Web Speech API | Status |
-|---------|----------------|--------|
-| Chrome  | ✅ Full support | **Recommended** |
-| Edge    | ✅ Full support | **Recommended** |  
-| Firefox | ⚠️ Limited     | Basic functionality |
-| Safari  | ❌ No support  | Text input only |
+| Browser | Gemini Live API | Screen Capture | Audio Processing |
+|---------|-----------------|----------------|------------------|
+| Chrome  | ✅ Full support | ✅ desktopCapture | ✅ AudioWorklet |
+| Edge    | ✅ Full support | ❌ No capture API | ✅ AudioWorklet |
+| Firefox | ⚠️ WebSocket only | ❌ No capture API | ⚠️ ScriptProcessor |
+| Safari  | ❌ CSP issues   | ❌ No capture API | ❌ Limited |
+
+**Recommendation**: Chrome browser required for full functionality.
 
 ## Limitations & Constraints
 
 ### Technical Limitations
-1. **Internet Required**: Web Speech API needs network connection
-2. **Browser Dependent**: Chrome/Edge only for full functionality
-3. **Language Support**: Primarily optimized for English
-4. **Noise Sensitivity**: Background noise can affect accuracy
+1. **Chrome Required**: Screen capture only works in Chrome
+2. **Internet Required**: Gemini Live API needs network connection
+3. **Real-time Processing**: Continuous WebSocket connection required
+4. **API Limits**: Subject to Gemini API rate limits and quotas
 
-### Permission Constraints  
-1. **Iframe Injection**: Fails on CSP-protected sites (banking, etc.)
-2. **Extension Context**: Requires extension page for getUserMedia()
-3. **User Interaction**: Permission must be user-initiated
-4. **Tab Focus**: May require tab to be active/focused
+### Permission Requirements
+1. **Microphone**: Required for audio input
+2. **Screen Capture**: User must grant screen sharing permission
+3. **Extension Context**: Requires proper Chrome extension permissions
+4. **HTTPS**: Secure context required for media APIs
 
 ### Performance Considerations
-1. **Memory**: ~2-5MB for Web Speech API instance
-2. **CPU**: Minimal, handled by browser engine  
-3. **Network**: Speech processing happens on Google servers
-4. **Battery**: Continuous listening uses microphone power
+1. **Bandwidth**: Continuous audio/video streaming
+2. **Processing**: Real-time PCM conversion and video encoding
+3. **Memory**: WebSocket buffers and media processing
+4. **Battery**: Continuous microphone and processing usage
 
 ## Error Recovery Strategies
 
-### Permission Failures
+### Connection Failures
 ```javascript
-if (error === 'content_script_failed') {
-    // CSP blocked iframe injection
-    return "Cannot request microphone permission on this page. Try on a different website.";
+this.ws.onclose = (event) => {
+    if (event.code === 1006) {
+        // Abnormal closure - likely auth or network issue
+        this.handleReconnection();
+    }
+};
+```
+
+### Audio Processing Failures
+```javascript
+// Fallback from AudioWorklet to ScriptProcessor
+if (this.audioContext.audioWorklet) {
+    await this.startAudioWorkletProcessing();
+} else {
+    this.startScriptProcessorFallback();
 }
 ```
 
-### Recognition Failures  
+### Screen Capture Issues
 ```javascript
-if (event.error === 'no-speech') {
-    // Automatic retry after brief pause
-    this.scheduleRestart();
-}
-```
-
-### Network Issues
-```javascript
-if (event.error === 'network') {
-    // Inform user, don't auto-retry
-    return "Network error occurred. Please check your connection.";
-}
+this.screenStream.getVideoTracks()[0].onended = () => {
+    // User stopped screen sharing
+    this.handleScreenSharingEnded();
+};
 ```
 
 ## Testing & Debugging
 
 ### Quick Test Flow
-1. Open extension side panel
+1. Open extension side panel in Chrome
 2. Click microphone button
-3. Say "test voice input"  
-4. Verify transcription appears in chat
+3. Grant screen sharing permission
+4. Say "What products do you see on this page?"
+5. Verify Gemini responds with screen analysis
 
 ### Common Issues
-- **No transcription**: Check microphone permissions in browser
-- **Permission denied**: Try on different website (not banking/CSP sites)
-- **Choppy audio**: Check for other apps using microphone
-- **Auto-restart fails**: Verify continuous listening is enabled
+- **No response**: Check Gemini API key and network connection
+- **Permission denied**: Ensure microphone and screen permissions granted
+- **WebSocket errors**: Verify API key and endpoint URL
+- **Audio not streaming**: Check AudioContext state and browser compatibility
 
 ## Future Optimization Opportunities
 
 ### Performance
-- [ ] Implement voice activity detection to reduce processing
-- [ ] Add configurable language selection
-- [ ] Optimize restart timing based on user speech patterns
+- [ ] Implement intelligent frame rate adjustment
+- [ ] Add voice activity detection to reduce bandwidth
+- [ ] Optimize PCM conversion efficiency
+- [ ] Add connection pooling and retry logic
 
-### User Experience  
-- [ ] Add visual feedback for listening state
-- [ ] Implement push-to-talk mode option
-- [ ] Add voice command shortcuts ("stop listening", "send message")
+### User Experience
+- [ ] Add visual indicators for streaming status
+- [ ] Implement push-to-talk mode
+- [ ] Add audio response playback from Gemini
+- [ ] Support multiple screen/window selection
 
-### Compatibility
-- [ ] Graceful degradation for unsupported browsers
-- [ ] Offline voice recognition fallback (if available)
-- [ ] Alternative input methods for accessibility
+### Integration
+- [ ] Add text-to-speech for Gemini responses
+- [ ] Implement conversation history
+- [ ] Add support for Gemini multimodal responses
+- [ ] Optimize for mobile screen capture (future)

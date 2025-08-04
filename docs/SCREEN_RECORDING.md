@@ -14,7 +14,7 @@ This feature automatically captures screen recordings during voice input session
 
 ### Components
 
-- **VoiceInputHandler**: Enhanced to trigger screen recording on speech detection
+- **GeminiVoiceHandler**: Enhanced to trigger screen recording on speech detection
 - **ScreenRecorder**: New service that handles screen capture and video creation
 - **Chrome Extension Integration**: Uses desktopCapture API for screen access
 
