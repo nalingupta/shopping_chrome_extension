@@ -21,6 +21,7 @@ class ShoppingAssistant {
         this.sendButton = DOMUtils.getElementById("sendButton");
         this.voiceButton = DOMUtils.getElementById("voiceButton");
         this.clearChatButton = DOMUtils.getElementById("clearChatButton");
+        this.screenStatus = DOMUtils.getElementById("screenStatus");
     }
 
     initializeState() {
@@ -38,6 +39,39 @@ class ShoppingAssistant {
         this.voiceHandler.setInterimCallback((interimText) => {
             this.handleInterimTranscription(interimText);
         });
+
+        // Start screen status updates
+        this.startScreenStatusUpdates();
+    }
+
+    startScreenStatusUpdates() {
+        // Update screen permission status every 2 seconds
+        setInterval(() => {
+            this.updateScreenStatus();
+        }, 2000);
+        
+        // Initial update
+        this.updateScreenStatus();
+    }
+
+    updateScreenStatus() {
+        if (!this.screenStatus || !this.voiceHandler?.screenRecorder) return;
+        
+        const screenRecorder = this.voiceHandler.screenRecorder;
+        
+        if (screenRecorder.needsPermissionReRequest) {
+            this.screenStatus.textContent = '🔄 Screen sharing stopped';
+            this.screenStatus.className = 'screen-status warning';
+        } else if (screenRecorder.hasScreenPermission && screenRecorder.screenStream) {
+            this.screenStatus.textContent = '✅ Screen recording: Active';
+            this.screenStatus.className = 'screen-status active';
+        } else if (screenRecorder.permissionRequested) {
+            this.screenStatus.textContent = '⏳ Requesting screen permission...';
+            this.screenStatus.className = 'screen-status requesting';
+        } else {
+            this.screenStatus.textContent = '📹 Screen recording: Ready';
+            this.screenStatus.className = 'screen-status';
+        }
     }
 
     trackSidePanelOpened() {

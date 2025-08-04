@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice-Triggered Screen Recording Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        .container {
+            background: #f5f5f5;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+        button {
+            background: #007cba;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 10px 5px;
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        button:hover:not(:disabled) {
+            background: #005a8a;
+        }
+        .status {
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+        .status.listening {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .status.recording {
+            background: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeaa7;
+        }
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .transcript {
+            background: white;
+            padding: 15px;
+            border-radius: 4px;
+            border: 1px solid #ddd;
+            min-height: 100px;
+            margin: 10px 0;
+        }
+        .instructions {
+            background: #e9ecef;
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Voice-Triggered Screen Recording Test</h1>
+    
+    <div class="instructions">
+        <h3>⚠️ IMPORTANT SAFETY INFORMATION ⚠️</h3>
+        <div style="background: #fff3cd; padding: 10px; border: 2px solid #ffc107; border-radius: 4px; margin: 10px 0;">
+            <p><strong>This is a FIXED version after the browser crash issue.</strong></p>
+            <p>Safety measures now included:</p>
+            <ul>
+                <li>✅ Records for entire duration of speech (no time limits)</li>
+                <li>✅ Creates video regardless of length</li>
+                <li>✅ Proper resource cleanup</li>
+                <li>✅ Memory management</li>
+                <li>✅ Error handling and timeouts</li>
+                <li>✅ Optimized resolution to prevent memory issues</li>
+            </ul>
+        </div>
+        
+        <h3>How to use:</h3>
+        <ol>
+            <li>Click "Start Voice Recognition" to begin listening</li>
+            <li>When you start speaking, screen recording will automatically begin</li>
+            <li>Screen captures at 1 FPS for entire duration + audio recording during your speech</li>
+            <li>When you stop speaking, the recording stops and video is created</li>
+            <li>Video will be automatically downloaded regardless of length</li>
+        </ol>
+        <p><strong>Note:</strong> You'll need to grant microphone and screen sharing permissions.</p>
+    </div>
+
+    <div class="container">
+        <button id="startBtn">Start Voice Recognition</button>
+        <button id="stopBtn" disabled>Stop Voice Recognition</button>
+        
+        <div id="status" class="status">Ready to start</div>
+        
+        <div id="permissionStatus" class="status" style="background: #e9ecef; color: #495057;">
+            Screen permission: Not requested
+        </div>
+        
+        <div class="transcript">
+            <strong>Transcript will appear here...</strong>
+            <div id="transcriptContent"></div>
+        </div>
+    </div>
+
+    <script type="module">
+        import { VoiceInputHandler } from './src/services/voice-handler.js';
+
+        class VoiceScreenRecordingDemo {
+            constructor() {
+                this.voiceHandler = new VoiceInputHandler();
+                this.startBtn = document.getElementById('startBtn');
+                this.stopBtn = document.getElementById('stopBtn');
+                this.statusDiv = document.getElementById('status');
+                this.transcriptDiv = document.getElementById('transcriptContent');
+                this.permissionStatusDiv = document.getElementById('permissionStatus');
+                
+                this.setupEventListeners();
+                this.setupVoiceCallbacks();
+                this.startStatusUpdates();
+            }
+
+            setupEventListeners() {
+                this.startBtn.addEventListener('click', () => this.startListening());
+                this.stopBtn.addEventListener('click', () => this.stopListening());
+            }
+
+            setupVoiceCallbacks() {
+                this.voiceHandler.setTranscriptionCallback((transcript) => {
+                    this.transcriptDiv.innerHTML += `<p><strong>Final:</strong> ${transcript}</p>`;
+                    this.updateStatus('Voice input received. Processing screen recording...', 'recording');
+                    this.updatePermissionStatus();
+                });
+
+                this.voiceHandler.setInterimCallback((transcript) => {
+                    this.transcriptDiv.innerHTML += `<p><em>Interim:</em> ${transcript}</p>`;
+                });
+            }
+
+            updatePermissionStatus() {
+                const screenRecorder = this.voiceHandler.screenRecorder;
+                
+                if (screenRecorder.needsPermissionReRequest) {
+                    this.permissionStatusDiv.textContent = '🔄 Screen sharing stopped';
+                    this.permissionStatusDiv.style.background = '#fff3cd';
+                    this.permissionStatusDiv.style.color = '#856404';
+                    this.permissionStatusDiv.style.fontWeight = 'normal';
+                } else if (screenRecorder.hasScreenPermission && screenRecorder.screenStream) {
+                    this.permissionStatusDiv.textContent = '✅ Screen permission: ACTIVE (you can minimize Chrome notification)';
+                    this.permissionStatusDiv.style.background = '#d4edda';
+                    this.permissionStatusDiv.style.color = '#155724';
+                    this.permissionStatusDiv.style.fontWeight = 'bold';
+                } else if (screenRecorder.permissionRequested) {
+                    this.permissionStatusDiv.textContent = '⏳ Screen permission: Requesting...';
+                    this.permissionStatusDiv.style.background = '#fff3cd';
+                    this.permissionStatusDiv.style.color = '#856404';
+                    this.permissionStatusDiv.style.fontWeight = 'normal';
+                } else {
+                    this.permissionStatusDiv.textContent = '🔄 Screen permission: Will request on first use';
+                    this.permissionStatusDiv.style.background = '#e9ecef';
+                    this.permissionStatusDiv.style.color = '#495057';
+                    this.permissionStatusDiv.style.fontWeight = 'normal';
+                }
+            }
+
+            async startListening() {
+                this.updateStatus('Starting voice recognition...', 'listening');
+                
+                const result = await this.voiceHandler.startListening();
+                
+                if (result.success) {
+                    this.updateStatus('🎤 Listening... Speak to start screen recording', 'listening');
+                    this.startBtn.disabled = true;
+                    this.stopBtn.disabled = false;
+                    this.updatePermissionStatus();
+                } else {
+                    this.updateStatus(`Error: ${result.message}`, 'error');
+                }
+            }
+
+            async stopListening() {
+                this.updateStatus('Stopping voice recognition...', '');
+                
+                const result = await this.voiceHandler.stopListening();
+                
+                if (result.success) {
+                    this.updateStatus('Voice recognition stopped', '');
+                } else {
+                    this.updateStatus(`Error: ${result.message}`, 'error');
+                }
+                
+                this.startBtn.disabled = false;
+                this.stopBtn.disabled = true;
+            }
+
+            updateStatus(message, type) {
+                this.statusDiv.textContent = message;
+                this.statusDiv.className = `status ${type}`;
+            }
+
+            startStatusUpdates() {
+                // Update permission status every 2 seconds to catch when user stops sharing
+                setInterval(() => {
+                    this.updatePermissionStatus();
+                }, 2000);
+            }
+        }
+
+        // Initialize the demo when the page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            new VoiceScreenRecordingDemo();
+        });
+    </script>
+</body>
+</html>

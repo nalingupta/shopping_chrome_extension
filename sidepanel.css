@@ -675,3 +675,35 @@ body {
         width: 14px;
     }
 }
+
+/* Screen Recording Status */
+.screen-status {
+    font-size: var(--font-size-xs);
+    color: var(--color-secondary);
+    text-align: center;
+    padding: var(--spacing-xs) var(--spacing-md);
+    margin-bottom: var(--spacing-sm);
+    border-radius: var(--border-radius);
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    transition: all 0.2s ease;
+}
+
+.screen-status.active {
+    color: var(--color-success);
+    border-color: var(--color-success);
+    background: rgba(16, 185, 129, 0.1);
+    font-weight: 600;
+}
+
+.screen-status.warning {
+    color: var(--color-warning);
+    border-color: var(--color-warning);
+    background: rgba(245, 158, 11, 0.1);
+}
+
+.screen-status.requesting {
+    color: var(--color-accent);
+    border-color: var(--color-accent);
+    background: rgba(37, 99, 235, 0.1);
+}

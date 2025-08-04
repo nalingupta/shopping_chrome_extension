@@ -1,4 +1,5 @@
 import { VOICE_CONFIG, ERROR_MESSAGES, ERROR_RECOVERY } from '../utils/constants.js';
+import { ScreenRecorder } from './screen-recorder.js';
 
 export class VoiceInputHandler {
     constructor() {
@@ -15,6 +16,9 @@ export class VoiceInputHandler {
         
         this.recognition = null;
         this.restartTimer = null;
+        this.screenRecorder = new ScreenRecorder();
+        this.voiceStartTime = null;
+        this.voiceEndTime = null;
 
         this.initializeWebSpeechAPI();
     }
@@ -50,14 +54,49 @@ export class VoiceInputHandler {
         this.recognition.onend = () => this.handleEnd();
     }
 
-    handleStart() {
+    async handleStart() {
         this.state.isListening = true;
+        this.voiceStartTime = Date.now();
+        console.log('Voice recognition started - preparing screen recording...');
+        
+        // Request screen permission once when voice recognition starts
+        await this.prepareScreenRecording();
+    }
+
+    async prepareScreenRecording() {
+        try {
+            // Check if screen permission is available or needs re-requesting
+            const hasPermission = await this.screenRecorder.requestScreenPermissionIfNeeded();
+            
+            if (hasPermission) {
+                if (this.screenRecorder.needsPermissionReRequest) {
+                    console.log('✅ Screen permission re-granted after user stopped sharing');
+                } else {
+                    console.log('✅ Screen permission available - ready for recording');
+                }
+            } else {
+                console.error('❌ Failed to get screen permission');
+            }
+        } catch (error) {
+            console.error('Failed to prepare screen recording:', error);
+        }
     }
 
     handleResult(event) {
         const { finalTranscript, interimTranscript } = this.processResults(event);
         
+        // Start screen recording on first speech detection (interim or final)
+        if ((finalTranscript || interimTranscript) && !this.screenRecorder.isRecording) {
+            console.log('Speech detected - starting screen recording with existing permission...');
+            this.startScreenRecordingOnSpeech();
+        }
+        
         if (finalTranscript && this.callbacks.transcription) {
+            this.voiceEndTime = Date.now();
+            
+            // Stop screen recording when final transcript is received
+            this.stopScreenRecordingAndCreateVideo();
+            
             this.callbacks.transcription(finalTranscript.trim());
             
             if (this.state.isListening && !this.state.isProcessingResponse) {
@@ -223,5 +262,65 @@ export class VoiceInputHandler {
 
     getErrorHelp(errorType) {
         return ERROR_MESSAGES[errorType] || "An error occurred. Please try again.";
+    }
+
+    async startScreenRecordingOnSpeech() {
+        try {
+            const success = await this.screenRecorder.startRecording();
+            if (success) {
+                console.log('Screen recording started on speech detection');
+            } else {
+                console.error('Failed to start screen recording on speech');
+            }
+        } catch (error) {
+            console.error('Screen recording startup error on speech:', error);
+        }
+    }
+
+    async stopScreenRecordingAndCreateVideo() {
+        try {
+            // Add timeout to prevent hanging
+            const recordingData = await Promise.race([
+                this.screenRecorder.stopRecording(),
+                new Promise((_, reject) => 
+                    setTimeout(() => reject(new Error('Recording stop timeout')), 10000)
+                )
+            ]);
+            
+            if (recordingData && recordingData.videoBlob) {
+                console.log(`Screen recording completed: ${recordingData.duration}ms duration, ${recordingData.videoBlob.size} bytes`);
+                
+                // Get the video (already created with audio)
+                const videoBlob = await this.screenRecorder.createVideo(recordingData);
+                const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+                const filename = `voice-screen-recording-${timestamp}.webm`;
+                
+                this.screenRecorder.downloadVideo(videoBlob, filename);
+                
+                console.log(`Video downloaded: ${filename} (with audio: ${recordingData.hasAudio})`);
+                
+                return {
+                    success: true,
+                    filename: filename,
+                    duration: recordingData.duration,
+                    hasAudio: recordingData.hasAudio,
+                    fileSize: recordingData.videoBlob.size
+                };
+            } else {
+                console.warn('No recording data available');
+                return { success: false, error: 'No recording data' };
+            }
+        } catch (error) {
+            console.error('Failed to process screen recording:', error);
+            // Always preserve screen stream unless it's a critical stream error
+            if (error.message.includes('stream ended') || error.message.includes('track ended')) {
+                console.warn('Screen stream ended, will need to re-request permission');
+                this.screenRecorder.cleanup(true); // Only destroy on stream ended errors
+            } else {
+                console.log('Preserving screen stream despite error');
+                this.screenRecorder.cleanup(false); // Preserve screen stream for all other errors
+            }
+            return { success: false, error: error.message };
+        }
     }
 }
