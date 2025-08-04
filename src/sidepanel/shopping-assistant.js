@@ -21,7 +21,7 @@ class ShoppingAssistant {
         this.sendButton = DOMUtils.getElementById("sendButton");
         this.voiceButton = DOMUtils.getElementById("voiceButton");
         this.clearChatButton = DOMUtils.getElementById("clearChatButton");
-        this.screenStatus = DOMUtils.getElementById("screenStatus");
+        this.screenRecordingIndicator = DOMUtils.getElementById("screenRecordingIndicator");
     }
 
     initializeState() {
@@ -54,23 +54,19 @@ class ShoppingAssistant {
         this.updateScreenStatus();
     }
 
-    updateScreenStatus() {
-        if (!this.screenStatus || !this.voiceHandler?.screenRecorder) return;
+    async updateScreenStatus() {
+        if (!this.voiceHandler) return;
         
         const screenRecorder = this.voiceHandler.screenRecorder;
+        if (!screenRecorder) return;
         
-        if (screenRecorder.needsPermissionReRequest) {
-            this.screenStatus.textContent = '🔄 Screen sharing stopped';
-            this.screenStatus.className = 'screen-status warning';
-        } else if (screenRecorder.hasScreenPermission && screenRecorder.screenStream) {
-            this.screenStatus.textContent = '✅ Screen recording: Active';
-            this.screenStatus.className = 'screen-status active';
-        } else if (screenRecorder.permissionRequested) {
-            this.screenStatus.textContent = '⏳ Requesting screen permission...';
-            this.screenStatus.className = 'screen-status requesting';
+        // Update camera icon based on screen sharing state (when stream is active)
+        if (screenRecorder.hasScreenPermission && screenRecorder.screenStream && screenRecorder.isStreamActive(screenRecorder.screenStream)) {
+            this.screenRecordingIndicator.classList.remove('hidden');
+            this.screenRecordingIndicator.classList.add('active');
         } else {
-            this.screenStatus.textContent = '📹 Screen recording: Ready';
-            this.screenStatus.className = 'screen-status';
+            this.screenRecordingIndicator.classList.add('hidden');
+            this.screenRecordingIndicator.classList.remove('active');
         }
     }
 
@@ -91,9 +87,11 @@ class ShoppingAssistant {
             } else {
                 chrome.runtime.sendMessage({ type: MESSAGE_TYPES.SIDE_PANEL_OPENED }).catch(() => {});
                 chrome.storage.local.set({ sidePanelOpen: true }).catch(() => {});
+                
             }
         });
     }
+
 
     initializeEventListeners() {
         this.sendButton.addEventListener("click", () => this.handleSendMessage());
@@ -231,7 +229,7 @@ class ShoppingAssistant {
         
         if (this.voiceHandler.state.isListening) {
             this.voiceButton.classList.remove("listening");
-            this.voiceButton.title = "Click to start voice conversation";
+            this.voiceButton.title = "";
             this.voiceHandler.stopListening();
         }
         
@@ -255,18 +253,36 @@ class ShoppingAssistant {
     }
 
     async startVoiceInput() {
-        const result = await this.voiceHandler.startListening();
-        if (result.success) {
-            this.voiceButton.classList.add("listening");
-            this.voiceButton.title = "Click to stop voice conversation";
-        } else {
-            this.handleVoiceError(result);
+        // Request screen capture permission first, before starting voice recognition
+        console.log('🎤 Requesting screen permission on microphone button click...');
+        
+        try {
+            // Check if screen permission is already available
+            const hasScreenPermission = await this.voiceHandler.screenRecorder.requestScreenPermissionIfNeeded();
+            console.log('🎤 Screen permission check result:', hasScreenPermission);
+            
+            if (!hasScreenPermission) {
+                this.addMessage("Screen recording permission is required for voice conversations. Please grant permission and try again.", "assistant");
+                return;
+            }
+            
+            // Now start voice recognition
+            const result = await this.voiceHandler.startListening();
+            if (result.success) {
+                this.voiceButton.classList.add("listening");
+                this.voiceButton.title = "";
+            } else {
+                this.handleVoiceError(result);
+            }
+        } catch (error) {
+            console.error('🎤 Error in startVoiceInput:', error);
+            this.addMessage("Failed to start voice conversation. Please try again.", "assistant");
         }
     }
 
     async stopVoiceInput() {
         this.voiceButton.classList.remove("listening");
-        this.voiceButton.title = "Click to start voice conversation";
+        this.voiceButton.title = "";
         await this.voiceHandler.stopListening();
         MessageRenderer.clearInterimMessage();
     }
@@ -293,6 +309,12 @@ class ShoppingAssistant {
         if (transcription) {
             MessageRenderer.clearInterimMessage();
 
+            // Check if this is a screen sharing ended notification
+            if (transcription.includes("Voice input stopped - screen sharing ended")) {
+                this.handleScreenSharingEndedFromVoice(transcription);
+                return;
+            }
+
             if (this.isErrorTranscription(transcription)) {
                 this.addMessage(transcription, "assistant");
                 return;
@@ -306,6 +328,22 @@ class ShoppingAssistant {
     isErrorTranscription(transcription) {
         return transcription.includes("Speech recognition failed") || 
                transcription.includes("Error processing audio");
+    }
+
+    handleScreenSharingEndedFromVoice(transcription) {
+        console.log('🎤 Handling screen sharing ended from voice handler');
+        
+        // Update the UI to show voice input is stopped
+        this.voiceButton.classList.remove("listening");
+        this.voiceButton.title = "";
+        
+        // Clear any interim messages
+        MessageRenderer.clearInterimMessage();
+        
+        // Show the message to user
+        this.addMessage(transcription, "assistant");
+        
+        console.log('🎤 Voice button should now be red (not listening)');
     }
 
     handleInterimTranscription(interimText) {
@@ -364,6 +402,7 @@ class ShoppingAssistant {
             this.hideWelcomeScreen();
         }
     }
+
 }
 
 document.addEventListener("DOMContentLoaded", () => {

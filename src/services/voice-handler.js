@@ -19,6 +19,13 @@ export class VoiceInputHandler {
         this.screenRecorder = new ScreenRecorder();
         this.voiceStartTime = null;
         this.voiceEndTime = null;
+        this.inactivityTimer = null;
+        this.INACTIVITY_TIMEOUT = 5 * 60 * 1000; // 5 minutes in milliseconds
+
+        // Set up callback for when screen sharing ends
+        this.screenRecorder.onScreenSharingEnded = () => {
+            this.handleScreenSharingEnded();
+        };
 
         this.initializeWebSpeechAPI();
     }
@@ -35,7 +42,6 @@ export class VoiceInputHandler {
         
         this.configureRecognition();
         this.setupEventHandlers();
-        
     }
 
     configureRecognition() {
@@ -57,46 +63,23 @@ export class VoiceInputHandler {
     async handleStart() {
         this.state.isListening = true;
         this.voiceStartTime = Date.now();
-        console.log('Voice recognition started - preparing screen recording...');
-        
-        // Request screen permission once when voice recognition starts
-        await this.prepareScreenRecording();
-    }
-
-    async prepareScreenRecording() {
-        try {
-            // Check if screen permission is available or needs re-requesting
-            const hasPermission = await this.screenRecorder.requestScreenPermissionIfNeeded();
-            
-            if (hasPermission) {
-                if (this.screenRecorder.needsPermissionReRequest) {
-                    console.log('✅ Screen permission re-granted after user stopped sharing');
-                } else {
-                    console.log('✅ Screen permission available - ready for recording');
-                }
-            } else {
-                console.error('❌ Failed to get screen permission');
-            }
-        } catch (error) {
-            console.error('Failed to prepare screen recording:', error);
-        }
+        this.clearInactivityTimer();
+        console.log('🎤 Voice recognition started, screen permission should already be granted');
     }
 
     handleResult(event) {
         const { finalTranscript, interimTranscript } = this.processResults(event);
         
-        // Start screen recording on first speech detection (interim or final)
+        // Start screen recording on first speech detection
         if ((finalTranscript || interimTranscript) && !this.screenRecorder.isRecording) {
-            console.log('Speech detected - starting screen recording with existing permission...');
+            console.log('🎤 Speech detected, starting screen recording...');
             this.startScreenRecordingOnSpeech();
         }
         
         if (finalTranscript && this.callbacks.transcription) {
             this.voiceEndTime = Date.now();
-            
-            // Stop screen recording when final transcript is received
+            console.log('🎤 Final transcript received, stopping recording...');
             this.stopScreenRecordingAndCreateVideo();
-            
             this.callbacks.transcription(finalTranscript.trim());
             
             if (this.state.isListening && !this.state.isProcessingResponse) {
@@ -111,15 +94,21 @@ export class VoiceInputHandler {
 
     handleError(event) {
         this.state.isListening = false;
-        this.reportError(event.error, `Recognition error: ${event.error}`);
+        
+        // Don't report "aborted" errors as they're expected when closing sidepanel
+        if (event.error === 'aborted') {
+            return;
+        }
+        
+        this.reportError(event.error);
     }
 
     handleEnd() {
-        
         if (this.state.isListening && !this.state.isProcessingResponse) {
             this.scheduleRestart();
         } else {
             this.state.isListening = false;
+            this.startInactivityTimer();
         }
     }
 
@@ -152,7 +141,7 @@ export class VoiceInputHandler {
         return `Speech recognition failed. Error: ${errorType}`;
     }
 
-    reportError(errorType, context = '') {
+    reportError(errorType) {
         const errorMessage = this.getErrorMessage(errorType);
         
         if (this.callbacks.transcription) {
@@ -162,42 +151,20 @@ export class VoiceInputHandler {
         return { success: false, error: errorType, message: errorMessage };
     }
 
-    async requestMicrophonePermission() {
-        try {
-            
-            const response = await Promise.race([
-                chrome.runtime.sendMessage({ type: "REQUEST_MIC_PERMISSION" }),
-                new Promise((_, reject) => 
-                    setTimeout(() => reject(new Error('Request timeout')), VOICE_CONFIG.PERMISSION_TIMEOUT)
-                )
-            ]);
-            
-            if (response?.success) {
-            } else {
-            }
-            
-            return response;
-        } catch (error) {
-            if (error.message === 'Request timeout') {
-                return this.reportError('permission_timeout', 'Permission request timed out');
-            }
-            
-            return this.reportError('request_failed', `Permission request failed: ${error.message}`);
-        }
-    }
-
     async startListening() {
         if (this.state.isListening) {
             return { success: false, error: "already_listening", message: "Voice recognition is already active" };
         }
 
-        if (!this.state.isSupported) {
-            return this.reportError('not_supported');
-        }
-
         try {
+            // Use sidepanel voice recognition
+            if (!this.state.isSupported) {
+                return this.reportError('not_supported');
+            }
+
             this.recognition.start();
             this.state.isListening = true;
+            this.clearInactivityTimer();
             return { success: true };
         } catch (error) {
             return this.reportError('initialization_failed', `Start failed: ${error.message}`);
@@ -212,6 +179,7 @@ export class VoiceInputHandler {
         try {
             this.state.isListening = false;
             this.clearRestart();
+            this.startInactivityTimer();
             
             if (this.recognition) {
                 this.recognition.stop();
@@ -220,6 +188,7 @@ export class VoiceInputHandler {
             return { success: true };
         } catch (error) {
             this.state.isListening = false;
+            this.startInactivityTimer();
             return this.reportError('stop_failed', `Stop failed: ${error.message}`);
         }
     }
@@ -266,20 +235,17 @@ export class VoiceInputHandler {
 
     async startScreenRecordingOnSpeech() {
         try {
+            console.log('📹 Attempting to start screen recording...');
             const success = await this.screenRecorder.startRecording();
-            if (success) {
-                console.log('Screen recording started on speech detection');
-            } else {
-                console.error('Failed to start screen recording on speech');
-            }
+            console.log('📹 Screen recording start result:', success);
         } catch (error) {
-            console.error('Screen recording startup error on speech:', error);
+            console.error('📹 Screen recording failed:', error);
         }
     }
 
     async stopScreenRecordingAndCreateVideo() {
         try {
-            // Add timeout to prevent hanging
+            console.log('📹 Attempting to stop screen recording...');
             const recordingData = await Promise.race([
                 this.screenRecorder.stopRecording(),
                 new Promise((_, reject) => 
@@ -287,40 +253,94 @@ export class VoiceInputHandler {
                 )
             ]);
             
-            if (recordingData && recordingData.videoBlob) {
-                console.log(`Screen recording completed: ${recordingData.duration}ms duration, ${recordingData.videoBlob.size} bytes`);
-                
-                // Get the video (already created with audio)
+            console.log('📹 Recording data received:', recordingData);
+            
+            if (recordingData?.videoBlob) {
+                console.log('📹 Creating video from recording data...');
                 const videoBlob = await this.screenRecorder.createVideo(recordingData);
                 const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
                 const filename = `voice-screen-recording-${timestamp}.webm`;
                 
+                console.log('📹 Downloading video:', filename);
                 this.screenRecorder.downloadVideo(videoBlob, filename);
-                
-                console.log(`Video downloaded: ${filename} (with audio: ${recordingData.hasAudio})`);
                 
                 return {
                     success: true,
-                    filename: filename,
+                    filename,
                     duration: recordingData.duration,
                     hasAudio: recordingData.hasAudio,
                     fileSize: recordingData.videoBlob.size
                 };
-            } else {
-                console.warn('No recording data available');
-                return { success: false, error: 'No recording data' };
             }
+            
+            console.warn('📹 No recording data available');
+            return { success: false, error: 'No recording data' };
+
         } catch (error) {
-            console.error('Failed to process screen recording:', error);
-            // Always preserve screen stream unless it's a critical stream error
-            if (error.message.includes('stream ended') || error.message.includes('track ended')) {
-                console.warn('Screen stream ended, will need to re-request permission');
-                this.screenRecorder.cleanup(true); // Only destroy on stream ended errors
-            } else {
-                console.log('Preserving screen stream despite error');
-                this.screenRecorder.cleanup(false); // Preserve screen stream for all other errors
-            }
+            console.error('📹 Error stopping recording:', error);
+            // Handle stream cleanup based on error type
+            const isStreamError = error.message.includes('stream ended') || error.message.includes('track ended');
+            this.screenRecorder.cleanup(isStreamError);
+            
             return { success: false, error: error.message };
+        }
+    }
+
+    startInactivityTimer() {
+        this.clearInactivityTimer();
+        
+        this.inactivityTimer = setTimeout(() => {
+            console.log('🎤 Microphone inactive for 5 minutes, stopping screen sharing...');
+            this.handleInactivityTimeout();
+        }, this.INACTIVITY_TIMEOUT);
+    }
+
+    clearInactivityTimer() {
+        if (this.inactivityTimer) {
+            clearTimeout(this.inactivityTimer);
+            this.inactivityTimer = null;
+        }
+    }
+
+    async handleInactivityTimeout() {
+        try {
+            // Stop screen recording if active
+            if (this.screenRecorder.isRecording) {
+                console.log('📹 Auto-stopping screen recording due to inactivity...');
+                await this.screenRecorder.stopRecording();
+            }
+            
+            // Clean up screen stream and permissions
+            this.screenRecorder.cleanup(true);
+            console.log('📹 Screen sharing stopped due to 5 minutes of microphone inactivity');
+            
+        } catch (error) {
+            console.error('📹 Error during inactivity cleanup:', error);
+            // Force cleanup even if there's an error
+            this.screenRecorder.cleanup(true);
+        }
+    }
+
+    handleScreenSharingEnded() {
+        console.log('🎤 Screen sharing ended, stopping voice input for safety');
+        
+        // Clear any pending timers first
+        this.clearInactivityTimer();
+        this.clearRestart();
+        
+        // Force stop the recognition without going through normal flow
+        this.state.isListening = false;
+        if (this.recognition) {
+            try {
+                this.recognition.stop();
+            } catch (error) {
+                // Handle silently
+            }
+        }
+        
+        // Notify UI that voice input has been stopped due to screen sharing ending
+        if (this.callbacks.transcription) {
+            this.callbacks.transcription("🛑 Voice input stopped - screen sharing ended. Click the microphone to start again.");
         }
     }
 }

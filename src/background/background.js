@@ -89,7 +89,6 @@ class BackgroundService {
                 sendResponse(chrome.runtime.lastError ? null : response);
             });
         } catch (error) {
-            console.error('Error getting tab info:', error);
             sendResponse(null);
         }
     }
@@ -119,6 +118,7 @@ class BackgroundService {
             });
         }
     }
+
 
     async handleSidePanelOpened(request, sender, sendResponse) {
         try {
@@ -188,6 +188,7 @@ class BackgroundService {
         } catch (error) {
         }
     }
+
 }
 
 // Initialize the background service
