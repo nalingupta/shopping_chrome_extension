@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shopping Assistant</title>
+    <link rel="stylesheet" href="sidepanel.css">
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <h1>🛒 Shopping Assistant</h1>
+            <div class="current-site" id="currentSite">
+                <span class="site-indicator">📍</span>
+                <span id="siteUrl">Detecting current page...</span>
+            </div>
+        </header>
+
+        <div class="chat-container">
+            <div class="messages" id="messages">
+                <div class="message assistant-message">
+                    <div class="message-content">
+                        Hi! I'm your shopping assistant. Ask me anything about products, prices, or recommendations based on the current page you're viewing.
+                        
+                        <br><br>
+                        <strong>🎤 Voice Input:</strong> Click the big microphone button once to start a voice conversation, click again to stop.
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Voice Button - Centered above input -->
+        <div class="voice-container">
+            <div class="voice-button-wrapper">
+                <button id="voiceButton" class="voice-button-clean" title="Click to start voice conversation">
+                    <svg class="mic-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+                        <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                        <line x1="12" y1="19" x2="12" y2="23"></line>
+                        <line x1="8" y1="23" x2="16" y2="23"></line>
+                    </svg>
+                </button>
+                <div class="voice-waves">
+                    <div class="wave wave-1"></div>
+                    <div class="wave wave-2"></div>
+                    <div class="wave wave-3"></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="input-container">
+            <div class="input-wrapper">
+                <textarea 
+                    id="userInput" 
+                    placeholder="Or type your message here..."
+                    rows="2"
+                ></textarea>
+                <button id="sendButton" class="send-button">
+                    <span class="send-icon">➤</span>
+                </button>
+            </div>
+        </div>
+
+        <div class="suggestions" id="suggestions">
+            <div class="suggestion-chip" data-suggestion="Tell me about this product">📦 About this product</div>
+            <div class="suggestion-chip" data-suggestion="Find similar products">🔍 Find similar</div>
+            <div class="suggestion-chip" data-suggestion="Compare prices">💰 Compare prices</div>
+            <div class="suggestion-chip" data-suggestion="Check reviews">⭐ Check reviews</div>
+        </div>
+    </div>
+
+            <!-- Optional: Include config.js if it exists -->
+        <script src="config.js"></script>
+        <script src="voiceInput.js"></script>
+    <script src="sidepanel.js"></script>
+</body>
+</html>

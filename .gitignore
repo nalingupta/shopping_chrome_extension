@@ -1,0 +1,20 @@
+# Dependencies
+node_modules/
+
+# Configuration files with sensitive data
+config.js
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# Build files
+dist/
+build/

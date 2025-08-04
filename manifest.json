@@ -1,0 +1,41 @@
+{
+    "manifest_version": 3,
+    "name": "Shopping Assistant",
+    "version": "1.0",
+    "description": "AI-powered shopping assistant that helps users with product recommendations and price comparisons",
+    "permissions": [
+        "activeTab",
+        "storage",
+        "sidePanel",
+        "scripting",
+        "offscreen"
+    ],
+    "host_permissions": ["https://*/*", "http://*/*"],
+    "background": {
+        "service_worker": "background.js"
+    },
+    "content_scripts": [
+        {
+            "matches": ["<all_urls>"],
+            "js": ["content.js", "micPermission.js"],
+            "run_at": "document_idle"
+        }
+    ],
+    "web_accessible_resources": [
+        {
+            "resources": ["permissionRequest.html", "permissionRequest.js", "permissionPopup.html"],
+            "matches": ["<all_urls>"]
+        }
+    ],
+    "side_panel": {
+        "default_path": "sidepanel.html"
+    },
+    "action": {
+        "default_title": "Open Shopping Assistant"
+    },
+    "icons": {
+        "16": "icons/icon16.png",
+        "48": "icons/icon48.png",
+        "128": "icons/icon128.png"
+    }
+}

@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Voice Input Debug</title>
+        <style>
+            body {
+                font-family: Arial, sans-serif;
+                max-width: 800px;
+                margin: 50px auto;
+                padding: 20px;
+            }
+            .debug-section {
+                margin: 20px 0;
+                padding: 15px;
+                border: 1px solid #ddd;
+                border-radius: 5px;
+            }
+            button {
+                padding: 10px 20px;
+                margin: 5px;
+                border: none;
+                border-radius: 5px;
+                cursor: pointer;
+                background: #007bff;
+                color: white;
+            }
+            button:disabled {
+                background: #ccc;
+                cursor: not-allowed;
+            }
+            .log {
+                margin: 10px 0;
+                padding: 10px;
+                background: #f8f9fa;
+                border-radius: 5px;
+                font-family: monospace;
+                font-size: 12px;
+                max-height: 300px;
+                overflow-y: auto;
+            }
+            .success {
+                color: #28a745;
+            }
+            .error {
+                color: #dc3545;
+            }
+            .info {
+                color: #17a2b8;
+            }
+        </style>
+    </head>
+    <body>
+        <h1>🎤 Voice Input Debug</h1>
+
+        <div class="debug-section">
+            <h3>1. Config Check</h3>
+            <button id="checkConfig">Check Config</button>
+            <div id="configLog" class="log"></div>
+        </div>
+
+        <div class="debug-section">
+            <h3>2. Voice Handler Test</h3>
+            <button id="testVoiceHandler">Test Voice Handler</button>
+            <div id="voiceHandlerLog" class="log"></div>
+        </div>
+
+        <div class="debug-section">
+            <h3>3. Recording Test</h3>
+            <button id="testRecording">Test Recording</button>
+            <button id="stopRecording" disabled>Stop Recording</button>
+            <div id="recordingLog" class="log"></div>
+        </div>
+
+        <script src="config.js"></script>
+        <script src="voiceInput.js"></script>
+        <script>
+            let voiceHandler = null;
+            let isRecording = false;
+
+            function log(elementId, message, type = "info") {
+                const logElement = document.getElementById(elementId);
+                const timestamp = new Date().toLocaleTimeString();
+                const logEntry = document.createElement("div");
+                logEntry.className = type;
+                logEntry.textContent = `[${timestamp}] ${message}`;
+                logElement.appendChild(logEntry);
+                logElement.scrollTop = logElement.scrollHeight;
+                console.log(`[${type.toUpperCase()}] ${message}`);
+            }
+
+            // Check config
+            document
+                .getElementById("checkConfig")
+                .addEventListener("click", () => {
+                    const configLog = document.getElementById("configLog");
+                    configLog.innerHTML = "";
+
+                    log("configLog", "Checking configuration...", "info");
+
+                    if (typeof CONFIG !== "undefined") {
+                        log(
+                            "configLog",
+                            `CONFIG object found: ${JSON.stringify(
+                                CONFIG,
+                                null,
+                                2
+                            )}`,
+                            "success"
+                        );
+
+                        if (
+                            CONFIG.CARTESIA_API_KEY &&
+                            CONFIG.CARTESIA_API_KEY !==
+                                "YOUR_CARTESIA_API_KEY_HERE"
+                        ) {
+                            log(
+                                "configLog",
+                                `API Key found: ${CONFIG.CARTESIA_API_KEY.substring(
+                                    0,
+                                    10
+                                )}...`,
+                                "success"
+                            );
+                        } else {
+                            log(
+                                "configLog",
+                                "No valid API key found in CONFIG",
+                                "error"
+                            );
+                        }
+                    } else {
+                        log("configLog", "CONFIG object not found", "error");
+                    }
+                });
+
+            // Test voice handler
+            document
+                .getElementById("testVoiceHandler")
+                .addEventListener("click", () => {
+                    const voiceHandlerLog =
+                        document.getElementById("voiceHandlerLog");
+                    voiceHandlerLog.innerHTML = "";
+
+                    log(
+                        "voiceHandlerLog",
+                        "Creating VoiceInputHandler...",
+                        "info"
+                    );
+
+                    try {
+                        voiceHandler = new VoiceInputHandler();
+                        log(
+                            "voiceHandlerLog",
+                            "VoiceInputHandler created successfully",
+                            "success"
+                        );
+
+                        // Check API key in voice handler
+                        if (
+                            voiceHandler.CARTESIA_API_KEY &&
+                            voiceHandler.CARTESIA_API_KEY !==
+                                "YOUR_CARTESIA_API_KEY"
+                        ) {
+                            log(
+                                "voiceHandlerLog",
+                                `Voice handler API key: ${voiceHandler.CARTESIA_API_KEY.substring(
+                                    0,
+                                    10
+                                )}...`,
+                                "success"
+                            );
+                        } else {
+                            log(
+                                "voiceHandlerLog",
+                                "No valid API key in voice handler",
+                                "error"
+                            );
+                        }
+
+                        // Set up callback
+                        voiceHandler.setTranscriptionCallback(
+                            (transcription) => {
+                                log(
+                                    "voiceHandlerLog",
+                                    `Transcription received: ${transcription}`,
+                                    "success"
+                                );
+                            }
+                        );
+                    } catch (error) {
+                        log(
+                            "voiceHandlerLog",
+                            `Error creating VoiceInputHandler: ${error.message}`,
+                            "error"
+                        );
+                    }
+                });
+
+            // Test recording
+            document
+                .getElementById("testRecording")
+                .addEventListener("click", async () => {
+                    const recordingLog =
+                        document.getElementById("recordingLog");
+                    recordingLog.innerHTML = "";
+
+                    if (!voiceHandler) {
+                        log(
+                            "recordingLog",
+                            "Please create VoiceInputHandler first",
+                            "error"
+                        );
+                        return;
+                    }
+
+                    log("recordingLog", "Starting recording test...", "info");
+
+                    try {
+                        const result = await voiceHandler.startRecording();
+                        log(
+                            "recordingLog",
+                            `Start recording result: ${JSON.stringify(
+                                result,
+                                null,
+                                2
+                            )}`,
+                            "info"
+                        );
+
+                        if (result.success) {
+                            isRecording = true;
+                            document.getElementById(
+                                "testRecording"
+                            ).disabled = true;
+                            document.getElementById(
+                                "stopRecording"
+                            ).disabled = false;
+                            log(
+                                "recordingLog",
+                                "Recording started successfully",
+                                "success"
+                            );
+                        } else {
+                            log(
+                                "recordingLog",
+                                `Recording failed: ${result.error}`,
+                                "error"
+                            );
+                        }
+                    } catch (error) {
+                        log(
+                            "recordingLog",
+                            `Error starting recording: ${error.message}`,
+                            "error"
+                        );
+                    }
+                });
+
+            // Stop recording
+            document
+                .getElementById("stopRecording")
+                .addEventListener("click", async () => {
+                    if (!voiceHandler || !isRecording) {
+                        return;
+                    }
+
+                    const recordingLog =
+                        document.getElementById("recordingLog");
+                    log("recordingLog", "Stopping recording...", "info");
+
+                    try {
+                        const result = await voiceHandler.stopRecording();
+                        log(
+                            "recordingLog",
+                            `Stop recording result: ${JSON.stringify(
+                                result,
+                                null,
+                                2
+                            )}`,
+                            "info"
+                        );
+
+                        isRecording = false;
+                        document.getElementById(
+                            "testRecording"
+                        ).disabled = false;
+                        document.getElementById(
+                            "stopRecording"
+                        ).disabled = true;
+
+                        if (result.success) {
+                            log(
+                                "recordingLog",
+                                "Recording stopped successfully",
+                                "success"
+                            );
+                        } else {
+                            log(
+                                "recordingLog",
+                                `Stop recording failed: ${result.error}`,
+                                "error"
+                            );
+                        }
+                    } catch (error) {
+                        log(
+                            "recordingLog",
+                            `Error stopping recording: ${error.message}`,
+                            "error"
+                        );
+                    }
+                });
+        </script>
+    </body>
+</html>

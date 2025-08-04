@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Extension Voice Input Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        .instructions {
+            background: #f0f0f0;
+            padding: 20px;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+        .step {
+            margin: 10px 0;
+            padding: 10px;
+            background: white;
+            border-left: 4px solid #007bff;
+        }
+        .note {
+            color: #666;
+            font-style: italic;
+            margin: 10px 0;
+        }
+        code {
+            background: #f5f5f5;
+            padding: 2px 5px;
+            border-radius: 3px;
+            font-family: monospace;
+        }
+    </style>
+</head>
+<body>
+    <h1>Extension Voice Input Test</h1>
+    
+    <div class="instructions">
+        <h2>Testing Voice Input in the Shopping Assistant Extension</h2>
+        
+        <div class="step">
+            <h3>Step 1: Load the Extension</h3>
+            <p>Make sure the Shopping Assistant extension is loaded in Chrome.</p>
+        </div>
+        
+        <div class="step">
+            <h3>Step 2: Open Developer Tools</h3>
+            <p>Press <code>F12</code> or right-click and select "Inspect" to open Chrome DevTools.</p>
+            <p>Go to the Console tab to see logs.</p>
+        </div>
+        
+        <div class="step">
+            <h3>Step 3: Open the Side Panel</h3>
+            <p>Click the Shopping Assistant extension icon in the toolbar to open the side panel.</p>
+        </div>
+        
+        <div class="step">
+            <h3>Step 4: Test Voice Input</h3>
+            <ol>
+                <li>Click the microphone button 🎤 in the side panel</li>
+                <li>If prompted, allow microphone access</li>
+                <li>Speak your query clearly (e.g., "Show me the best deals on this page")</li>
+                <li>Click the microphone button again to stop recording</li>
+            </ol>
+        </div>
+        
+        <div class="step">
+            <h3>Step 5: Check Console Logs</h3>
+            <p>Look for these log messages in the console:</p>
+            <ul>
+                <li><code>Background: Starting voice recording...</code></li>
+                <li><code>Audio chunk received: {size: ..., chunks: ...}</code></li>
+                <li><code>Recording stopped, processing audio...</code></li>
+                <li><code>Audio data received: {dataLength: ..., mimeType: ...}</code></li>
+                <li><code>Starting Cartesia transcription...</code></li>
+                <li><code>Transcription result: ...</code></li>
+            </ul>
+        </div>
+        
+        <div class="note">
+            <h3>Troubleshooting:</h3>
+            <ul>
+                <li>If you see "No valid Cartesia API key found", check that config.js is properly loaded</li>
+                <li>If recording doesn't start, check for permission errors in the console</li>
+                <li>If no audio chunks are received, ensure your microphone is working</li>
+                <li>Check all extension contexts: popup console, background service worker console, and offscreen document console</li>
+            </ul>
+        </div>
+        
+        <div class="note">
+            <h3>How to view different console contexts:</h3>
+            <ul>
+                <li><strong>Side Panel Console:</strong> Right-click in the side panel → Inspect</li>
+                <li><strong>Background Service Worker:</strong> chrome://extensions → Shopping Assistant → Service Worker link</li>
+                <li><strong>Offscreen Document:</strong> chrome://extensions → Shopping Assistant → Inspect views: offscreen.html</li>
+            </ul>
+        </div>
+    </div>
+    
+    <div class="instructions">
+        <h2>Expected Behavior</h2>
+        <p>When working correctly, you should:</p>
+        <ol>
+            <li>See the microphone button turn red and show "🔴" when recording</li>
+            <li>See audio chunks being captured in the console logs</li>
+            <li>See your spoken text appear in the chat input after you stop recording</li>
+            <li>The transcribed text should match what you said (not a mock response)</li>
+        </ol>
+    </div>
+</body>
+</html>

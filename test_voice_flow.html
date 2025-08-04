@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Voice Input Flow Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 30px;
+        }
+        .test-section {
+            margin: 20px 0;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        .test-section h2 {
+            margin-top: 0;
+            color: #555;
+        }
+        button {
+            padding: 10px 20px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        .status {
+            margin: 10px 0;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        .status.success {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .status.error {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        .status.info {
+            background-color: #d1ecf1;
+            color: #0c5460;
+        }
+        #log {
+            white-space: pre-wrap;
+            font-family: monospace;
+            font-size: 12px;
+            background: #f8f8f8;
+            padding: 10px;
+            border: 1px solid #ddd;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎤 Voice Input Flow Test</h1>
+        
+        <div class="test-section">
+            <h2>Test Instructions</h2>
+            <ol>
+                <li>Install the extension and reload this page</li>
+                <li>Open the Shopping Assistant sidebar (click extension icon)</li>
+                <li>Click the "Test Voice Flow" button below</li>
+                <li>Grant microphone permission when prompted</li>
+                <li>Click the microphone button in the sidebar to record</li>
+                <li>Check the console log for debugging information</li>
+            </ol>
+        </div>
+
+        <div class="test-section">
+            <h2>Quick Tests</h2>
+            <button id="testPermission">Test Mic Permission Request</button>
+            <button id="testOffscreen">Check Offscreen Status</button>
+            <button id="testFullFlow">Test Full Voice Flow</button>
+            <button id="clearLog">Clear Log</button>
+        </div>
+
+        <div class="test-section">
+            <h2>Status</h2>
+            <div id="status" class="status info">Ready to test...</div>
+        </div>
+
+        <div class="test-section">
+            <h2>Console Log</h2>
+            <div id="log"></div>
+        </div>
+    </div>
+
+    <script>
+        const statusDiv = document.getElementById('status');
+        const logDiv = document.getElementById('log');
+
+        function log(message, type = 'info') {
+            const timestamp = new Date().toLocaleTimeString();
+            const entry = `[${timestamp}] ${message}\n`;
+            logDiv.textContent += entry;
+            console.log(message);
+            
+            // Update status
+            statusDiv.className = `status ${type}`;
+            statusDiv.textContent = message;
+            
+            // Auto-scroll log
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+
+        // Test mic permission
+        document.getElementById('testPermission').addEventListener('click', async () => {
+            log('Testing microphone permission request...');
+            
+            try {
+                // Send message to extension
+                chrome.runtime.sendMessage({ type: 'REQUEST_MIC_PERMISSION' }, (response) => {
+                    if (chrome.runtime.lastError) {
+                        log(`Error: ${chrome.runtime.lastError.message}`, 'error');
+                        return;
+                    }
+                    
+                    if (response && response.success) {
+                        log('✅ Microphone permission granted!', 'success');
+                    } else {
+                        log(`❌ Permission denied: ${response?.error || 'Unknown error'}`, 'error');
+                        if (response?.details) {
+                            log(`Details: ${response.details}`, 'error');
+                        }
+                    }
+                });
+            } catch (error) {
+                log(`Exception: ${error.message}`, 'error');
+            }
+        });
+
+        // Check offscreen status
+        document.getElementById('testOffscreen').addEventListener('click', async () => {
+            log('Checking offscreen document status...');
+            
+            try {
+                chrome.runtime.sendMessage({ type: 'CHECK_OFFSCREEN_STATUS' }, (response) => {
+                    if (chrome.runtime.lastError) {
+                        log(`Error: ${chrome.runtime.lastError.message}`, 'error');
+                        return;
+                    }
+                    
+                    if (response) {
+                        log(`Offscreen exists: ${response.exists}`);
+                        if (response.exists) {
+                            log(`Responsive: ${response.responsive}`);
+                            log(`Recording: ${response.isRecording || false}`);
+                            log(`Has permission: ${response.hasPermission || false}`);
+                            log(`Has stream: ${response.hasStream || false}`);
+                        }
+                    }
+                });
+            } catch (error) {
+                log(`Exception: ${error.message}`, 'error');
+            }
+        });
+
+        // Test full flow
+        document.getElementById('testFullFlow').addEventListener('click', async () => {
+            log('Starting full voice flow test...');
+            log('Step 1: Checking offscreen status...');
+            
+            // Step 1: Check offscreen
+            chrome.runtime.sendMessage({ type: 'CHECK_OFFSCREEN_STATUS' }, (response) => {
+                if (response) {
+                    log(`Offscreen exists: ${response.exists}`);
+                    
+                    // Step 2: Request permission
+                    log('Step 2: Requesting microphone permission...');
+                    chrome.runtime.sendMessage({ type: 'REQUEST_MIC_PERMISSION' }, (permResponse) => {
+                        if (permResponse && permResponse.success) {
+                            log('✅ Permission granted!', 'success');
+                            
+                            // Step 3: Try to start recording
+                            log('Step 3: Starting voice recording...');
+                            chrome.runtime.sendMessage({ type: 'START_VOICE_RECORDING' }, (recResponse) => {
+                                if (recResponse && recResponse.success) {
+                                    log('✅ Recording started successfully!', 'success');
+                                    log('Try speaking now...');
+                                    
+                                    // Stop after 3 seconds
+                                    setTimeout(() => {
+                                        log('Stopping recording...');
+                                        chrome.runtime.sendMessage({ type: 'STOP_VOICE_RECORDING' }, (stopResponse) => {
+                                            if (stopResponse && stopResponse.success) {
+                                                log('✅ Recording stopped successfully!', 'success');
+                                                log('Full flow test completed!', 'success');
+                                            } else {
+                                                log(`❌ Failed to stop recording: ${stopResponse?.error}`, 'error');
+                                            }
+                                        });
+                                    }, 3000);
+                                } else {
+                                    log(`❌ Failed to start recording: ${recResponse?.error}`, 'error');
+                                    if (recResponse?.details) {
+                                        log(`Details: ${recResponse.details}`, 'error');
+                                    }
+                                }
+                            });
+                        } else {
+                            log(`❌ Permission denied: ${permResponse?.error}`, 'error');
+                        }
+                    });
+                }
+            });
+        });
+
+        // Clear log
+        document.getElementById('clearLog').addEventListener('click', () => {
+            logDiv.textContent = '';
+            log('Log cleared', 'info');
+        });
+
+        // Initial check
+        log('Test page loaded. Extension is ' + (typeof chrome !== 'undefined' && chrome.runtime ? 'available' : 'not available'));
+    </script>
+</body>
+</html>
