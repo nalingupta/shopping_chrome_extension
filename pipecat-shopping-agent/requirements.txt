@@ -1,0 +1,6 @@
+# Pipecat framework with only needed services
+pipecat-ai[daily,google]
+
+# Additional dependencies for enhanced functionality  
+python-dotenv
+loguru
