@@ -254,12 +254,10 @@ class ShoppingAssistant {
 
     async startVoiceInput() {
         // Request screen capture permission first, before starting voice recognition
-        console.log('🎤 Requesting screen permission on microphone button click...');
         
         try {
             // Check if screen permission is already available
             const hasScreenPermission = await this.voiceHandler.screenRecorder.requestScreenPermissionIfNeeded();
-            console.log('🎤 Screen permission check result:', hasScreenPermission);
             
             if (!hasScreenPermission) {
                 this.addMessage("Screen recording permission is required for voice conversations. Please grant permission and try again.", "assistant");
@@ -275,7 +273,6 @@ class ShoppingAssistant {
                 this.handleVoiceError(result);
             }
         } catch (error) {
-            console.error('🎤 Error in startVoiceInput:', error);
             this.addMessage("Failed to start voice conversation. Please try again.", "assistant");
         }
     }
@@ -331,7 +328,6 @@ class ShoppingAssistant {
     }
 
     handleScreenSharingEndedFromVoice(transcription) {
-        console.log('🎤 Handling screen sharing ended from voice handler');
         
         // Update the UI to show voice input is stopped
         this.voiceButton.classList.remove("listening");
@@ -343,7 +339,6 @@ class ShoppingAssistant {
         // Show the message to user
         this.addMessage(transcription, "assistant");
         
-        console.log('🎤 Voice button should now be red (not listening)');
     }
 
     handleInterimTranscription(interimText) {

@@ -82,17 +82,33 @@ An AI-powered shopping assistant with **real-time voice input** that helps users
 ### File Structure
 ```
 shopping_chrome_extension/
-├── manifest.json                # Extension configuration
-├── background.js               # Service worker (optimized)
-├── content.js                  # Page analysis
-├── mic-permission.js          # Permission content script  
-├── mic-permission-page.*      # Permission iframe resources
-├── sidepanel.*               # Main UI (HTML/JS/CSS)
-├── voice-handler.js          # Voice input (Web Speech API)
-├── docs/                     # Technical documentation
-│   ├── VOICE_SYSTEM.md      # Voice implementation details
-│   └── CLAUDE.md            # Development guidelines  
-└── icons/                   # Extension icons
+├── manifest.json                    # Extension configuration
+├── sidepanel.html                   # Main UI HTML
+├── sidepanel.css                    # Main UI styles
+├── src/
+│   ├── background/
+│   │   └── background.js           # Service worker
+│   ├── content/
+│   │   ├── content.js              # Page analysis
+│   │   └── mic-permission.js       # Permission content script
+│   ├── services/
+│   │   ├── microphone-service.js   # Microphone handling
+│   │   ├── page-analyzer.js        # Page content analysis
+│   │   ├── screen-recorder.js      # Desktop capture & recording
+│   │   ├── shopping-assistant.js   # AI assistant logic
+│   │   └── voice-handler.js        # Voice input processing
+│   ├── sidepanel/
+│   │   └── shopping-assistant.js   # Main sidepanel logic
+│   └── utils/
+│       ├── constants.js            # Configuration constants
+│       ├── dom.js                  # DOM utilities
+│       └── storage.js              # Storage management
+├── docs/                           # Technical documentation
+│   ├── CLAUDE.md                   # Development guidelines
+│   ├── SCREEN_RECORDING.md         # Screen recording docs
+│   └── VOICE_SYSTEM.md             # Voice system details
+├── icons/                          # Extension icons
+└── watch.js                        # Development hot reload
 ```
 
 ## 🎯 Optimization Highlights
@@ -113,8 +129,10 @@ shopping_chrome_extension/
 - ❌ External API dependencies (Cartesia/OpenAI)
 - ❌ MediaRecorder + offscreen document system
 - ❌ Multiple permission methods  
-- ❌ All debugging and test files
+- ❌ Debugging console statements
+- ❌ Outdated test files
 - ❌ Complex dual-system approach
+- ❌ Redundant test HTML file
 
 ## 🐛 Troubleshooting
 

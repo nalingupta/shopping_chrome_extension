@@ -2,9 +2,10 @@
 
 ## Core Principles
 1. **Write modular, clean code** - Every function should have a single responsibility
-2. **Always write unit tests** - Test coverage is mandatory for new features
+2. **Maintain clean codebase** - No console debugging statements in production code
 3. **Refactor as you go** - Don't accumulate technical debt
 4. **No garbage code** - Every line should have a purpose
+5. **Focus on desktop capture** - Use chrome.desktopCapture API, no offscreen documents
 
 ## Code Structure Requirements
 - **Modular Architecture**: Separate concerns into distinct modules/files
@@ -12,11 +13,11 @@
 - **Clear Naming**: Use descriptive variable and function names
 - **DRY Principle**: Don't Repeat Yourself - extract common functionality
 
-## Testing Requirements
-- Write unit tests for all new functions
-- Test edge cases and error conditions
-- Aim for >80% code coverage
-- Run tests before marking any task as complete
+## Development Requirements
+- Remove debugging console statements from production code
+- Test functionality manually in Chrome extension environment
+- Ensure desktop capture works properly with sidepanel
+- Verify voice input integrates correctly with screen recording
 
 ## Chrome Extension Specific
 - Keep background scripts minimal and efficient
@@ -26,10 +27,10 @@
 
 ## Before Completing Any Task
 1. Ensure code is modular and follows single responsibility principle
-2. Write/update unit tests
-3. Run linting and type checking (if available)
+2. Remove any debugging console statements
+3. Test in actual Chrome extension environment
 4. Refactor any code smells
-5. Verify the solution works end-to-end
+5. Verify desktop capture and sidepanel functionality
 6. **IMPORTANT**: Run `git commit` at good milestones to track progress
 
 ## Git Commit Strategy
@@ -45,7 +46,10 @@
 - Push to remote only when explicitly requested
 
 ## File Organization
-- `/src` - Source code
-- `/tests` - Unit tests
-- `/utils` - Shared utilities
+- `/src/background/` - Background service worker
+- `/src/content/` - Content scripts
+- `/src/services/` - Core business logic (voice, screen recording, AI assistant)
+- `/src/sidepanel/` - Sidepanel UI logic
+- `/src/utils/` - Shared utilities
+- `/docs/` - Technical documentation
 - Keep related functionality grouped together

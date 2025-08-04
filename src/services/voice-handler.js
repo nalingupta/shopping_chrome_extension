@@ -64,7 +64,6 @@ export class VoiceInputHandler {
         this.state.isListening = true;
         this.voiceStartTime = Date.now();
         this.clearInactivityTimer();
-        console.log('🎤 Voice recognition started, screen permission should already be granted');
     }
 
     handleResult(event) {
@@ -72,13 +71,11 @@ export class VoiceInputHandler {
         
         // Start screen recording on first speech detection
         if ((finalTranscript || interimTranscript) && !this.screenRecorder.isRecording) {
-            console.log('🎤 Speech detected, starting screen recording...');
             this.startScreenRecordingOnSpeech();
         }
         
         if (finalTranscript && this.callbacks.transcription) {
             this.voiceEndTime = Date.now();
-            console.log('🎤 Final transcript received, stopping recording...');
             this.stopScreenRecordingAndCreateVideo();
             this.callbacks.transcription(finalTranscript.trim());
             
@@ -235,17 +232,13 @@ export class VoiceInputHandler {
 
     async startScreenRecordingOnSpeech() {
         try {
-            console.log('📹 Attempting to start screen recording...');
-            const success = await this.screenRecorder.startRecording();
-            console.log('📹 Screen recording start result:', success);
+            await this.screenRecorder.startRecording();
         } catch (error) {
-            console.error('📹 Screen recording failed:', error);
         }
     }
 
     async stopScreenRecordingAndCreateVideo() {
         try {
-            console.log('📹 Attempting to stop screen recording...');
             const recordingData = await Promise.race([
                 this.screenRecorder.stopRecording(),
                 new Promise((_, reject) => 
@@ -253,15 +246,12 @@ export class VoiceInputHandler {
                 )
             ]);
             
-            console.log('📹 Recording data received:', recordingData);
             
             if (recordingData?.videoBlob) {
-                console.log('📹 Creating video from recording data...');
                 const videoBlob = await this.screenRecorder.createVideo(recordingData);
                 const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
                 const filename = `voice-screen-recording-${timestamp}.webm`;
                 
-                console.log('📹 Downloading video:', filename);
                 this.screenRecorder.downloadVideo(videoBlob, filename);
                 
                 return {
@@ -273,11 +263,9 @@ export class VoiceInputHandler {
                 };
             }
             
-            console.warn('📹 No recording data available');
             return { success: false, error: 'No recording data' };
 
         } catch (error) {
-            console.error('📹 Error stopping recording:', error);
             // Handle stream cleanup based on error type
             const isStreamError = error.message.includes('stream ended') || error.message.includes('track ended');
             this.screenRecorder.cleanup(isStreamError);
@@ -290,7 +278,6 @@ export class VoiceInputHandler {
         this.clearInactivityTimer();
         
         this.inactivityTimer = setTimeout(() => {
-            console.log('🎤 Microphone inactive for 5 minutes, stopping screen sharing...');
             this.handleInactivityTimeout();
         }, this.INACTIVITY_TIMEOUT);
     }
@@ -306,23 +293,19 @@ export class VoiceInputHandler {
         try {
             // Stop screen recording if active
             if (this.screenRecorder.isRecording) {
-                console.log('📹 Auto-stopping screen recording due to inactivity...');
                 await this.screenRecorder.stopRecording();
             }
             
             // Clean up screen stream and permissions
             this.screenRecorder.cleanup(true);
-            console.log('📹 Screen sharing stopped due to 5 minutes of microphone inactivity');
             
         } catch (error) {
-            console.error('📹 Error during inactivity cleanup:', error);
             // Force cleanup even if there's an error
             this.screenRecorder.cleanup(true);
         }
     }
 
     handleScreenSharingEnded() {
-        console.log('🎤 Screen sharing ended, stopping voice input for safety');
         
         // Clear any pending timers first
         this.clearInactivityTimer();

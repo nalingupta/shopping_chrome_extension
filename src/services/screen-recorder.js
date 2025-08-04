@@ -17,7 +17,6 @@ export class ScreenRecorder {
 
     async startRecording() {
         if (this.isRecording) {
-            console.log('📹 Already recording, returning false');
             return false;
         }
 
@@ -60,7 +59,6 @@ export class ScreenRecorder {
             return true;
             
         } catch (error) {
-            console.error('📹 Recording start failed:', error);
             this.cleanup();
             return false;
         }
@@ -73,7 +71,6 @@ export class ScreenRecorder {
     }
 
     handleScreenSharingEnded() {
-        console.log('📹 Screen sharing ended - user clicked Stop Sharing or stream ended');
         this.screenStream = null;
         this.hasScreenPermission = false;
         
@@ -92,35 +89,25 @@ export class ScreenRecorder {
     }
 
     async requestScreenPermissionIfNeeded() {
-        console.log('📹 Checking screen permission...', {
-            needsPermissionReRequest: this.needsPermissionReRequest,
-            hasScreenPermission: this.hasScreenPermission,
-            streamActive: this.isStreamActive(this.screenStream)
-        });
         
         if (this.needsPermissionReRequest || !this.hasScreenPermission || !this.isStreamActive(this.screenStream)) {
-            console.log('📹 Screen permission needed, requesting...');
             try {
                 this.screenStream = await this.getScreenStream();
                 if (this.screenStream) {
                     this.hasScreenPermission = true;
                     this.needsPermissionReRequest = false;
-                    console.log('📹 Screen permission granted successfully');
                     return true;
                 }
                 return false;
             } catch (error) {
-                console.error('📹 Error requesting screen permission:', error);
                 return false;
             }
         }
-        console.log('📹 Screen permission already available, no need to request');
         return true;
     }
 
     async getScreenStream() {
         try {
-            console.log('📹 Requesting screen capture permission...');
             this.permissionRequested = true;
             
             const streamId = await new Promise((resolve, reject) => {
@@ -136,7 +123,6 @@ export class ScreenRecorder {
                 );
             });
 
-            console.log('📹 Creating screen stream with streamId using legacy constraints...');
             
             // Use the older constraint format that works with desktop capture
             const stream = await navigator.mediaDevices.getUserMedia({
@@ -151,12 +137,10 @@ export class ScreenRecorder {
                 }
             });
 
-            console.log('📹 Screen stream created successfully with desktop capture');
             this.setupStreamEndListener(stream);
             return stream;
             
         } catch (error) {
-            console.error('📹 Failed to get screen stream:', error);
             this.permissionRequested = false;
             return null;
         }
@@ -174,42 +158,34 @@ export class ScreenRecorder {
 
     async stopRecording() {
         if (!this.isRecording) {
-            console.log('📹 Not recording, returning null');
             return null;
         }
         
-        console.log('📹 Stopping recording...');
         this.recordingEndTime = Date.now();
         this.isRecording = false;
         
         if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
-            console.log('📹 MediaRecorder is active, stopping...');
             return new Promise((resolve) => {
                 this.mediaRecorder.onstop = async () => {
-                    console.log('📹 MediaRecorder stopped, processing recording...');
                     const recordingData = await this.processRecording();
                     resolve(recordingData);
                 };
                 this.mediaRecorder.stop();
             });
         } else {
-            console.log('📹 MediaRecorder already inactive, processing recording...');
             return await this.processRecording();
         }
     }
 
     async processRecording() {
-        console.log('📹 Processing recording with', this.audioChunks.length, 'chunks');
         
         if (this.audioChunks.length === 0) {
-            console.warn('📹 No recording chunks available');
             return null;
         }
         
         const videoBlob = new Blob(this.audioChunks, { type: 'video/webm' });
         const duration = this.recordingEndTime - this.recordingStartTime;
         
-        console.log('📹 Created video blob:', videoBlob.size, 'bytes, duration:', duration, 'ms');
         
         return {
             videoBlob,
