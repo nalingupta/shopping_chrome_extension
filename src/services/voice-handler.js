@@ -1,5 +1,7 @@
 import { VOICE_CONFIG, ERROR_MESSAGES, ERROR_RECOVERY } from '../utils/constants.js';
 import { ScreenRecorder } from './screen-recorder.js';
+import { PipecatStreamingService } from './pipecat-streaming.js';
+import { API_CONFIG } from '../config/api-keys.js';
 
 export class VoiceInputHandler {
     constructor() {
@@ -17,11 +19,15 @@ export class VoiceInputHandler {
         this.recognition = null;
         this.restartTimer = null;
         this.screenRecorder = new ScreenRecorder();
+        this.pipecatService = new PipecatStreamingService();
         this.voiceStartTime = null;
         this.voiceEndTime = null;
         this.inactivityTimer = null;
         this.INACTIVITY_TIMEOUT = 20 * 60 * 1000; // 20 minutes in milliseconds
         this.currentVideoData = null; // Store video data for current transcription
+        
+        // Pipecat Cloud configuration - Auto-configured with API keys
+        this.useRealTimeStreaming = API_CONFIG.ENABLE_REAL_TIME_STREAMING;
 
         // Set up callback for when screen sharing ends
         this.screenRecorder.onScreenSharingEnded = () => {
@@ -29,6 +35,10 @@ export class VoiceInputHandler {
         };
 
         this.initializeWebSpeechAPI();
+        this.setupPipeCatCallbacks();
+        
+        // Auto-initialize Pipecat Cloud with hardcoded API keys
+        this.initializePipecatWithApiKeys();
     }
 
     initializeWebSpeechAPI() {
@@ -59,6 +69,37 @@ export class VoiceInputHandler {
         this.recognition.onresult = (event) => this.handleResult(event);
         this.recognition.onerror = (event) => this.handleError(event);
         this.recognition.onend = () => this.handleEnd();
+    }
+
+    setupPipeCatCallbacks() {
+        // User speech recognition from Pipecat
+        this.pipecatService.setUserTranscriptCallback((data) => {
+            if (data.final && this.callbacks.transcription) {
+                this.callbacks.transcription(`🎯 You: ${data.text}`);
+            } else if (!data.final && this.callbacks.interim) {
+                this.callbacks.interim(data.text);
+            }
+        });
+
+        // AI responses from Gemini via Pipecat
+        this.pipecatService.setBotResponseCallback((data) => {
+            if (this.callbacks.transcription) {
+                this.callbacks.transcription(`🤖 AI Shopping Assistant:\n${data.text || data.response}`);
+            }
+        });
+
+        // Connection status updates
+        this.pipecatService.setConnectionStateCallback((state) => {
+            console.log('Pipecat connection state:', state);
+        });
+
+        // Error handling
+        this.pipecatService.setErrorCallback((error) => {
+            console.error('Pipecat error:', error);
+            if (this.callbacks.transcription) {
+                this.callbacks.transcription(`❌ Streaming error: ${error.message}`);
+            }
+        });
     }
 
     async handleStart() {
@@ -166,18 +207,67 @@ export class VoiceInputHandler {
         }
 
         try {
-            // Use sidepanel voice recognition
-            if (!this.state.isSupported) {
-                return this.reportError('not_supported');
+            // Check if real-time streaming is configured and available
+            if (this.useRealTimeStreaming && this.isRealTimeStreamingConfigured()) {
+                return await this.startRealTimeStreaming();
+            } else {
+                // Fallback to traditional voice recognition
+                return await this.startTraditionalVoiceRecognition();
             }
-
-            this.recognition.start();
-            this.state.isListening = true;
-            this.clearInactivityTimer();
-            return { success: true };
         } catch (error) {
             return this.reportError('initialization_failed', `Start failed: ${error.message}`);
         }
+    }
+
+    async startRealTimeStreaming() {
+        try {
+            console.log('🎤 Starting real-time streaming...');
+            
+            // Initialize Pipecat Cloud (no configuration needed)
+            console.log('⚙️ Initializing Pipecat Cloud...');
+            const initResult = await this.pipecatService.initialize();
+            if (!initResult.success) {
+                console.error('❌ Pipecat initialization failed:', initResult.error);
+                throw new Error(initResult.error);
+            }
+            console.log('✅ Pipecat Cloud initialized');
+
+            // Start real-time streaming with Pipecat Cloud
+            console.log('🚀 Starting Pipecat streaming...');
+            const streamResult = await this.pipecatService.startStreaming();
+            if (!streamResult.success) {
+                console.error('❌ Pipecat streaming failed:', streamResult.error);
+                throw new Error(streamResult.error);
+            }
+            console.log('✅ Pipecat streaming started');
+
+            this.state.isListening = true;
+            this.clearInactivityTimer();
+            
+            return { 
+                success: true, 
+                message: "Real-time AI streaming started with Pipecat Cloud",
+                mode: "streaming"
+            };
+        } catch (error) {
+            console.error('❌ Real-time streaming error:', error);
+            return this.reportError('streaming_failed', `Real-time streaming failed: ${error.message}`);
+        }
+    }
+
+    async startTraditionalVoiceRecognition() {
+        if (!this.state.isSupported) {
+            return this.reportError('not_supported');
+        }
+
+        this.recognition.start();
+        this.state.isListening = true;
+        this.clearInactivityTimer();
+        
+        return { 
+            success: true,
+            mode: "traditional"
+        };
     }
 
     async stopListening() {
@@ -190,6 +280,12 @@ export class VoiceInputHandler {
             this.clearRestart();
             this.startInactivityTimer();
             
+            // Stop real-time streaming if active
+            if (this.pipecatService.getConnectionStatus().isStreaming) {
+                await this.pipecatService.stopStreaming();
+            }
+            
+            // Stop traditional voice recognition if active
             if (this.recognition) {
                 this.recognition.stop();
             }
@@ -319,6 +415,7 @@ export class VoiceInputHandler {
         }
     }
 
+
     handleScreenSharingEnded() {
         
         // Clear any pending timers first
@@ -338,6 +435,62 @@ export class VoiceInputHandler {
         // Notify UI that voice input has been stopped due to screen sharing ending
         if (this.callbacks.transcription) {
             this.callbacks.transcription("🛑 Voice input stopped - screen sharing ended. Click the microphone to start again.");
+        }
+    }
+
+    // Pipecat configuration methods - now using hardcoded API keys
+    async configurePipecat(config) {
+        // Configuration is now hardcoded in API_CONFIG - no runtime configuration needed
+        console.log('Pipecat is pre-configured with hardcoded API keys');
+        return { success: true, message: 'Pipecat pre-configured with API keys' };
+    }
+
+    isRealTimeStreamingConfigured() {
+        return !!(API_CONFIG.GEMINI_API_KEY && API_CONFIG.DAILY_API_KEY && API_CONFIG.PIPECAT_JWT_TOKEN);
+    }
+
+    getRealTimeStreamingStatus() {
+        return {
+            configured: this.isRealTimeStreamingConfigured(),
+            enabled: this.useRealTimeStreaming,
+            connection: this.pipecatService.getConnectionStatus(),
+            config: {
+                hasGeminiKey: !!API_CONFIG.GEMINI_API_KEY,
+                hasDailyKey: !!API_CONFIG.DAILY_API_KEY,
+                hasPipecatKey: !!API_CONFIG.PIPECAT_JWT_TOKEN,
+                cloudApiUrl: API_CONFIG.PIPECAT_CLOUD_API_URL
+            }
+        };
+    }
+
+    enableRealTimeStreaming(enable = true) {
+        if (enable && !this.isRealTimeStreamingConfigured()) {
+            return { success: false, error: 'Real-time streaming not configured' };
+        }
+        
+        this.useRealTimeStreaming = enable;
+        return { success: true, message: `Real-time streaming ${enable ? 'enabled' : 'disabled'}` };
+    }
+
+    async initializePipecatWithApiKeys() {
+        try {
+            console.log('🚀 Auto-initializing Pipecat Cloud with API keys...');
+            
+            // Initialize Pipecat Cloud service (no configuration needed - uses hardcoded keys)
+            const initResult = await this.pipecatService.initialize();
+            
+            if (initResult.success) {
+                console.log('✅ Pipecat Cloud initialized successfully with API keys');
+                console.log('📡 Real-time streaming ready - no server deployment needed!');
+            } else {
+                console.error('❌ Pipecat Cloud initialization failed:', initResult.error);
+                // Fallback to traditional mode
+                this.useRealTimeStreaming = false;
+            }
+        } catch (error) {
+            console.error('❌ Pipecat Cloud auto-initialization error:', error);
+            // Fallback to traditional mode
+            this.useRealTimeStreaming = false;
         }
     }
 }

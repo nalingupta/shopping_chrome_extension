@@ -25,6 +25,8 @@ class ShoppingAssistant {
         this.debugToggle = DOMUtils.getElementById("debugToggle");
         this.headerStatus = DOMUtils.getElementById("headerStatus");
         this.screenRecordingIndicator = DOMUtils.getElementById("screenRecordingIndicator");
+        
+        // API configuration is now hardcoded - no modal elements needed
     }
 
     initializeState() {
@@ -91,8 +93,12 @@ class ShoppingAssistant {
             this.handleInterimTranscription(interimText);
         });
 
+        // PipeChat is now auto-configured with API keys
+
         // Start screen status updates
         this.startScreenStatusUpdates();
+        
+        // Real-time streaming is now auto-configured
     }
 
     startScreenStatusUpdates() {
@@ -149,6 +155,8 @@ class ShoppingAssistant {
         this.voiceButton.addEventListener("click", () => this.handleVoiceInput());
         this.clearChatButton.addEventListener("click", () => this.handleClearChat());
         this.debugToggle.addEventListener("click", () => this.handleDebugToggle());
+
+        // API configuration is hardcoded - no modal event listeners needed
 
         this.userInput.addEventListener("keydown", (e) => {
             if (e.key === "Enter" && !e.shiftKey) {
@@ -456,7 +464,19 @@ class ShoppingAssistant {
                 return;
             }
 
-            // Get video data from voice handler if available and debug mode is enabled
+            // Check if this is a Pipecat response (starts with 🤖 or 🎯)
+            if (transcription.startsWith("🤖") || transcription.startsWith("🎯")) {
+                // This is a Pipecat-processed response, just display it
+                this.addMessage(transcription, transcription.startsWith("🤖") ? "assistant" : "user");
+                
+                // Restore listening status if voice handler is still listening
+                if (this.voiceHandler.state.isListening) {
+                    this.showHeaderStatus("Listening...", "info");
+                }
+                return;
+            }
+
+            // This is traditional transcription - process through background script
             const videoData = this.debugMode ? this.voiceHandler.getCurrentVideoData() : null;
             this.addMessage(transcription, "user", false, videoData);
             this.processVoiceMessage(transcription);
@@ -555,6 +575,8 @@ class ShoppingAssistant {
             this.showHeaderStatus("Start a chat", "info");
         }
     }
+
+    // API configuration methods removed - now using hardcoded keys
 
 }
 
