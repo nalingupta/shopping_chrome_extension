@@ -1,5 +1,23 @@
 {
+  "name": "shopping-chrome-extension",
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "node watch.js",
+    "build": "echo 'No build process needed for this extension'",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "lint": "echo 'Linting completed - no linter configured'"
+  },
   "dependencies": {
     "canvas": "^3.1.2"
+  },
+  "devDependencies": {
+    "chokidar": "^3.5.3",
+    "jest": "^29.0.0"
+  },
+  "type": "module",
+  "jest": {
+    "testEnvironment": "jsdom",
+    "transform": {}
   }
 }

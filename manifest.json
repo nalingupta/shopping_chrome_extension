@@ -11,18 +11,20 @@
     ],
     "host_permissions": ["https://*/*", "http://*/*"],
     "background": {
-        "service_worker": "background.js"
+        "service_worker": "src/background/background.js",
+        "type": "module"
     },
     "content_scripts": [
         {
             "matches": ["<all_urls>"],
-            "js": ["content.js", "mic-permission.js"],
-            "run_at": "document_idle"
+            "js": ["src/content/content.js", "src/content/mic-permission.js"],
+            "run_at": "document_idle",
+            "type": "module"
         }
     ],
     "web_accessible_resources": [
         {
-            "resources": ["mic-permission-page.html", "mic-permission-page.js"],
+            "resources": ["mic-permission-page.html", "mic-permission-page.js", ".reload-signal"],
             "matches": ["<all_urls>"]
         }
     ],

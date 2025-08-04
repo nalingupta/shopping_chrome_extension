@@ -4,8 +4,7 @@ class ShoppingAssistant {
         this.userInput = document.getElementById("userInput");
         this.sendButton = document.getElementById("sendButton");
         this.voiceButton = document.getElementById("voiceButton");
-        this.siteUrl = document.getElementById("siteUrl");
-        this.suggestionsContainer = document.getElementById("suggestions");
+        this.clearChatButton = document.getElementById("clearChatButton");
 
         this.currentPageInfo = null;
         this.isProcessing = false;
@@ -25,8 +24,35 @@ class ShoppingAssistant {
 
         // Remove conversation end callback - not needed anymore
 
+        // Track that side panel is now open
+        this.trackSidePanelOpened();
+
         this.initializeEventListeners();
+        this.restoreState();
         this.getCurrentPageInfo();
+    }
+
+    trackSidePanelOpened() {
+        // Set panel state to open
+        chrome.runtime.sendMessage({ type: 'SIDE_PANEL_OPENED' }).catch(() => {});
+        chrome.storage.local.set({ sidePanelOpen: true }).catch(() => {});
+
+        // Track when the side panel is closed
+        const setSidePanelClosed = () => {
+            chrome.runtime.sendMessage({ type: 'SIDE_PANEL_CLOSED' }).catch(() => {});
+            chrome.storage.local.set({ sidePanelOpen: false }).catch(() => {});
+        };
+
+        window.addEventListener('beforeunload', setSidePanelClosed);
+        
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) {
+                setSidePanelClosed();
+            } else {
+                chrome.runtime.sendMessage({ type: 'SIDE_PANEL_OPENED' }).catch(() => {});
+                chrome.storage.local.set({ sidePanelOpen: true }).catch(() => {});
+            }
+        });
     }
 
     initializeEventListeners() {
@@ -38,6 +64,10 @@ class ShoppingAssistant {
             this.handleVoiceInput()
         );
 
+        this.clearChatButton.addEventListener("click", () =>
+            this.handleClearChat()
+        );
+
         this.userInput.addEventListener("keydown", (e) => {
             if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
@@ -47,14 +77,6 @@ class ShoppingAssistant {
 
         this.userInput.addEventListener("input", () => {
             this.adjustTextareaHeight();
-        });
-
-        this.suggestionsContainer.addEventListener("click", (e) => {
-            if (e.target.classList.contains("suggestion-chip")) {
-                const suggestion = e.target.dataset.suggestion;
-                this.userInput.value = suggestion;
-                this.handleSendMessage();
-            }
         });
 
         chrome.runtime.onMessage.addListener(
@@ -88,42 +110,13 @@ class ShoppingAssistant {
             }
         } catch (error) {
             console.error("Error getting current page info:", error);
-            this.siteUrl.textContent = "Unable to detect current page";
         }
     }
 
     updatePageInfo(pageInfo) {
         this.currentPageInfo = pageInfo;
-
-        if (pageInfo.siteInfo) {
-            const siteDisplay =
-                pageInfo.siteInfo.name === "General Site"
-                    ? pageInfo.domain
-                    : pageInfo.siteInfo.name;
-            this.siteUrl.textContent = siteDisplay;
-        } else {
-            this.siteUrl.textContent = pageInfo.domain || "Unknown site";
-        }
-
-        this.updateSuggestions(pageInfo);
     }
 
-    updateSuggestions(pageInfo) {
-        const suggestions =
-            this.suggestionsContainer.querySelectorAll(".suggestion-chip");
-
-        if (pageInfo.siteInfo?.type === "shopping") {
-            suggestions[0].dataset.suggestion = "Tell me about this product";
-            suggestions[1].dataset.suggestion = "Find similar products";
-            suggestions[2].dataset.suggestion = "Compare prices";
-            suggestions[3].dataset.suggestion = "Check reviews and ratings";
-        } else {
-            suggestions[0].dataset.suggestion = "Help me find products";
-            suggestions[1].dataset.suggestion = "Show me shopping sites";
-            suggestions[2].dataset.suggestion = "Find deals and discounts";
-            suggestions[3].dataset.suggestion = "Product recommendations";
-        }
-    }
 
     async handleSendMessage() {
         const message = this.userInput.value.trim();
@@ -182,6 +175,9 @@ class ShoppingAssistant {
     }
 
     addMessage(content, type, isLoading = false) {
+        // Hide welcome screen when first message is added
+        this.hideWelcomeScreen();
+        
         const messageDiv = document.createElement("div");
         messageDiv.className = `message ${type}-message`;
 
@@ -194,7 +190,58 @@ class ShoppingAssistant {
 
         this.scrollToBottom();
 
+        // Save state after adding message (unless it's a loading message)
+        if (!isLoading) {
+            this.saveState();
+        }
+
         return messageDiv;
+    }
+
+    hideWelcomeScreen() {
+        const welcomeScreen = document.getElementById("welcomeScreen");
+        if (welcomeScreen && !welcomeScreen.classList.contains("hidden")) {
+            welcomeScreen.classList.add("hidden");
+        }
+    }
+
+    showWelcomeScreen() {
+        const welcomeScreen = document.getElementById("welcomeScreen");
+        if (welcomeScreen && welcomeScreen.classList.contains("hidden")) {
+            welcomeScreen.classList.remove("hidden");
+        }
+    }
+
+    handleClearChat() {
+        // Clear all messages
+        this.messagesContainer.innerHTML = "";
+        
+        // Clear any interim text
+        this.clearInterimText();
+        
+        // Clear input field
+        this.userInput.value = "";
+        this.adjustTextareaHeight();
+        
+        // Stop voice input if active
+        if (this.voiceHandler.state.isListening) {
+            this.voiceButton.classList.remove("listening");
+            this.voiceButton.title = "Click to start voice conversation";
+            this.voiceHandler.stopListening();
+        }
+        
+        // Show welcome screen again
+        this.showWelcomeScreen();
+        
+        // Reset processing state
+        this.isProcessing = false;
+        this.sendButton.disabled = false;
+        
+        // Clear saved state
+        this.clearState();
+        
+        // Focus on input
+        this.userInput.focus();
     }
 
     removeMessage(messageElement) {
@@ -216,18 +263,12 @@ class ShoppingAssistant {
             
             // Clear any interim text
             this.clearInterimText();
-            
-            // Show stop message
-            this.addMessage("🔇 Voice conversation stopped. Click the microphone to start again.", "assistant");
         } else {
             // Start listening
             const result = await this.voiceHandler.startListening();
             if (result.success) {
                 this.voiceButton.classList.add("listening");
                 this.voiceButton.title = "Click to stop voice conversation";
-                
-                // Show start message
-                this.addMessage("🎙️ Voice conversation started! I'm listening - start speaking anytime.", "assistant");
             } else {
                 // Handle specific error types
                 let errorMessage = "";
@@ -337,20 +378,32 @@ class ShoppingAssistant {
     }
 
     showInterimText(text) {
-        // Remove any existing interim message
-        this.clearInterimText();
+        // Hide welcome screen as soon as voice transcription starts
+        this.hideWelcomeScreen();
+        
+        // Check if interim message already exists
+        let interimMessage = document.getElementById("interim-message");
+        
+        if (!interimMessage) {
+            // Create new interim message only if it doesn't exist
+            const messageDiv = document.createElement("div");
+            messageDiv.className = "message user-message interim-message";
+            messageDiv.id = "interim-message";
 
-        // Add interim message with live transcription styling
-        const messageDiv = document.createElement("div");
-        messageDiv.className = "message user-message interim-message";
-        messageDiv.id = "interim-message";
-
-        const contentDiv = document.createElement("div");
-        contentDiv.className = "message-content interim-content";
-        contentDiv.textContent = text;
-
-        messageDiv.appendChild(contentDiv);
-        this.messagesContainer.appendChild(messageDiv);
+            const contentDiv = document.createElement("div");
+            contentDiv.className = "message-content interim-content";
+            
+            messageDiv.appendChild(contentDiv);
+            this.messagesContainer.appendChild(messageDiv);
+            interimMessage = messageDiv;
+        }
+        
+        // Update the text content without recreating the element
+        const contentDiv = interimMessage.querySelector(".message-content");
+        if (contentDiv) {
+            contentDiv.textContent = text;
+        }
+        
         this.scrollToBottom();
     }
 
@@ -528,6 +581,78 @@ class ShoppingAssistant {
         } catch (error) {
             console.error("Error adding retry button:", error);
             // Fallback: just show the error message without the button
+        }
+    }
+
+    // State persistence methods
+    saveState() {
+        try {
+            const messages = Array.from(this.messagesContainer.querySelectorAll('.message:not(.interim-message)'))
+                .map(msg => ({
+                    content: msg.querySelector('.message-content').textContent,
+                    type: msg.classList.contains('user-message') ? 'user' : 'assistant'
+                }));
+            
+            const welcomeScreen = document.getElementById("welcomeScreen");
+            const isWelcomeVisible = !welcomeScreen || !welcomeScreen.classList.contains("hidden");
+            
+            const state = {
+                messages,
+                isWelcomeVisible,
+                timestamp: Date.now()
+            };
+            
+            localStorage.setItem('shoppingAssistant_chatState', JSON.stringify(state));
+        } catch (error) {
+            console.warn('Failed to save chat state:', error);
+        }
+    }
+
+    restoreState() {
+        try {
+            const savedState = localStorage.getItem('shoppingAssistant_chatState');
+            if (!savedState) return;
+
+            const state = JSON.parse(savedState);
+            
+            // Don't restore if state is older than 24 hours
+            if (Date.now() - state.timestamp > 24 * 60 * 60 * 1000) {
+                this.clearState();
+                return;
+            }
+
+            // Restore messages
+            if (state.messages && state.messages.length > 0) {
+                state.messages.forEach(msg => {
+                    const messageDiv = document.createElement("div");
+                    messageDiv.className = `message ${msg.type}-message`;
+
+                    const contentDiv = document.createElement("div");
+                    contentDiv.className = "message-content";
+                    contentDiv.textContent = msg.content;
+
+                    messageDiv.appendChild(contentDiv);
+                    this.messagesContainer.appendChild(messageDiv);
+                });
+
+                // Hide welcome screen if we have messages
+                this.hideWelcomeScreen();
+                this.scrollToBottom();
+            } else if (!state.isWelcomeVisible) {
+                // Hide welcome screen even if no messages
+                this.hideWelcomeScreen();
+            }
+        } catch (error) {
+            console.warn('Failed to restore chat state:', error);
+            this.clearState();
+        }
+    }
+
+    clearState() {
+        try {
+            localStorage.removeItem('shoppingAssistant_chatState');
+        } catch (error) {
+            console.warn('Failed to clear chat state:', error);
         }
     }
 }

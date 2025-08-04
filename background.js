@@ -3,6 +3,7 @@ class BackgroundService {
     constructor() {
         this.initializeExtension();
         this.setupEventListeners();
+        this.setupHotReload();
     }
 
     initializeExtension() {
@@ -12,17 +13,41 @@ class BackgroundService {
 
         chrome.action.onClicked.addListener(async (tab) => {
             await chrome.sidePanel.open({ tabId: tab.id });
+            // Track that side panel is now open
+            await chrome.storage.local.set({ sidePanelOpen: true });
         });
+
+        // Restore side panel state after hot reload
+        this.restoreStateAfterReload();
+    }
+
+    async restoreStateAfterReload() {
+        setTimeout(async () => {
+            try {
+                const result = await chrome.storage.local.get(['hotReloadState', 'sidePanelOpen']);
+                const { hotReloadState, sidePanelOpen } = result;
+                
+                if (hotReloadState?.shouldRestore && sidePanelOpen) {
+                    const timeSinceReload = Date.now() - hotReloadState.timestamp;
+                    
+                    if (timeSinceReload < 10000) {
+                        await this.showReloadNotification();
+                    }
+                    
+                    await chrome.storage.local.remove(['hotReloadState']);
+                }
+            } catch (error) {
+                console.error('State restoration error:', error);
+            }
+        }, 500);
     }
 
     setupEventListeners() {
         chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-            console.log('Background received:', request.type);
-            
             const handler = this.getMessageHandler(request.type);
             if (handler) {
                 handler(request, sender, sendResponse);
-                return true; // Indicates async response
+                return true;
             }
         });
     }
@@ -32,7 +57,9 @@ class BackgroundService {
             'PAGE_INFO_UPDATE': this.handlePageInfoUpdate.bind(this),
             'GET_CURRENT_TAB_INFO': this.handleGetCurrentTabInfo.bind(this),
             'PROCESS_USER_QUERY': this.handleProcessUserQuery.bind(this),
-            'REQUEST_MIC_PERMISSION': this.handleMicPermissionRequest.bind(this)
+            'REQUEST_MIC_PERMISSION': this.handleMicPermissionRequest.bind(this),
+            'SIDE_PANEL_OPENED': this.handleSidePanelOpened.bind(this),
+            'SIDE_PANEL_CLOSED': this.handleSidePanelClosed.bind(this)
         };
         
         return handlers[type] || null;
@@ -96,6 +123,24 @@ class BackgroundService {
         }
     }
 
+    async handleSidePanelOpened(request, sender, sendResponse) {
+        try {
+            await chrome.storage.local.set({ sidePanelOpen: true });
+            sendResponse({ success: true });
+        } catch (error) {
+            sendResponse({ success: false });
+        }
+    }
+
+    async handleSidePanelClosed(request, sender, sendResponse) {
+        try {
+            await chrome.storage.local.set({ sidePanelOpen: false });
+            sendResponse({ success: true });
+        } catch (error) {
+            sendResponse({ success: false });
+        }
+    }
+
     async injectContentScript(tabId, files) {
         try {
             await chrome.scripting.executeScript({
@@ -105,6 +150,51 @@ class BackgroundService {
         } catch (error) {
             // Script might already be injected
             console.log('Content script injection:', error.message);
+        }
+    }
+
+    setupHotReload() {
+        const startTime = Date.now();
+        
+        setInterval(async () => {
+            try {
+                const response = await fetch(chrome.runtime.getURL('.reload-signal'));
+                const data = await response.json();
+                
+                if (data.timestamp > startTime) {
+                    await this.handleHotReload();
+                }
+            } catch (error) {
+                // Ignore - reload signal file might not exist
+            }
+        }, 1000);
+    }
+
+    async handleHotReload() {
+        try {
+            await chrome.storage.local.set({
+                hotReloadState: {
+                    shouldRestore: true,
+                    timestamp: Date.now()
+                }
+            });
+            
+            chrome.runtime.reload();
+        } catch (error) {
+            console.error('Hot reload error:', error);
+        }
+    }
+
+    async showReloadNotification() {
+        try {
+            await chrome.action.setBadgeText({ text: "↻" });
+            await chrome.action.setBadgeBackgroundColor({ color: "#10b981" });
+            
+            setTimeout(() => {
+                chrome.action.setBadgeText({ text: "" }).catch(() => {});
+            }, 3000);
+        } catch (error) {
+            console.error('Notification error:', error);
         }
     }
 }

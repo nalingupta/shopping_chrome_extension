@@ -9,30 +9,63 @@
 <body>
     <div class="container">
         <header class="header">
-            <h1>🛒 Shopping Assistant</h1>
-            <div class="current-site" id="currentSite">
-                <span class="site-indicator">📍</span>
-                <span id="siteUrl">Detecting current page...</span>
-            </div>
+            <h1>Shopping Assistant</h1>
+            <button id="clearChatButton" class="clear-chat-button" title="Start new conversation">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                    <line x1="12" y1="8" x2="12" y2="16"></line>
+                    <line x1="8" y1="12" x2="16" y2="12"></line>
+                </svg>
+            </button>
         </header>
 
+        <!-- Chat container takes most of the space -->
         <div class="chat-container">
             <div class="messages" id="messages">
-                <div class="message assistant-message">
-                    <div class="message-content">
-                        Hi! I'm your shopping assistant. Ask me anything about products, prices, or recommendations based on the current page you're viewing.
-                        
-                        <br><br>
-                        <strong>🎤 Voice Input:</strong> Click the big microphone button once to start a voice conversation, click again to stop.
+                <!-- No initial greeting message -->
+            </div>
+            
+            <!-- Welcome screen for empty state -->
+            <div class="welcome-screen" id="welcomeScreen">
+                <div class="welcome-content">
+                    <div class="welcome-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                            <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+                        </svg>
+                    </div>
+                    <h2>AI Shopping Assistant</h2>
+                    
+                    <div class="feature-list">
+                        <div class="feature-item">
+                            <span class="feature-icon">🛍️</span>
+                            <span>Product Analysis</span>
+                        </div>
+                        <div class="feature-item">
+                            <span class="feature-icon">💰</span>
+                            <span>Price Comparisons</span>
+                        </div>
+                        <div class="feature-item">
+                            <span class="feature-icon">⭐</span>
+                            <span>Review Insights</span>
+                        </div>
+                        <div class="feature-item">
+                            <span class="feature-icon">🎯</span>
+                            <span>Smart Recommendations</span>
+                        </div>
+                    </div>
+                    
+                    <div class="start-hint">
+                        <p>Click the red microphone to start talking or type your question below</p>
                     </div>
                 </div>
             </div>
         </div>
 
-        <!-- Voice Button - Centered above input -->
-        <div class="voice-container">
-            <div class="voice-button-wrapper">
-                <button id="voiceButton" class="voice-button-clean" title="Click to start voice conversation">
+        <!-- Voice and Input controls at the bottom -->
+        <div class="bottom-controls">
+            <!-- Voice Button - Prominent position -->
+            <div class="voice-container">
+                <button id="voiceButton" class="voice-button" title="Click to start voice conversation">
                     <svg class="mic-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
                         <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
@@ -46,30 +79,26 @@
                     <div class="wave wave-3"></div>
                 </div>
             </div>
-        </div>
-
-        <div class="input-container">
-            <div class="input-wrapper">
-                <textarea 
-                    id="userInput" 
-                    placeholder="Or type your message here..."
-                    rows="2"
-                ></textarea>
-                <button id="sendButton" class="send-button">
-                    <span class="send-icon">➤</span>
-                </button>
+            
+            <!-- Text Input below voice button -->
+            <div class="input-container">
+                <div class="input-wrapper">
+                    <textarea 
+                        id="userInput" 
+                        placeholder="Type your message here..."
+                        rows="1"
+                    ></textarea>
+                    <button id="sendButton" class="send-button">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="22" y1="2" x2="11" y2="13"></line>
+                            <polygon points="22,2 15,22 11,13 2,9"></polygon>
+                        </svg>
+                    </button>
+                </div>
             </div>
-        </div>
-
-        <div class="suggestions" id="suggestions">
-            <div class="suggestion-chip" data-suggestion="Tell me about this product">📦 About this product</div>
-            <div class="suggestion-chip" data-suggestion="Find similar products">🔍 Find similar</div>
-            <div class="suggestion-chip" data-suggestion="Compare prices">💰 Compare prices</div>
-            <div class="suggestion-chip" data-suggestion="Check reviews">⭐ Check reviews</div>
         </div>
     </div>
 
-    <script src="voice-handler.js"></script>
-    <script src="sidepanel.js"></script>
+    <script type="module" src="src/sidepanel/shopping-assistant.js"></script>
 </body>
 </html>
