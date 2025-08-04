@@ -97,27 +97,47 @@ export class PipecatStreamingService {
         
         try {
             console.log('🌟 Starting Pipecat Cloud session...');
+            console.log('🔍 DEBUG: Checking if we get to each step...');
             
             // Step 1: Start a Pipecat Cloud agent session
-            console.log('🚀 Starting agent session...');
+            console.log('🚀 Step 1: Starting agent session...');
             const sessionResponse = await this.startPipecatSession();
             if (!sessionResponse.success) {
+                console.error('💥 Step 1 FAILED:', sessionResponse.error);
                 throw new Error(sessionResponse.error);
             }
+            console.log('✅ Step 1 SUCCESS: Agent session started');
             
-            // Step 3: Get screen sharing permission
-            console.log('🖥️ Setting up screen sharing...');
-            await this.setupScreenSharing();
+            // Step 2: Get screen sharing permission
+            console.log('🖥️ Step 2: Setting up screen sharing...');
+            try {
+                await this.setupScreenSharing();
+                console.log('✅ Step 2 SUCCESS: Screen sharing setup complete');
+            } catch (screenError) {
+                console.error('💥 Step 2 FAILED:', screenError.message);
+                console.log('⚠️ CONTINUING WITHOUT SCREEN SHARING - bot will give generic responses');
+                // Don't throw here - let it continue with audio only
+            }
             
-            // Step 4: Connect to Daily room created by Pipecat
-            console.log('📞 Connecting to Daily room...');
+            // Step 3: Connect to Daily room created by Pipecat
+            console.log('📞 Step 3: Connecting to Daily room...');
             await this.connectToDaily(sessionResponse.roomUrl, sessionResponse.dailyToken);
+            console.log('✅ Step 3 SUCCESS: Connected to Daily room');
             
-            // Step 5: Start screen + audio streaming
-            console.log('📺 Starting screen + audio stream...');
-            await this.startScreenStreamToDaily();
+            // Step 4: Start screen + audio streaming
+            console.log('📺 Step 4: Starting screen + audio stream...');
+            try {
+                await this.startScreenStreamToDaily();
+                console.log('✅ Step 4 SUCCESS: Multimodal streaming active (screen + audio)');
+            } catch (streamError) {
+                console.error('💥 Step 4 FAILED:', streamError.message);
+                console.log('⚠️ AUDIO-ONLY MODE - enabling audio without screen');
+                // Try audio-only mode
+                await this.startAudioOnlyMode();
+            }
             
             this.isStreaming = true;
+            console.log('🎉 STREAMING STARTED - Bot should now respond to your voice!');
             
             return { success: true, message: 'Real-time streaming started with Pipecat Cloud' };
         } catch (error) {
@@ -410,6 +430,40 @@ export class PipecatStreamingService {
         } catch (error) {
             console.error('❌ Failed to start screen stream:', error);
             throw new Error(`Failed to start screen stream: ${error.message}`);
+        }
+    }
+
+    async startAudioOnlyMode() {
+        try {
+            console.log('🎤 Starting audio-only mode...');
+            
+            // Get microphone audio only
+            const audioStream = await navigator.mediaDevices.getUserMedia({
+                audio: {
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    sampleRate: 16000
+                }
+            });
+            
+            console.log('✅ Audio stream obtained for audio-only mode');
+            
+            // Enable audio in Daily
+            await this.dailyCallObject.setLocalAudio(true);
+            await this.dailyCallObject.setLocalVideo(false); // No video in audio-only mode
+            
+            // Set audio stream
+            await this.dailyCallObject.updateInputSettings({
+                audio: {
+                    mediaStream: audioStream
+                }
+            });
+            
+            console.log('✅ Audio-only mode active - bot can hear you but cannot see screen');
+            return true;
+        } catch (error) {
+            console.error('❌ Audio-only mode failed:', error);
+            throw error;
         }
     }
 
