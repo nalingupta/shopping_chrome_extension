@@ -24,7 +24,7 @@
     ],
     "web_accessible_resources": [
         {
-            "resources": ["mic-permission-page.html", "mic-permission-page.js", ".reload-signal"],
+            "resources": [".reload-signal"],
             "matches": ["<all_urls>"]
         }
     ],

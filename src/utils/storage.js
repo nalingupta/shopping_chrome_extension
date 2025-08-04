@@ -4,7 +4,6 @@ export class StorageManager {
         try {
             await chrome.storage.local.set({ [key]: value });
         } catch (error) {
-            console.error(`Failed to save ${key}:`, error);
         }
     }
 
@@ -13,7 +12,6 @@ export class StorageManager {
             const result = await chrome.storage.local.get([key]);
             return result[key];
         } catch (error) {
-            console.error(`Failed to get ${key}:`, error);
             return null;
         }
     }
@@ -22,7 +20,6 @@ export class StorageManager {
         try {
             await chrome.storage.local.remove([key]);
         } catch (error) {
-            console.error(`Failed to remove ${key}:`, error);
         }
     }
 
@@ -30,7 +27,6 @@ export class StorageManager {
         try {
             await chrome.storage.local.clear();
         } catch (error) {
-            console.error('Failed to clear storage:', error);
         }
     }
 }
@@ -52,7 +48,6 @@ export class ChatStateManager {
             
             localStorage.setItem(this.STATE_KEY, JSON.stringify(state));
         } catch (error) {
-            console.warn('Failed to save chat state:', error);
         }
     }
 
@@ -71,7 +66,6 @@ export class ChatStateManager {
 
             return state;
         } catch (error) {
-            console.warn('Failed to restore chat state:', error);
             this.clearState();
             return null;
         }
@@ -81,7 +75,6 @@ export class ChatStateManager {
         try {
             localStorage.removeItem(this.STATE_KEY);
         } catch (error) {
-            console.warn('Failed to clear chat state:', error);
         }
     }
 }

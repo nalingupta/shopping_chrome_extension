@@ -39,7 +39,6 @@ class BackgroundService {
                     await StorageManager.remove('hotReloadState');
                 }
             } catch (error) {
-                console.error('State restoration error:', error);
             }
         }, 500);
     }
@@ -100,7 +99,6 @@ class BackgroundService {
             const response = await ShoppingAssistant.processQuery(request.data);
             sendResponse(response);
         } catch (error) {
-            console.error('Query processing error:', error);
             sendResponse({ 
                 success: false,
                 error: error.message,
@@ -114,7 +112,6 @@ class BackgroundService {
             const result = await MicrophoneService.request();
             sendResponse(result);
         } catch (error) {
-            console.error('Permission request error:', error);
             sendResponse({
                 success: false,
                 error: 'permission_request_failed',
@@ -148,7 +145,6 @@ class BackgroundService {
                 files
             });
         } catch (error) {
-            console.log('Content script injection:', error.message);
         }
     }
 
@@ -178,7 +174,6 @@ class BackgroundService {
             
             chrome.runtime.reload();
         } catch (error) {
-            console.error('Hot reload error:', error);
         }
     }
 
@@ -191,7 +186,6 @@ class BackgroundService {
                 chrome.action.setBadgeText({ text: "" }).catch(() => {});
             }, 3000);
         } catch (error) {
-            console.error('Notification error:', error);
         }
     }
 }

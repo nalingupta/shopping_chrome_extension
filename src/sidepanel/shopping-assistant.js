@@ -97,7 +97,6 @@ class ShoppingAssistant {
                 this.updatePageInfo(response);
             }
         } catch (error) {
-            console.error("Error getting current page info:", error);
         }
     }
 
@@ -135,7 +134,6 @@ class ShoppingAssistant {
                 );
             }
         } catch (error) {
-            console.error("Error processing message:", error);
             this.removeMessage(loadingMessage);
             this.addMessage("Sorry, I encountered an error. Please try again.", "assistant");
         } finally {

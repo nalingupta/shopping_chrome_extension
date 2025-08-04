@@ -8,9 +8,6 @@
     "test:watch": "jest --watch",
     "lint": "echo 'Linting completed - no linter configured'"
   },
-  "dependencies": {
-    "canvas": "^3.1.2"
-  },
   "devDependencies": {
     "chokidar": "^3.5.3",
     "jest": "^29.0.0"

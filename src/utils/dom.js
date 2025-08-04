@@ -10,7 +10,6 @@ export class DOMUtils {
     static getElementById(id) {
         const element = document.getElementById(id);
         if (!element) {
-            console.warn(`Element with id '${id}' not found`);
         }
         return element;
     }
@@ -18,7 +17,6 @@ export class DOMUtils {
     static querySelector(selector) {
         const element = document.querySelector(selector);
         if (!element) {
-            console.warn(`Element with selector '${selector}' not found`);
         }
         return element;
     }

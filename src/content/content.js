@@ -35,7 +35,7 @@ class ContentScript {
                 sendResponse(pageInfo);
             }
             
-            if (request.type === 'REQUEST_MICROPHONE_ACCESS') {
+            if (request.type === MESSAGE_TYPES.REQUEST_MIC_PERMISSION) {
                 this.handleMicrophoneRequest(sendResponse);
                 return true;
             }
@@ -126,7 +126,6 @@ class ContentScript {
             });
             
         } catch (error) {
-            console.error('Microphone request error:', error);
             
             const errorType = this.getErrorType(error);
             

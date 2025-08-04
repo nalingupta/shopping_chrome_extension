@@ -23,7 +23,6 @@ export class VoiceInputHandler {
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
         
         if (!SpeechRecognition) {
-            console.warn('Web Speech API not supported');
             return;
         }
 
@@ -33,7 +32,6 @@ export class VoiceInputHandler {
         this.configureRecognition();
         this.setupEventHandlers();
         
-        console.log('Web Speech API initialized');
     }
 
     configureRecognition() {
@@ -53,7 +51,6 @@ export class VoiceInputHandler {
     }
 
     handleStart() {
-        console.log('Speech recognition started');
         this.state.isListening = true;
     }
 
@@ -61,7 +58,6 @@ export class VoiceInputHandler {
         const { finalTranscript, interimTranscript } = this.processResults(event);
         
         if (finalTranscript && this.callbacks.transcription) {
-            console.log('Final transcript:', finalTranscript);
             this.callbacks.transcription(finalTranscript.trim());
             
             if (this.state.isListening && !this.state.isProcessingResponse) {
@@ -80,7 +76,6 @@ export class VoiceInputHandler {
     }
 
     handleEnd() {
-        console.log('Speech recognition ended');
         
         if (this.state.isListening && !this.state.isProcessingResponse) {
             this.scheduleRestart();
@@ -120,7 +115,6 @@ export class VoiceInputHandler {
 
     reportError(errorType, context = '') {
         const errorMessage = this.getErrorMessage(errorType);
-        console.error(`Voice Handler Error [${errorType}]:`, context || errorMessage);
         
         if (this.callbacks.transcription) {
             this.callbacks.transcription(errorMessage);
@@ -131,7 +125,6 @@ export class VoiceInputHandler {
 
     async requestMicrophonePermission() {
         try {
-            console.log('Requesting microphone permission...');
             
             const response = await Promise.race([
                 chrome.runtime.sendMessage({ type: "REQUEST_MIC_PERMISSION" }),
@@ -141,9 +134,7 @@ export class VoiceInputHandler {
             ]);
             
             if (response?.success) {
-                console.log('Microphone permission granted');
             } else {
-                console.warn('Microphone permission denied:', response?.error);
             }
             
             return response;
@@ -168,7 +159,6 @@ export class VoiceInputHandler {
         try {
             this.recognition.start();
             this.state.isListening = true;
-            console.log('Voice recognition started successfully');
             return { success: true };
         } catch (error) {
             return this.reportError('initialization_failed', `Start failed: ${error.message}`);
@@ -188,7 +178,6 @@ export class VoiceInputHandler {
                 this.recognition.stop();
             }
             
-            console.log('Voice recognition stopped successfully');
             return { success: true };
         } catch (error) {
             this.state.isListening = false;
@@ -217,11 +206,9 @@ export class VoiceInputHandler {
         
         this.restartTimer = setTimeout(() => {
             if (this.state.isListening && !this.state.isProcessingResponse) {
-                console.log('Auto-restarting speech recognition');
                 try {
                     this.recognition.start();
                 } catch (error) {
-                    console.error('Restart failed:', error);
                 }
             }
         }, VOICE_CONFIG.RESTART_DELAY);

@@ -6,7 +6,6 @@ export class ShoppingAssistant {
             const response = await this.generateResponse(query, pageInfo);
             return { success: true, response };
         } catch (error) {
-            console.error('Query processing error:', error);
             return {
                 success: false,
                 response: "I'm sorry, I encountered an error while processing your request. Please try again."
