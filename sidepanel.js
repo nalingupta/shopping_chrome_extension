@@ -208,7 +208,7 @@ class ShoppingAssistant {
     }
 
     async handleVoiceInput() {
-        if (this.voiceHandler.isListening) {
+        if (this.voiceHandler.state.isListening) {
             // Stop listening
             this.voiceButton.classList.remove("listening");
             this.voiceButton.title = "Click to start voice conversation";
@@ -330,7 +330,7 @@ class ShoppingAssistant {
     }
 
     handleInterimTranscription(interimText) {
-        if (interimText && this.voiceHandler.isListening) {
+        if (interimText && this.voiceHandler.state.isListening) {
             // Show interim text in a special way
             this.showInterimText(interimText);
         }
@@ -340,16 +340,14 @@ class ShoppingAssistant {
         // Remove any existing interim message
         this.clearInterimText();
 
-        // Add interim message
+        // Add interim message with live transcription styling
         const messageDiv = document.createElement("div");
         messageDiv.className = "message user-message interim-message";
         messageDiv.id = "interim-message";
 
         const contentDiv = document.createElement("div");
         contentDiv.className = "message-content interim-content";
-        contentDiv.textContent = text + " ...";
-        contentDiv.style.opacity = "0.7";
-        contentDiv.style.fontStyle = "italic";
+        contentDiv.textContent = text;
 
         messageDiv.appendChild(contentDiv);
         this.messagesContainer.appendChild(messageDiv);
