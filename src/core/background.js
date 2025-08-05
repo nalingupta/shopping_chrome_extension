@@ -74,7 +74,6 @@ class BackgroundService {
             [MESSAGE_TYPES.SIDE_PANEL_OPENED]: this.handleSidePanelOpened.bind(this),
             [MESSAGE_TYPES.SIDE_PANEL_CLOSED]: this.handleSidePanelClosed.bind(this),
             [MESSAGE_TYPES.CAPTURE_TAB]: this.handleCaptureTab.bind(this),
-            [MESSAGE_TYPES.START_TAB_CAPTURE]: this.handleStartTabCapture.bind(this),
             [MESSAGE_TYPES.STOP_TAB_CAPTURE]: this.handleStopTabCapture.bind(this)
         };
         
@@ -275,56 +274,9 @@ class BackgroundService {
         }
     }
 
-    async handleStartTabCapture(request, sender, sendResponse) {
-        try {
-            // Try to start tab capture stream
-            const stream = await new Promise((resolve, reject) => {
-                chrome.tabCapture.capture(
-                    {
-                        video: true,
-                        audio: false,
-                        videoConstraints: {
-                            mandatory: {
-                                maxWidth: 1920,
-                                maxHeight: 1080,
-                                maxFrameRate: 15
-                            }
-                        }
-                    },
-                    (stream) => {
-                        if (chrome.runtime.lastError) {
-                            reject(new Error(chrome.runtime.lastError.message));
-                        } else if (stream) {
-                            resolve(stream);
-                        } else {
-                            reject(new Error('No stream returned'));
-                        }
-                    }
-                );
-            });
-            
-            this.tabCaptureStream = stream;
-            this.tabCaptureActive = true;
-            
-            sendResponse({ success: true, hasStream: true });
-        } catch (error) {
-            // Fallback to static capture
-            sendResponse({ success: true, hasStream: false, fallback: true });
-        }
-    }
-
     async handleStopTabCapture(request, sender, sendResponse) {
-        try {
-            if (this.tabCaptureStream) {
-                this.tabCaptureStream.getTracks().forEach(track => track.stop());
-                this.tabCaptureStream = null;
-            }
-            this.tabCaptureActive = false;
-            
-            sendResponse({ success: true });
-        } catch (error) {
-            sendResponse({ success: false, error: error.message });
-        }
+        // No-op since we're using static capture now
+        sendResponse({ success: true });
     }
 
     async showReloadNotification() {

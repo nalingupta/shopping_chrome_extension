@@ -251,6 +251,7 @@ export class ShoppingAssistant {
         try {
             const result = await this.audioHandler.startListening();
             if (result.success) {
+                this.hideWelcomeScreen();
                 this.elements.voiceButton.classList.add("listening");
                 this.elements.voiceButton.title = "";
                 this.uiState.setSpeechState("listening");
