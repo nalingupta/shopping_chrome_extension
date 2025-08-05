@@ -4,7 +4,7 @@
 The Chrome extension uses **direct integration with Gemini Live API** for voice input:
 - **Primary**: Direct WebSocket connection to Gemini Live API
 - **Audio Processing**: Native AudioWorkletNode/ScriptProcessorNode for PCM conversion
-- **Screen Capture**: Chrome desktopCapture API for real-time video streaming
+- **Screen Capture**: Chrome tabCapture API for browser-only video streaming
 - **No external dependencies** - Pure Gemini integration
 
 ## Architecture Components
@@ -58,7 +58,7 @@ const processor = this.audioContext.createScriptProcessor(4096, 1, 1);
 ### 4. Video Processing Pipeline
 ```javascript
 // Screen capture via Chrome API
-const streamId = await chrome.desktopCapture.chooseDesktopMedia(['screen', 'window', 'tab']);
+const stream = await chrome.tabCapture.capture({video: true, audio: false});
 const screenStream = await navigator.mediaDevices.getUserMedia({...});
 
 // Frame extraction

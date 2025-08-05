@@ -5,12 +5,13 @@
     "description": "AI-powered shopping assistant that helps users with product recommendations and price comparisons",
     "permissions": [
         "activeTab",
+        "tabs",
+        "tabCapture",
         "storage",
         "sidePanel",
-        "scripting",
-        "desktopCapture"
+        "scripting"
     ],
-    "host_permissions": ["https://*/*", "http://*/*"],
+    "host_permissions": ["<all_urls>"],
     "background": {
         "service_worker": "src/core/background.js",
         "type": "module"

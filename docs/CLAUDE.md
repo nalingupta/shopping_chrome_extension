@@ -5,7 +5,7 @@
 2. **Maintain clean codebase** - No console debugging statements in production code
 3. **Refactor as you go** - Don't accumulate technical debt
 4. **No garbage code** - Every line should have a purpose
-5. **Focus on desktop capture** - Use chrome.desktopCapture API, no offscreen documents
+5. **Focus on tab capture** - Use chrome.tabCapture API for browser-only capture without OS prompts
 
 ## Code Structure Requirements
 - **Modular Architecture**: Separate concerns into distinct modules/files
@@ -16,7 +16,7 @@
 ## Development Requirements
 - Remove debugging console statements from production code
 - Test functionality manually in Chrome extension environment
-- Ensure desktop capture works properly with sidepanel
+- Ensure tab capture works properly with sidepanel
 - Verify voice input integrates correctly with screen recording
 
 ## Chrome Extension Specific
@@ -30,7 +30,7 @@
 2. Remove any debugging console statements
 3. Test in actual Chrome extension environment
 4. Refactor any code smells
-5. Verify desktop capture and sidepanel functionality
+5. Verify tab capture and sidepanel functionality
 6. **IMPORTANT**: Run `git commit` at good milestones to track progress
 
 ## Git Commit Strategy
