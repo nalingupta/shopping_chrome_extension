@@ -15,6 +15,13 @@ export class AudioHandler {
             status: null
         };
         
+        // Gemini-first speech segmentation
+        this.speechBuffer = {
+            interimText: '',
+            lastWebSpeechUpdate: 0,
+            isGeminiProcessing: false
+        };
+        
         this.geminiAPI = new GeminiLiveAPI();
         this.screenCapture = new ScreenCapture();
         this.speechRecognition = null;
@@ -42,9 +49,7 @@ export class AudioHandler {
 
     setupGeminiCallbacks() {
         this.geminiAPI.setBotResponseCallback((data) => {
-            if (data.text && this.callbacks.botResponse) {
-                this.callbacks.botResponse(data);
-            }
+            this.handleGeminiResponse(data);
         });
         
         this.geminiAPI.setConnectionStateCallback((state) => {
@@ -63,6 +68,46 @@ export class AudioHandler {
                 this.callbacks.status('Connection error', 'error', 3000);
             }
         });
+    }
+
+    handleGeminiResponse(data) {
+        if (data.text) {
+            // Gemini has processed a complete utterance
+            this.speechBuffer.isGeminiProcessing = false;
+            
+            // Create final user message from current interim text
+            if (this.speechBuffer.interimText.trim() && this.callbacks.transcription) {
+                this.callbacks.transcription(this.speechBuffer.interimText.trim());
+            }
+            
+            // Clear interim text since Gemini has processed it
+            this.speechBuffer.interimText = '';
+            
+            // Send bot response
+            if (this.callbacks.botResponse) {
+                this.callbacks.botResponse(data);
+            }
+        }
+    }
+
+    // Fallback method to handle orphaned interim text
+    checkForOrphanedSpeech() {
+        const now = Date.now();
+        const timeSinceLastUpdate = now - this.speechBuffer.lastWebSpeechUpdate;
+        
+        // If we have interim text that hasn't been processed by Gemini for 3 seconds, create a message
+        if (this.speechBuffer.interimText.trim() && 
+            !this.speechBuffer.isGeminiProcessing && 
+            timeSinceLastUpdate > 3000) {
+            
+            console.log('Processing orphaned speech:', this.speechBuffer.interimText);
+            
+            if (this.callbacks.transcription) {
+                this.callbacks.transcription(this.speechBuffer.interimText.trim());
+            }
+            
+            this.speechBuffer.interimText = '';
+        }
     }
 
     async startListening() {
@@ -115,6 +160,19 @@ export class AudioHandler {
         try {
             this.state.isListening = false;
             
+            // Process any remaining interim text before stopping
+            if (this.speechBuffer.interimText.trim() && this.callbacks.transcription) {
+                console.log('Processing final interim text on stop:', this.speechBuffer.interimText);
+                this.callbacks.transcription(this.speechBuffer.interimText.trim());
+            }
+            
+            // Clear speech buffer
+            this.speechBuffer = {
+                interimText: '',
+                lastWebSpeechUpdate: 0,
+                isGeminiProcessing: false
+            };
+            
             // Stop local speech recognition
             if (this.speechRecognition) {
                 try {
@@ -154,7 +212,14 @@ export class AudioHandler {
                 audio: {
                     echoCancellation: true,
                     noiseSuppression: true,
-                    sampleRate: 16000
+                    autoGainControl: true,
+                    sampleRate: 16000,
+                    // More aggressive echo cancellation
+                    googEchoCancellation: true,
+                    googAutoGainControl: true,
+                    googNoiseSuppression: true,
+                    googHighpassFilter: true,
+                    googTypingNoiseDetection: true
                 }
             });
             
@@ -277,7 +342,7 @@ export class AudioHandler {
         
         this.audioSource = this.geminiAPI.audioContext.createMediaStreamSource(this.audioStream);
         this.audioSource.connect(this.audioWorkletNode);
-        this.audioWorkletNode.connect(this.geminiAPI.audioContext.destination);
+        // DO NOT connect to destination to avoid feedback loop
     }
 
     startScriptProcessorFallback() {
@@ -308,7 +373,7 @@ export class AudioHandler {
         };
         
         this.audioSource.connect(this.audioProcessor);
-        this.audioProcessor.connect(this.geminiAPI.audioContext.destination);
+        // DO NOT connect to destination to avoid feedback loop
     }
 
     stopAudioProcessing() {
@@ -354,20 +419,33 @@ export class AudioHandler {
             this.resetInactivityTimer();
             this.lastSpeechActivity = Date.now();
             
+            // Only process the latest result to avoid accumulating old speech
+            let latestTranscript = '';
+            let hasInterimResults = false;
+            
+            // Get only the most recent result (not all accumulated results)
             for (let i = event.resultIndex; i < event.results.length; i++) {
                 const transcript = event.results[i][0].transcript;
                 const isFinal = event.results[i].isFinal;
-
-                if (isFinal) {
-                    if (this.callbacks.transcription) {
-                        this.callbacks.transcription(transcript);
-                    }
-                } else {
-                    if (this.callbacks.interim) {
-                        this.callbacks.interim(transcript);
-                    }
+                
+                latestTranscript += transcript;
+                
+                if (!isFinal) {
+                    hasInterimResults = true;
                 }
             }
+            
+            // Update speech buffer with only the latest transcript segment
+            this.speechBuffer.interimText = latestTranscript;
+            this.speechBuffer.lastWebSpeechUpdate = Date.now();
+            
+            // Show only the latest interim text in UI
+            if (hasInterimResults && this.callbacks.interim) {
+                this.callbacks.interim(latestTranscript);
+            }
+            
+            // NOTE: Final transcriptions are now handled by Gemini responses only
+            // We don't create message bubbles from Web Speech API anymore
         };
 
         this.speechRecognition.onerror = (event) => {
@@ -431,13 +509,16 @@ export class AudioHandler {
                 return;
             }
             
+            // Check for orphaned speech every cycle
+            this.checkForOrphanedSpeech();
+            
             const now = Date.now();
             const timeSinceLastActivity = now - (this.lastSpeechActivity || now);
             
             if (timeSinceLastActivity > 30000) {
                 this.restartSpeechRecognition();
             }
-        }, 45000);
+        }, 5000); // Check more frequently (every 5 seconds)
     }
 
     clearSpeechKeepAlive() {

@@ -533,9 +533,11 @@ body {
 .voice-container {
     position: relative;
     display: flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
     padding: var(--spacing-sm) 0;
+    gap: var(--spacing-md);
 }
 
 .voice-button {
@@ -615,6 +617,71 @@ body {
     }
 }
 
+/* Speech State Indicator */
+.speech-state-indicator {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--spacing-xs) var(--spacing-md);
+    border-radius: var(--border-radius);
+    font-size: var(--font-size-xs);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    transition: all 0.3s ease;
+    opacity: 1;
+    transform: translateY(0);
+    min-height: 24px;
+}
+
+.speech-state-indicator.hidden {
+    opacity: 0;
+    transform: translateY(-10px);
+    pointer-events: none;
+}
+
+.speech-state-indicator.listening {
+    background: rgba(16, 185, 129, 0.1);
+    color: var(--color-success);
+    border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.speech-state-indicator.processing {
+    background: rgba(37, 99, 235, 0.1);
+    color: var(--color-accent);
+    border: 1px solid rgba(37, 99, 235, 0.3);
+    animation: processingPulse 1.5s ease-in-out infinite;
+}
+
+.speech-state-indicator.responding {
+    background: rgba(245, 158, 11, 0.1);
+    color: var(--color-warning);
+    border: 1px solid rgba(245, 158, 11, 0.3);
+    animation: respondingPulse 1.2s ease-in-out infinite;
+}
+
+@keyframes processingPulse {
+    0%, 100% {
+        opacity: 0.8;
+        transform: translateY(0) scale(1);
+    }
+    50% {
+        opacity: 1;
+        transform: translateY(-1px) scale(1.02);
+    }
+}
+
+@keyframes respondingPulse {
+    0%, 100% {
+        opacity: 0.8;
+        box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.4);
+    }
+    50% {
+        opacity: 1;
+        box-shadow: 0 0 0 4px rgba(245, 158, 11, 0);
+    }
+}
+
 
 /* Screen Sharing Indicator */
 .screen-sharing-indicator {
@@ -663,23 +730,35 @@ body {
     animation: dots 1.5s steps(4, end) infinite;
 }
 
-/* Interim Transcription - Consistent styling */
+/* Interim Transcription - Smooth transitions */
 .interim-message {
-    /* Remove animation to prevent flickering */
+    /* Stable base styling */
+    animation: none;
 }
 
 .interim-message .message-content {
-    /* Use same background as regular user messages */
     background: var(--color-accent);
     color: white;
     box-shadow: var(--shadow-sm);
     position: relative;
-    /* Remove overflow hidden to prevent layout shifts */
+    transition: none; /* No transitions by default */
 }
 
 .interim-content {
-    /* Remove transition to prevent flickering */
     position: relative;
+    min-height: 1.2em; /* Prevent height jumping */
+}
+
+/* Smooth update transition */
+.interim-content.updating {
+    transition: opacity 0.15s ease-in-out;
+    opacity: 0.9;
+}
+
+/* Stable text display */
+.interim-content {
+    word-wrap: break-word;
+    white-space: pre-wrap;
 }
 
 /* Active transcription indicator - pulsing dots */

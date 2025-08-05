@@ -229,6 +229,9 @@ export class ShoppingAssistant {
             this.audioHandler.stopListening();
         }
         
+        // Reset speech state
+        this.uiState.setSpeechState("idle");
+        
         this.showWelcomeScreen();
         this.uiState.setProcessing(false);
         this.elements.sendButton.disabled = false;
@@ -250,6 +253,7 @@ export class ShoppingAssistant {
             if (result.success) {
                 this.elements.voiceButton.classList.add("listening");
                 this.elements.voiceButton.title = "";
+                this.uiState.setSpeechState("listening");
                 this.uiState.showStatus("Listening...", "info");
             } else {
                 this.handleVoiceError(result);
@@ -266,6 +270,7 @@ export class ShoppingAssistant {
         await this.audioHandler.stopListening();
         MessageRenderer.clearInterimMessage();
         
+        this.uiState.setSpeechState("idle");
         this.uiState.showStatus("Start a chat", "info");
     }
 
@@ -289,14 +294,15 @@ export class ShoppingAssistant {
 
             if (this.isErrorTranscription(transcription)) {
                 this.uiState.showStatus("Speech failed", "error", 4000);
+                this.uiState.setSpeechState("idle");
                 return;
             }
 
             this.addMessage(transcription, "user", false);
             
-            if (!this.uiState.isProcessing) {
-                this.uiState.showStatus("Processing with Gemini...", "info");
-            }
+            // Set processing state when user message is finalized
+            this.uiState.setSpeechState("processing");
+            this.uiState.showStatus("Processing with Gemini...", "info");
         }
     }
 
@@ -307,10 +313,17 @@ export class ShoppingAssistant {
     }
 
     handleBotResponse(response) {
+        // Set responding state when bot starts responding
+        this.uiState.setSpeechState("responding");
+        
         this.addMessage(response.text, "assistant");
         
+        // Return to listening state if still listening, otherwise idle
         if (this.audioHandler.isListening()) {
+            this.uiState.setSpeechState("listening");
             this.uiState.showStatus("Listening...", "info");
+        } else {
+            this.uiState.setSpeechState("idle");
         }
     }
 
