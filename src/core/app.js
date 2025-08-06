@@ -1,22 +1,28 @@
-import { MESSAGE_TYPES } from '../utils/constants.js';
-import { ChatStateManager } from '../utils/storage.js';
-import { MessageRenderer } from '../ui/message-renderer.js';
-import { UIState } from '../ui/ui-state.js';
-import { AudioHandler } from '../services/audio-handler.js';
+import { MESSAGE_TYPES } from "../utils/constants.js";
+import {
+    ChatStateManager,
+    ConversationHistoryManager,
+} from "../utils/storage.js";
+import { MessageRenderer } from "../ui/message-renderer.js";
+import { UIState } from "../ui/ui-state.js";
+import { AudioHandler } from "../services/audio-handler.js";
 
 export class ShoppingAssistant {
     constructor() {
         this.uiState = new UIState();
         this.audioHandler = new AudioHandler();
-        
+
         this.initializeElements();
         this.initializeEventListeners();
         this.initializeCallbacks();
-        
+
         this.trackSidePanelLifecycle();
-        this.checkHotReloadClear();
+        this.checkAndClearChatHistoryOnReload();
         this.restoreState();
         this.getCurrentPageInfo();
+
+        // Set a session marker to track this side panel session
+        this.setSessionMarker();
     }
 
     initializeElements() {
@@ -27,14 +33,20 @@ export class ShoppingAssistant {
             voiceButton: document.getElementById("voiceButton"),
             clearChatButton: document.getElementById("clearChatButton"),
             headerStatus: document.getElementById("headerStatus"),
-            welcomeScreen: document.getElementById("welcomeScreen")
+            welcomeScreen: document.getElementById("welcomeScreen"),
         };
     }
 
     initializeEventListeners() {
-        this.elements.sendButton.addEventListener("click", () => this.handleSendMessage());
-        this.elements.voiceButton.addEventListener("click", () => this.handleVoiceInput());
-        this.elements.clearChatButton.addEventListener("click", () => this.handleClearChat());
+        this.elements.sendButton.addEventListener("click", () =>
+            this.handleSendMessage()
+        );
+        this.elements.voiceButton.addEventListener("click", () =>
+            this.handleVoiceInput()
+        );
+        this.elements.clearChatButton.addEventListener("click", () =>
+            this.handleClearChat()
+        );
 
         this.elements.userInput.addEventListener("keydown", (e) => {
             if (e.key === "Enter" && !e.shiftKey) {
@@ -47,14 +59,24 @@ export class ShoppingAssistant {
             this.adjustTextareaHeight();
         });
 
-        chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-            if (request.type === MESSAGE_TYPES.PAGE_INFO_BROADCAST) {
-                this.updatePageInfo(request.data);
+        chrome.runtime.onMessage.addListener(
+            (request, sender, sendResponse) => {
+                if (request.type === MESSAGE_TYPES.PAGE_INFO_BROADCAST) {
+                    this.updatePageInfo(request.data);
+                }
+            }
+        );
+
+        // Listen for storage changes to detect extension reloads
+        chrome.storage.onChanged.addListener((changes, namespace) => {
+            if (namespace === "local" && changes.extensionReloaded) {
+                // Extension was reloaded, clear chat history immediately
+                this.handleExtensionReloaded();
             }
         });
 
         // Handle window resize for preview canvas
-        window.addEventListener('resize', () => {
+        window.addEventListener("resize", () => {
             if (this.audioHandler.previewManager) {
                 this.audioHandler.previewManager.resize();
             }
@@ -84,39 +106,32 @@ export class ShoppingAssistant {
     }
 
     trackSidePanelLifecycle() {
-        chrome.runtime.sendMessage({ type: MESSAGE_TYPES.SIDE_PANEL_OPENED }).catch(() => {});
+        chrome.runtime
+            .sendMessage({ type: MESSAGE_TYPES.SIDE_PANEL_OPENED })
+            .catch(() => {});
         chrome.storage.local.set({ sidePanelOpen: true }).catch(() => {});
 
         const setSidePanelClosed = () => {
-            chrome.runtime.sendMessage({ type: MESSAGE_TYPES.SIDE_PANEL_CLOSED }).catch(() => {});
+            chrome.runtime
+                .sendMessage({ type: MESSAGE_TYPES.SIDE_PANEL_CLOSED })
+                .catch(() => {});
             chrome.storage.local.set({ sidePanelOpen: false }).catch(() => {});
         };
 
-        window.addEventListener('beforeunload', setSidePanelClosed);
-        
-        document.addEventListener('visibilitychange', () => {
+        window.addEventListener("beforeunload", setSidePanelClosed);
+
+        document.addEventListener("visibilitychange", () => {
             if (document.hidden) {
                 setSidePanelClosed();
             } else {
-                chrome.runtime.sendMessage({ type: MESSAGE_TYPES.SIDE_PANEL_OPENED }).catch(() => {});
-                chrome.storage.local.set({ sidePanelOpen: true }).catch(() => {});
+                chrome.runtime
+                    .sendMessage({ type: MESSAGE_TYPES.SIDE_PANEL_OPENED })
+                    .catch(() => {});
+                chrome.storage.local
+                    .set({ sidePanelOpen: true })
+                    .catch(() => {});
             }
         });
-    }
-
-    async checkHotReloadClear() {
-        try {
-            const result = await new Promise((resolve) => {
-                chrome.storage.local.get(['clearChatOnNextLoad'], resolve);
-            });
-            
-            if (result.clearChatOnNextLoad) {
-                ChatStateManager.clearState();
-                chrome.storage.local.remove(['clearChatOnNextLoad']);
-            }
-        } catch (error) {
-            // Ignore errors
-        }
     }
 
     async getCurrentPageInfo() {
@@ -155,7 +170,11 @@ export class ShoppingAssistant {
         this.uiState.setProcessing(true);
         this.elements.sendButton.disabled = true;
 
-        const loadingMessage = this.addMessage("Thinking...", "assistant", true);
+        const loadingMessage = this.addMessage(
+            "Thinking...",
+            "assistant",
+            true
+        );
 
         try {
             const response = await this.sendToBackground(message);
@@ -165,13 +184,17 @@ export class ShoppingAssistant {
                 this.addMessage(response.response, "assistant");
             } else {
                 this.addMessage(
-                    response.response || "Sorry, I encountered an error. Please try again.",
+                    response.response ||
+                        "Sorry, I encountered an error. Please try again.",
                     "assistant"
                 );
             }
         } catch (error) {
             this.removeMessage(loadingMessage);
-            this.addMessage("Sorry, I encountered an error. Please try again.", "assistant");
+            this.addMessage(
+                "Sorry, I encountered an error. Please try again.",
+                "assistant"
+            );
         } finally {
             this.uiState.setProcessing(false);
             this.elements.sendButton.disabled = false;
@@ -181,20 +204,27 @@ export class ShoppingAssistant {
 
     async sendToBackground(message) {
         return new Promise((resolve) => {
-            chrome.runtime.sendMessage({
-                type: MESSAGE_TYPES.PROCESS_USER_QUERY,
-                data: {
-                    query: message,
-                    pageInfo: this.currentPageInfo,
+            chrome.runtime.sendMessage(
+                {
+                    type: MESSAGE_TYPES.PROCESS_USER_QUERY,
+                    data: {
+                        query: message,
+                        pageInfo: this.currentPageInfo,
+                    },
                 },
-            }, resolve);
+                resolve
+            );
         });
     }
 
     addMessage(content, type, isLoading = false) {
         this.hideWelcomeScreen();
-        
-        const messageDiv = MessageRenderer.createMessage(content, type, isLoading);
+
+        const messageDiv = MessageRenderer.createMessage(
+            content,
+            type,
+            isLoading
+        );
         this.elements.messages.appendChild(messageDiv);
 
         this.scrollToBottom();
@@ -213,14 +243,20 @@ export class ShoppingAssistant {
     }
 
     hideWelcomeScreen() {
-        if (this.elements.welcomeScreen && !this.elements.welcomeScreen.classList.contains("hidden")) {
+        if (
+            this.elements.welcomeScreen &&
+            !this.elements.welcomeScreen.classList.contains("hidden")
+        ) {
             this.elements.welcomeScreen.classList.add("hidden");
             this.uiState.clearStatus();
         }
     }
 
     showWelcomeScreen() {
-        if (this.elements.welcomeScreen && this.elements.welcomeScreen.classList.contains("hidden")) {
+        if (
+            this.elements.welcomeScreen &&
+            this.elements.welcomeScreen.classList.contains("hidden")
+        ) {
             this.elements.welcomeScreen.classList.remove("hidden");
         }
         this.uiState.showStatus("Start a chat", "info");
@@ -230,23 +266,24 @@ export class ShoppingAssistant {
         this.elements.messages.innerHTML = "";
         MessageRenderer.clearInterimMessage();
         this.uiState.clearStatus();
-        
+
         this.elements.userInput.value = "";
         this.adjustTextareaHeight();
-        
+
         if (this.audioHandler.isListening()) {
             this.elements.voiceButton.classList.remove("listening");
             this.elements.voiceButton.title = "";
             this.audioHandler.stopListening();
         }
-        
+
         // Reset speech state
         this.uiState.setSpeechState("idle");
-        
+
         this.showWelcomeScreen();
         this.uiState.setProcessing(false);
         this.elements.sendButton.disabled = false;
         ChatStateManager.clearState();
+        ConversationHistoryManager.clearHistory();
         this.elements.userInput.focus();
     }
 
@@ -271,7 +308,7 @@ export class ShoppingAssistant {
                 this.handleVoiceError(result);
             }
         } catch (error) {
-            console.error('Voice input error:', error);
+            console.error("Voice input error:", error);
             this.uiState.showTemporaryStatus("Voice failed", "error", 4000);
         }
     }
@@ -281,7 +318,7 @@ export class ShoppingAssistant {
         this.elements.voiceButton.title = "";
         await this.audioHandler.stopListening();
         MessageRenderer.clearInterimMessage();
-        
+
         this.uiState.setSpeechState("idle");
         this.uiState.showStatus("Start a chat", "info");
     }
@@ -291,19 +328,28 @@ export class ShoppingAssistant {
         this.elements.voiceButton.classList.remove("listening");
         this.elements.voiceButton.title = "";
         MessageRenderer.clearInterimMessage();
-        
+
         this.uiState.setSpeechState("idle");
-        
+
         // Show appropriate message based on reason
         switch (reason) {
-            case 'screen_capture_failed':
-                this.uiState.showStatus("Screen capture failed - listening stopped", "error");
+            case "screen_capture_failed":
+                this.uiState.showStatus(
+                    "Screen capture failed - listening stopped",
+                    "error"
+                );
                 break;
-            case 'setup_failed':
-                this.uiState.showStatus("Setup failed - please try again", "error");
+            case "setup_failed":
+                this.uiState.showStatus(
+                    "Setup failed - please try again",
+                    "error"
+                );
                 break;
-            case 'debugger_detached':
-                this.uiState.showStatus("Screen capture cancelled - listening stopped", "error");
+            case "debugger_detached":
+                this.uiState.showStatus(
+                    "Screen capture cancelled - listening stopped",
+                    "error"
+                );
                 break;
             default:
                 this.uiState.showStatus("Listening stopped", "info");
@@ -312,12 +358,12 @@ export class ShoppingAssistant {
 
     handleVoiceError(result) {
         const shortMessages = {
-            "permission_denied": "Mic denied",
-            "permission_dismissed": "Mic dismissed", 
-            "no_microphone": "No mic",
-            "not_supported": "Not supported",
-            "tab_capture_failed": "Unavailable here",
-            "not_secure_context": "HTTPS required"
+            permission_denied: "Mic denied",
+            permission_dismissed: "Mic dismissed",
+            no_microphone: "No mic",
+            not_supported: "Not supported",
+            tab_capture_failed: "Unavailable here",
+            not_secure_context: "HTTPS required",
         };
 
         const shortMessage = shortMessages[result.error] || "Voice error";
@@ -335,7 +381,7 @@ export class ShoppingAssistant {
             }
 
             this.addMessage(transcription, "user", false);
-            
+
             // Set processing state when user message is finalized
             this.uiState.setSpeechState("processing");
             this.uiState.showStatus("Processing with Gemini...", "info");
@@ -351,9 +397,9 @@ export class ShoppingAssistant {
     handleBotResponse(response) {
         // Set responding state when bot starts responding
         this.uiState.setSpeechState("responding");
-        
+
         this.addMessage(response.text, "assistant");
-        
+
         // Return to listening state if still listening, otherwise idle
         if (this.audioHandler.isListening()) {
             this.uiState.setSpeechState("listening");
@@ -365,51 +411,164 @@ export class ShoppingAssistant {
 
     showInterimText(text) {
         this.hideWelcomeScreen();
-        
+
         let interimMessage = document.getElementById("interim-message");
-        
+
         if (!interimMessage) {
             interimMessage = MessageRenderer.createInterimMessage(text);
             this.elements.messages.appendChild(interimMessage);
         } else {
             MessageRenderer.updateInterimMessage(text);
         }
-        
+
         this.scrollToBottom();
     }
 
     isErrorTranscription(transcription) {
-        return transcription.includes("Speech recognition failed") || 
-               transcription.includes("Error processing audio");
+        return (
+            transcription.includes("Speech recognition failed") ||
+            transcription.includes("Error processing audio")
+        );
     }
-
 
     scrollToBottom() {
         if (this.elements.messages) {
-            this.elements.messages.scrollTop = this.elements.messages.scrollHeight;
+            this.elements.messages.scrollTop =
+                this.elements.messages.scrollHeight;
         }
     }
 
     adjustTextareaHeight() {
         const textarea = this.elements.userInput;
         const maxHeight = 80;
-        
+
         if (textarea) {
             textarea.style.height = "auto";
-            textarea.style.height = Math.min(textarea.scrollHeight, maxHeight) + "px";
+            textarea.style.height =
+                Math.min(textarea.scrollHeight, maxHeight) + "px";
         }
     }
 
     saveState() {
-        const messages = Array.from(this.elements.messages.querySelectorAll('.message:not(.interim-message):not(.status-message)'))
-            .map(msg => ({
-                content: msg.querySelector('.message-content').textContent,
-                type: msg.classList.contains('user-message') ? 'user' : 'assistant'
-            }));
-        
-        const isWelcomeVisible = !this.elements.welcomeScreen || !this.elements.welcomeScreen.classList.contains("hidden");
-        
+        const messages = Array.from(
+            this.elements.messages.querySelectorAll(
+                ".message:not(.interim-message):not(.status-message)"
+            )
+        ).map((msg) => ({
+            content: msg.querySelector(".message-content").textContent,
+            type: msg.classList.contains("user-message") ? "user" : "assistant",
+        }));
+
+        const isWelcomeVisible =
+            !this.elements.welcomeScreen ||
+            !this.elements.welcomeScreen.classList.contains("hidden");
+
         ChatStateManager.saveState(messages, isWelcomeVisible);
+    }
+
+    async checkAndClearChatHistoryOnReload() {
+        try {
+            // Check if extension was reloaded by looking for the reload marker
+            const extensionReloaded = await this.getExtensionReloadedMarker();
+            const lastChatSaved = this.getLastChatSavedTime();
+
+            console.log(
+                "🔍 Debug - Extension reloaded marker:",
+                extensionReloaded
+            );
+            console.log("🔍 Debug - Last chat saved:", lastChatSaved);
+
+            if (
+                extensionReloaded &&
+                lastChatSaved &&
+                extensionReloaded > lastChatSaved
+            ) {
+                // Extension was reloaded after the last chat was saved, clear chat history
+                ChatStateManager.clearState();
+                ConversationHistoryManager.clearHistory();
+                console.log("🧹 Chat history cleared - extension was reloaded");
+
+                // Clear the reload marker to prevent repeated clearing
+                await this.clearExtensionReloadedMarker();
+            } else {
+                console.log(
+                    "🔍 Debug - No reload detected, keeping chat history"
+                );
+            }
+        } catch (error) {
+            console.error("Error checking for extension reload:", error);
+            // Fallback: clear chat history on any error
+            ChatStateManager.clearState();
+            ConversationHistoryManager.clearHistory();
+            console.log("🧹 Chat history cleared - fallback on error");
+        }
+    }
+
+    async getExtensionReloadedMarker() {
+        try {
+            const result = await new Promise((resolve) => {
+                chrome.storage.local.get(["extensionReloaded"], resolve);
+            });
+            return result.extensionReloaded;
+        } catch (error) {
+            return null;
+        }
+    }
+
+    async clearExtensionReloadedMarker() {
+        try {
+            await new Promise((resolve) => {
+                chrome.storage.local.remove(["extensionReloaded"], resolve);
+            });
+        } catch (error) {
+            // Ignore errors
+        }
+    }
+
+    getLastChatSavedTime() {
+        try {
+            const savedState = localStorage.getItem(ChatStateManager.STATE_KEY);
+            if (savedState) {
+                const state = JSON.parse(savedState);
+                return state.timestamp;
+            }
+        } catch (error) {
+            // Ignore errors
+        }
+        return null;
+    }
+
+    setSessionMarker() {
+        try {
+            localStorage.setItem(
+                "shoppingAssistant_lastSession",
+                Date.now().toString()
+            );
+        } catch (error) {
+            console.error("Error setting session marker:", error);
+        }
+    }
+
+    handleExtensionReloaded() {
+        try {
+            // Clear chat history immediately when extension is reloaded
+            ChatStateManager.clearState();
+            ConversationHistoryManager.clearHistory();
+
+            // Clear the UI
+            this.elements.messages.innerHTML = "";
+            this.showWelcomeScreen();
+            this.uiState.showStatus(
+                "Extension reloaded - fresh chat started",
+                "info"
+            );
+
+            console.log(
+                "🧹 Chat history cleared immediately - extension reloaded"
+            );
+        } catch (error) {
+            console.error("Error handling extension reload:", error);
+        }
     }
 
     restoreState() {
@@ -420,8 +579,11 @@ export class ShoppingAssistant {
         }
 
         if (state.messages && state.messages.length > 0) {
-            state.messages.forEach(msg => {
-                const messageDiv = MessageRenderer.createMessage(msg.content, msg.type);
+            state.messages.forEach((msg) => {
+                const messageDiv = MessageRenderer.createMessage(
+                    msg.content,
+                    msg.type
+                );
                 this.elements.messages.appendChild(messageDiv);
             });
 

@@ -2,13 +2,10 @@
   "name": "shopping-chrome-extension",
   "version": "1.0.0",
   "scripts": {
-    "dev": "node watch.js",
     "build": "echo 'No build process needed for this extension'",
     "lint": "echo 'Linting completed - no linter configured'"
   },
-  "devDependencies": {
-    "chokidar": "^3.5.3"
-  },
+
   "type": "module",
   "dependencies": {
   }

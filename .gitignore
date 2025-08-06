@@ -18,6 +18,3 @@ Thumbs.db
 # Build files
 dist/
 build/
-
-# Hot reload files
-.reload-signal
