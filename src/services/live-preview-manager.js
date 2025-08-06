@@ -7,7 +7,7 @@ export class LivePreviewManager {
         this.isActive = false;
         this.frameCount = 0;
         this.lastFrameTime = 0;
-        this.fps = 2; // 2 FPS for preview
+        this.fps = 10; // 10 FPS for preview
         this.frameInterval = 1000 / this.fps;
         
         this.initialize();

@@ -77,9 +77,8 @@ export class AudioHandler {
 
     handleGeminiResponse(data) {
         if (data.text) {
-            // Gemini has processed a complete utterance - stop audio and video streaming
+            // Gemini has processed a complete utterance - stop audio streaming only
             this.speechBuffer.isGeminiProcessing = false;
-            this.stopScreenshotStreaming();
             this.stopAudioStreaming();
             
             // Reset streaming flags for next speech detection
@@ -147,6 +146,9 @@ export class AudioHandler {
                 
                 // Set up tab switching listener
                 this.setupTabSwitching();
+                
+                // Start continuous screen capture immediately
+                this.startScreenshotStreaming();
             } catch (error) {
                 console.log('Screen capture setup failed:', error.message, '- continuing with audio only');
             }
@@ -328,25 +330,27 @@ export class AudioHandler {
 
         // Capture frames at regular intervals
         this.screenshotInterval = setInterval(async () => {
-            if (!this.screenCapture.hasStream() || !this.geminiAPI.getConnectionStatus().isConnected) {
-                console.log('Screenshot interval check failed - screenActive:', this.screenCapture.hasStream(), 'geminiConnected:', this.geminiAPI.getConnectionStatus().isConnected);
+            if (!this.screenCapture.hasStream()) {
+                console.log('Screenshot interval check failed - screenActive:', this.screenCapture.hasStream());
                 this.stopScreenshotStreaming();
                 return;
             }
             
             try {
                 const frameData = await this.screenCapture.captureFrame();
-                if (this.geminiAPI.getConnectionStatus().isConnected) {
+                
+                // Always update live preview
+                this.previewManager.updatePreview(frameData);
+                
+                // Only send to Gemini if we're streaming and connected
+                if (this.videoStreamingStarted && this.geminiAPI.getConnectionStatus().isConnected) {
                     console.log('Sending frame to Gemini, size:', Math.round(frameData.length * 0.75), 'bytes');
                     this.geminiAPI.sendVideoFrame(frameData);
                 }
-                
-                // Update live preview
-                this.previewManager.updatePreview(frameData);
             } catch (error) {
                 console.error('Frame capture failed:', error?.message || error || 'Unknown error');
             }
-        }, 500); // 2 FPS
+        }, 100); // 10 FPS
     }
 
     stopScreenshotStreaming() {
@@ -483,9 +487,9 @@ export class AudioHandler {
             this.resetInactivityTimer();
             this.lastSpeechActivity = Date.now();
             
-            // Start audio and video streaming on first speech detection
+            // Start audio streaming on first speech detection
             if (!this.audioStreamingStarted) {
-                console.log('First speech detected - starting audio and video streaming');
+                console.log('First speech detected - starting audio streaming to Gemini');
                 
                 // Set flags immediately to prevent race conditions from rapid speech events
                 this.audioStreamingStarted = true;
@@ -493,11 +497,6 @@ export class AudioHandler {
                 
                 // Start audio streaming to Gemini
                 await this.startAudioStreaming();
-                
-                // Start screenshot streaming if available
-                if (this.screenCapture.hasStream()) {
-                    this.startScreenshotStreaming();
-                }
             }
             
             // Only process the latest result to avoid accumulating old speech
