@@ -1,4 +1,4 @@
-export class DebuggerScreenCapture {
+export class ScreenCaptureService {
     constructor() {
         this.attachedTabs = new Map(); // Map of tabId -> attachment status
         this.tabUsageHistory = new Map(); // Map of tabId -> last accessed timestamp

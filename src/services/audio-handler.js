@@ -1,5 +1,5 @@
 import { GeminiLiveAPI } from "./gemini-api.js";
-import { DebuggerScreenCapture } from "./debugger-screen-capture.js";
+import { ScreenCaptureService } from "./screen-capture-service.js";
 import { LivePreviewManager } from "./live-preview-manager.js";
 import { streamingLogger } from "../utils/streaming-logger.js";
 
@@ -39,7 +39,7 @@ export class AudioHandler {
         };
 
         this.geminiAPI = new GeminiLiveAPI();
-        this.screenCapture = new DebuggerScreenCapture();
+        this.screenCapture = new ScreenCaptureService();
         this.previewManager = new LivePreviewManager();
         this.speechRecognition = null;
         this.audioStream = null;
