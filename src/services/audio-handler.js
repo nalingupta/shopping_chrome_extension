@@ -139,9 +139,8 @@ export class AudioHandler {
                 this.speechBuffer.interimText.trim() &&
                 this.callbacks.transcription
             ) {
-                this.callbacks.transcription(
-                    this.speechBuffer.interimText.trim()
-                );
+                const userMessage = this.speechBuffer.interimText.trim();
+                this.callbacks.transcription(userMessage);
                 this.speechBuffer.interimText = "";
             }
 

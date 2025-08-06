@@ -217,17 +217,28 @@ Important: Only describe what you can actually see in the provided screen captur
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
             try {
                 const messageStr = JSON.stringify(message);
-                // Only log non-media messages to reduce console noise
+
+                // Debug: Log all messages being sent to Gemini
                 if (
-                    !message.realtimeInput?.audio &&
-                    !message.realtimeInput?.mediaChunks
+                    message.realtimeInput?.audio ||
+                    message.realtimeInput?.mediaChunks
                 ) {
+                    console.log("📤 Sending to Gemini:", {
+                        type: message.realtimeInput?.audio ? "audio" : "video",
+                        dataLength:
+                            message.realtimeInput?.audio?.data?.length ||
+                            message.realtimeInput?.mediaChunks?.[0]?.data
+                                ?.length ||
+                            0,
+                    });
+                } else {
                     console.log(
-                        "Sending message to Gemini:",
+                        "📤 Sending to Gemini:",
                         messageStr.substring(0, 200) +
                             (messageStr.length > 200 ? "..." : "")
                     );
                 }
+
                 this.ws.send(messageStr);
             } catch (error) {
                 console.error("Failed to send message:", error);
@@ -243,6 +254,12 @@ Important: Only describe what you can actually see in the provided screen captur
     handleMessage(data) {
         try {
             const message = JSON.parse(data);
+
+            // Temporary debug: Log all incoming messages
+            console.log(
+                "📨 Gemini message received:",
+                JSON.stringify(message, null, 2)
+            );
 
             if (
                 message.setupComplete !== undefined ||

@@ -1,4 +1,5 @@
 import { API_CONFIG } from '../config/api-keys.js';
+import { ConversationHistoryManager } from '../utils/storage.js';
 
 export class ShoppingAssistant {
     static async processQuery(data) {
@@ -22,6 +23,9 @@ export class ShoppingAssistant {
             throw new Error('Gemini API key not configured');
         }
 
+        // Load conversation history for context
+        const conversationHistory = await ConversationHistoryManager.getContextForAPI();
+
         // Prepare the multimodal request
         const messages = [];
         
@@ -42,6 +46,17 @@ Always be helpful, concise, and focus on the user's shopping needs.`;
             role: "system",
             content: systemPrompt
         });
+
+        // Add conversation history as previous turns
+        if (conversationHistory.length > 0) {
+            console.log(`🧠 ShoppingAssistant: Including ${conversationHistory.length} conversation history messages`);
+            conversationHistory.forEach(turn => {
+                messages.push({
+                    role: turn.role,
+                    content: turn.parts[0].text
+                });
+            });
+        }
 
         // User message with text and optional screen capture
         const userContent = [];
@@ -69,6 +84,12 @@ Always be helpful, concise, and focus on the user's shopping needs.`;
 
         // Call Gemini API
         const response = await this.callGeminiAPI(messages);
+        
+        // Save user message to conversation history
+        ConversationHistoryManager.saveMessageSync(query, "user");
+        
+        // Save assistant response to conversation history
+        ConversationHistoryManager.saveMessageSync(response, "assistant");
         
         return response;
     }
