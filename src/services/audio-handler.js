@@ -260,84 +260,106 @@ export class AudioHandler {
     }
 
     setupTabSwitching() {
-        // Listen for tab activation changes
-        chrome.tabs.onActivated.addListener(async (activeInfo) => {
-            if (
-                this.state.isListening &&
-                this.screenCapture.hasStream() &&
-                !this.isTabSwitching
-            ) {
-                try {
-                    this.isTabSwitching = true;
-                    await this.screenCapture.switchToTab(activeInfo.tabId);
-                } catch (error) {
-                    console.error(
-                        "Failed to switch to tab:",
-                        activeInfo.tabId,
-                        error
-                    );
-                } finally {
-                    this.isTabSwitching = false;
-                }
-            }
-        });
-
-        // Listen for tab updates (URL changes)
-        chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-            if (
-                this.state.isListening &&
-                this.screenCapture.getCurrentTabId() === tabId &&
-                changeInfo.status === "complete"
-            ) {
-                try {
-                    // Check if the new URL is valid for debugger attachment
-                    if (
-                        tab.url.startsWith("chrome://") ||
-                        tab.url.startsWith("chrome-extension://")
-                    ) {
-                        await this.screenCapture.detachFromTab(tabId);
-                    } else {
-                        // Re-attach if needed
-                        if (!this.screenCapture.attachedTabs.has(tabId)) {
-                            await this.screenCapture.setup(tabId);
-                        }
+        // Store listener references for cleanup
+        this.tabListeners = {
+            onActivated: async (activeInfo) => {
+                if (
+                    this.state.isListening &&
+                    this.screenCapture.hasStream() &&
+                    !this.isTabSwitching
+                ) {
+                    try {
+                        this.isTabSwitching = true;
+                        await this.screenCapture.switchToTab(activeInfo.tabId);
+                    } catch (error) {
+                        console.error(
+                            "Failed to switch to tab:",
+                            activeInfo.tabId,
+                            error
+                        );
+                    } finally {
+                        this.isTabSwitching = false;
                     }
-                } catch (error) {
-                    console.error("Failed to handle tab update:", tabId, error);
                 }
-            }
-        });
+            },
+            onUpdated: async (tabId, changeInfo, tab) => {
+                if (
+                    this.state.isListening &&
+                    this.screenCapture.getCurrentTabId() === tabId &&
+                    changeInfo.status === "complete"
+                ) {
+                    try {
+                        // Check if the new URL is valid for debugger attachment
+                        if (
+                            tab.url.startsWith("chrome://") ||
+                            tab.url.startsWith("chrome-extension://")
+                        ) {
+                            await this.screenCapture.detachFromTab(tabId);
+                        } else {
+                            // Re-attach if needed
+                            if (!this.screenCapture.attachedTabs.has(tabId)) {
+                                await this.screenCapture.setup(tabId);
+                            }
+                        }
+                    } catch (error) {
+                        console.error(
+                            "Failed to handle tab update:",
+                            tabId,
+                            error
+                        );
+                    }
+                }
+            },
+            onRemoved: async (tabId, removeInfo) => {
+                // Clean up debugger attachment for the removed tab
+                if (this.screenCapture.attachedTabs.has(tabId)) {
+                    try {
+                        await this.screenCapture.detachFromTab(tabId);
+                    } catch (error) {
+                        console.error(
+                            "Failed to detach from removed tab:",
+                            tabId,
+                            error
+                        );
+                    }
+                }
+            },
+            onFocusChanged: async (windowId) => {
+                if (this.state.isListening) {
+                    try {
+                        // Validate all attached tabs when window focus changes
+                        await this.screenCapture.validateAttachedTabs();
+                    } catch (error) {
+                        console.error(
+                            "Failed to handle window focus change:",
+                            error
+                        );
+                    }
+                }
+            },
+        };
 
-        // Listen for tab removal
-        chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
-            // Clean up debugger attachment for the removed tab
-            if (this.screenCapture.attachedTabs.has(tabId)) {
-                try {
-                    await this.screenCapture.detachFromTab(tabId);
-                } catch (error) {
-                    console.error(
-                        "Failed to detach from removed tab:",
-                        tabId,
-                        error
-                    );
-                }
-            }
-        });
+        // Add listeners
+        chrome.tabs.onActivated.addListener(this.tabListeners.onActivated);
+        chrome.tabs.onUpdated.addListener(this.tabListeners.onUpdated);
+        chrome.tabs.onRemoved.addListener(this.tabListeners.onRemoved);
+        chrome.windows.onFocusChanged.addListener(
+            this.tabListeners.onFocusChanged
+        );
+    }
 
-        // Listen for window focus changes (window management)
-        chrome.windows.onFocusChanged.addListener(async (windowId) => {
-            if (this.state.isListening) {
-                try {
-                    // Validate all attached tabs when window focus changes
-                    await this.screenCapture.validateAttachedTabs();
-                } catch (error) {
-                    console.error(
-                        "Failed to handle window focus change:",
-                        error
-                    );
-                }
-            }
-        });
+    cleanupTabListeners() {
+        if (this.tabListeners) {
+            chrome.tabs.onActivated.removeListener(
+                this.tabListeners.onActivated
+            );
+            chrome.tabs.onUpdated.removeListener(this.tabListeners.onUpdated);
+            chrome.tabs.onRemoved.removeListener(this.tabListeners.onRemoved);
+            chrome.windows.onFocusChanged.removeListener(
+                this.tabListeners.onFocusChanged
+            );
+            this.tabListeners = null;
+        }
     }
 
     async handleScreenCaptureFailure() {
@@ -416,6 +438,9 @@ export class AudioHandler {
 
             // Stop screen capture
             await this.screenCapture.cleanup();
+
+            // Clean up Chrome extension event listeners
+            this.cleanupTabListeners();
 
             // Clear timers and stop all streaming
             this.clearInactivityTimer();

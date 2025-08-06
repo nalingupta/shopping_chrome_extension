@@ -107,7 +107,16 @@ export class ShoppingAssistant {
             .catch(() => {});
         chrome.storage.local.set({ sidePanelOpen: true }).catch(() => {});
 
-        const setSidePanelClosed = () => {
+        const setSidePanelClosed = async () => {
+            // Stop listening mode if active
+            if (this.audioHandler.isListening()) {
+                await this.stopVoiceInput();
+                // Notify background script that listening has stopped
+                chrome.runtime
+                    .sendMessage({ type: MESSAGE_TYPES.LISTENING_STOPPED })
+                    .catch(() => {});
+            }
+
             chrome.runtime
                 .sendMessage({ type: MESSAGE_TYPES.SIDE_PANEL_CLOSED })
                 .catch(() => {});

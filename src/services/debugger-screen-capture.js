@@ -406,6 +406,9 @@ export class DebuggerScreenCapture {
                 }
             }
 
+            // Clean up debugger event listeners
+            this.cleanupDebuggerListeners();
+
             // Clear all state
             this.attachedTabs.clear();
             this.currentTabId = null;
@@ -414,6 +417,22 @@ export class DebuggerScreenCapture {
             console.log("Debugger cleanup completed");
         } catch (error) {
             console.error("Error during cleanup:", error);
+        }
+    }
+
+    cleanupDebuggerListeners() {
+        if (this.isInitialized) {
+            try {
+                chrome.debugger.onEvent.removeListener(
+                    this.handleDebuggerEvent.bind(this)
+                );
+                chrome.debugger.onDetach.removeListener(
+                    this.handleDebuggerDetach.bind(this)
+                );
+                this.isInitialized = false;
+            } catch (error) {
+                console.error("Error cleaning up debugger listeners:", error);
+            }
         }
     }
 

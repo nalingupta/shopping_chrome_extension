@@ -73,6 +73,8 @@ class BackgroundService {
                 this.handleSidePanelOpened.bind(this),
             [MESSAGE_TYPES.SIDE_PANEL_CLOSED]:
                 this.handleSidePanelClosed.bind(this),
+            [MESSAGE_TYPES.LISTENING_STOPPED]:
+                this.handleListeningStopped.bind(this),
         };
 
         return handlers[type] || null;
@@ -151,6 +153,18 @@ class BackgroundService {
     async handleSidePanelClosed(request, sender, sendResponse) {
         try {
             await StorageManager.set("sidePanelOpen", false);
+            sendResponse({ success: true });
+        } catch (error) {
+            sendResponse({ success: false });
+        }
+    }
+
+    async handleListeningStopped(request, sender, sendResponse) {
+        try {
+            // Log that listening has stopped due to sidepanel closure
+            console.log("Listening stopped due to sidepanel closure");
+
+            // Any additional cleanup can be added here if needed
             sendResponse({ success: true });
         } catch (error) {
             sendResponse({ success: false });
