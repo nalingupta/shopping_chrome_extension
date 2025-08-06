@@ -1,5 +1,6 @@
 import { GeminiLiveAPI } from './gemini-api.js';
 import { DebuggerScreenCapture } from './debugger-screen-capture.js';
+import { LivePreviewManager } from './live-preview-manager.js';
 
 export class AudioHandler {
     constructor() {
@@ -24,6 +25,7 @@ export class AudioHandler {
         
         this.geminiAPI = new GeminiLiveAPI();
         this.screenCapture = new DebuggerScreenCapture();
+        this.previewManager = new LivePreviewManager();
         this.speechRecognition = null;
         this.audioStream = null;
         this.audioWorkletNode = null;
@@ -271,6 +273,9 @@ export class AudioHandler {
             return;
         }
 
+        // Start live preview
+        this.previewManager.startPreview();
+        
         // Start recording with frame callback
         this.screenCapture.startRecording(
             (frameData) => {
@@ -279,6 +284,9 @@ export class AudioHandler {
                     console.log('Sending debugger frame to Gemini, size:', Math.round(frameData.length * 0.75), 'bytes');
                     this.geminiAPI.sendVideoFrame(frameData);
                 }
+                
+                // Update live preview
+                this.previewManager.updatePreview(frameData);
             },
             (error) => {
                 console.error('Debugger screen capture error:', error);
@@ -299,6 +307,9 @@ export class AudioHandler {
                     console.log('Sending interval frame to Gemini, size:', Math.round(frameData.length * 0.75), 'bytes');
                     this.geminiAPI.sendVideoFrame(frameData);
                 }
+                
+                // Update live preview
+                this.previewManager.updatePreview(frameData);
             } catch (error) {
                 console.error('Interval frame capture failed:', error);
             }
@@ -315,6 +326,9 @@ export class AudioHandler {
         if (this.screenCapture.isActive()) {
             this.screenCapture.stopRecording();
         }
+        
+        // Stop live preview
+        this.previewManager.stopPreview();
         
         console.log('Screenshot streaming stopped');
     }

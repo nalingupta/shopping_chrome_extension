@@ -52,6 +52,13 @@ export class ShoppingAssistant {
                 this.updatePageInfo(request.data);
             }
         });
+
+        // Handle window resize for preview canvas
+        window.addEventListener('resize', () => {
+            if (this.audioHandler.previewManager) {
+                this.audioHandler.previewManager.resize();
+            }
+        });
     }
 
     initializeCallbacks() {
