@@ -36,6 +36,7 @@ export class AudioHandler {
         this.videoStreamingStarted = false;
         this.screenshotInterval = null;
         this.audioStreamingStarted = false;
+        this.screenCaptureFailureCount = 0;
         
         this.setupGeminiCallbacks();
         this.initializeGemini();
@@ -139,7 +140,10 @@ export class AudioHandler {
                 console.log('Setting up screen capture...');
                 const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
                 if (tabs.length > 0) {
-                    await this.screenCapture.setup(tabs[0].id);
+                    const setupResult = await this.screenCapture.setup(tabs[0].id);
+                    if (!setupResult.success) {
+                        throw new Error(setupResult.error || 'Failed to setup screen capture');
+                    }
                 } else {
                     throw new Error('No active tab found');
                 }
@@ -150,7 +154,10 @@ export class AudioHandler {
                 // Start continuous screen capture immediately
                 this.startScreenshotStreaming();
             } catch (error) {
-                console.log('Screen capture setup failed:', error.message, '- continuing with audio only');
+                console.error('Screen capture setup failed:', error.message);
+                // Stop listening mode if screen capture fails
+                await this.stopListening();
+                return { success: false, error: 'Screen capture is required for this assistant. Please allow debugger access and try again.' };
             }
 
             // Setup audio capture
@@ -207,6 +214,21 @@ export class AudioHandler {
             console.log('Tab removed:', tabId);
             // The debugger will automatically detach, but we can clean up our tracking
         });
+    }
+
+    async handleScreenCaptureFailure() {
+        this.screenCaptureFailureCount++;
+        
+        // If we have multiple consecutive failures, stop listening mode
+        if (this.screenCaptureFailureCount >= 3) {
+            console.error('Multiple screen capture failures detected, stopping listening mode');
+            
+            if (this.callbacks.status) {
+                this.callbacks.status('Screen capture failed - stopping listening mode', 'error', 5000);
+            }
+            
+            await this.stopListening();
+        }
     }
 
     async stopListening() {
@@ -325,6 +347,12 @@ export class AudioHandler {
             },
             (error) => {
                 console.error('Debugger screen capture error:', error?.message || error || 'Unknown error');
+                
+                // Handle debugger detach events
+                if (error && error.type === 'debugger_detached') {
+                    console.error('Debugger detached:', error.reason);
+                    this.handleScreenCaptureFailure();
+                }
             }
         );
 
@@ -339,6 +367,9 @@ export class AudioHandler {
             try {
                 const frameData = await this.screenCapture.captureFrame();
                 
+                // Reset failure counter on successful capture
+                this.screenCaptureFailureCount = 0;
+                
                 // Always update live preview
                 this.previewManager.updatePreview(frameData);
                 
@@ -349,6 +380,9 @@ export class AudioHandler {
                 }
             } catch (error) {
                 console.error('Frame capture failed:', error?.message || error || 'Unknown error');
+                
+                // If frame capture fails consistently, stop listening mode
+                this.handleScreenCaptureFailure();
             }
         }, 100); // 10 FPS
     }

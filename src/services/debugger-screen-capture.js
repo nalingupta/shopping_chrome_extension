@@ -114,6 +114,15 @@ export class DebuggerScreenCapture {
         if (this.currentTabId === tabId) {
             this.currentTabId = null;
         }
+        
+        // Notify about the detach if we have an error callback
+        if (this.errorCallback) {
+            this.errorCallback({
+                type: 'debugger_detached',
+                tabId: tabId,
+                reason: reason
+            });
+        }
     }
 
     async switchToTab(tabId) {
