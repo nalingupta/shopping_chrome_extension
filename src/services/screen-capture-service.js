@@ -143,6 +143,15 @@ export class ScreenCaptureService {
             throw new Error("Debugger not attached to current tab");
         }
 
+        // Safety check: verify the current tab still exists before attempting capture
+        try {
+            await chrome.tabs.get(this.currentTabId);
+        } catch (error) {
+            // Tab no longer exists, skip capture
+            console.log("Current tab no longer exists, skipping capture");
+            throw new Error("Current tab no longer exists");
+        }
+
         try {
             const result = await chrome.debugger.sendCommand(
                 { tabId: this.currentTabId },
@@ -194,8 +203,44 @@ export class ScreenCaptureService {
         // Remove from attached tabs
         this.attachedTabs.delete(tabId);
 
-        // If this was the current tab, clear it
-        if (this.currentTabId === tabId) {
+        // If the current tab gets closed, automatically try to attach to the new active tab
+        if (this.currentTabId === tabId && reason === "target_closed") {
+            console.log(
+                "Current tab closed, attempting to attach to new active tab..."
+            );
+            this.currentTabId = null;
+
+            try {
+                // Get the current active tab
+                const [activeTab] = await chrome.tabs.query({
+                    active: true,
+                    currentWindow: true,
+                });
+
+                if (activeTab) {
+                    // Always try to attach to the active tab where the user is
+                    const result = await this.setup(activeTab.id);
+                    if (result.success) {
+                        this.currentTabId = activeTab.id;
+                        console.log(
+                            "Successfully attached to active tab:",
+                            activeTab.id
+                        );
+                    } else {
+                        // Stay in fallback state - don't switch to a different tab
+                        // User is on the active tab, extension should be there too
+                        console.warn(
+                            "Failed to attach to active tab, staying in fallback state"
+                        );
+                    }
+                } else {
+                    console.warn("No active tab found for attachment");
+                }
+            } catch (error) {
+                console.error("Error during automatic tab attachment:", error);
+            }
+        } else if (this.currentTabId === tabId) {
+            // If current tab is detached for other reasons, clear it
             this.currentTabId = null;
         }
 
