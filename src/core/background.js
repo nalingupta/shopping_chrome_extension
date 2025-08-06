@@ -16,27 +16,19 @@ class BackgroundService {
 
         chrome.runtime.onInstalled.addListener(() => {
             chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
-            // Clear chat history on fresh install
             clearChatStorageOnReload();
-            console.log("🧹 Chat history cleared on extension install");
         });
 
         chrome.runtime.onStartup.addListener(() => {
-            // Clear chat history on browser startup
             clearChatStorageOnReload();
-            console.log("🧹 Chat history cleared on browser startup");
         });
 
         chrome.action.onClicked.addListener(async (tab) => {
-            console.log("Background: Extension icon clicked, tab:", tab.url);
-
             // Store the current tab ID for permission context
             this.currentTabId = tab.id;
 
             await chrome.sidePanel.open({ tabId: tab.id });
             await StorageManager.set("sidePanelOpen", true);
-
-            console.log("Background: Side panel opened for tab:", tab.id);
         });
 
         this.restoreStateAfterReload();
@@ -48,36 +40,10 @@ class BackgroundService {
 
     async clearChatHistoryOnReload() {
         try {
-            // Always clear chat history on extension load/reload
-            // This ensures a fresh start every time the extension is loaded
             clearChatStorageOnReload();
-            console.log("🧹 Chat history cleared on extension load/reload");
-
-            // Set a timestamp to track when the extension was last loaded
-            const timestamp = Date.now();
-            await StorageManager.set("extensionLastLoaded", timestamp);
-            console.log(
-                "🔍 Debug - Set extensionLastLoaded timestamp:",
-                timestamp
-            );
-
-            // Notify any open side panels that the extension has been reloaded
-            this.notifySidePanelsOfReload();
-        } catch (error) {
-            console.error("Error clearing chat history on reload:", error);
-        }
-    }
-
-    async notifySidePanelsOfReload() {
-        try {
-            // Use Chrome storage to notify side panels about the reload
-            // Side panels can listen for storage changes
             await StorageManager.set("extensionReloaded", Date.now());
-            console.log(
-                "🔔 Notified side panels of extension reload via storage"
-            );
         } catch (error) {
-            console.error("Error notifying side panels of reload:", error);
+            // Ignore errors
         }
     }
 

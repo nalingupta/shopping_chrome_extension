@@ -20,9 +20,6 @@ export class ShoppingAssistant {
         this.checkAndClearChatHistoryOnReload();
         this.restoreState();
         this.getCurrentPageInfo();
-
-        // Set a session marker to track this side panel session
-        this.setSessionMarker();
     }
 
     initializeElements() {
@@ -70,7 +67,6 @@ export class ShoppingAssistant {
         // Listen for storage changes to detect extension reloads
         chrome.storage.onChanged.addListener((changes, namespace) => {
             if (namespace === "local" && changes.extensionReloaded) {
-                // Extension was reloaded, clear chat history immediately
                 this.handleExtensionReloaded();
             }
         });
@@ -468,39 +464,20 @@ export class ShoppingAssistant {
 
     async checkAndClearChatHistoryOnReload() {
         try {
-            // Check if extension was reloaded by looking for the reload marker
             const extensionReloaded = await this.getExtensionReloadedMarker();
             const lastChatSaved = this.getLastChatSavedTime();
-
-            console.log(
-                "🔍 Debug - Extension reloaded marker:",
-                extensionReloaded
-            );
-            console.log("🔍 Debug - Last chat saved:", lastChatSaved);
 
             if (
                 extensionReloaded &&
                 lastChatSaved &&
                 extensionReloaded > lastChatSaved
             ) {
-                // Extension was reloaded after the last chat was saved, clear chat history
                 ChatStateManager.clearState();
                 ConversationHistoryManager.clearHistory();
-                console.log("🧹 Chat history cleared - extension was reloaded");
-
-                // Clear the reload marker to prevent repeated clearing
                 await this.clearExtensionReloadedMarker();
-            } else {
-                console.log(
-                    "🔍 Debug - No reload detected, keeping chat history"
-                );
             }
         } catch (error) {
-            console.error("Error checking for extension reload:", error);
-            // Fallback: clear chat history on any error
-            ChatStateManager.clearState();
-            ConversationHistoryManager.clearHistory();
-            console.log("🧹 Chat history cleared - fallback on error");
+            // Ignore errors
         }
     }
 
@@ -538,36 +515,14 @@ export class ShoppingAssistant {
         return null;
     }
 
-    setSessionMarker() {
-        try {
-            localStorage.setItem(
-                "shoppingAssistant_lastSession",
-                Date.now().toString()
-            );
-        } catch (error) {
-            console.error("Error setting session marker:", error);
-        }
-    }
-
     handleExtensionReloaded() {
         try {
-            // Clear chat history immediately when extension is reloaded
             ChatStateManager.clearState();
             ConversationHistoryManager.clearHistory();
-
-            // Clear the UI
             this.elements.messages.innerHTML = "";
             this.showWelcomeScreen();
-            this.uiState.showStatus(
-                "Extension reloaded - fresh chat started",
-                "info"
-            );
-
-            console.log(
-                "🧹 Chat history cleared immediately - extension reloaded"
-            );
         } catch (error) {
-            console.error("Error handling extension reload:", error);
+            // Ignore errors
         }
     }
 
