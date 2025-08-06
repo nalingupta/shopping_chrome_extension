@@ -646,14 +646,11 @@ export class ScreenCaptureService {
                 }
             }
 
-            // Try to replace removed tabs with new ones to maintain hot-switching capability
+            // Don't re-attach to new tabs during cleanup - user wants to stop listening completely
             if (removedTabsCount > 0) {
                 console.log(
-                    `Attempting to replace ${removedTabsCount} removed tabs with new ones`
+                    `Removed ${removedTabsCount} closed tabs during cleanup - not re-attaching to new tabs`
                 );
-                for (let i = 0; i < removedTabsCount; i++) {
-                    await this.findAndAttachToNewTab();
-                }
             }
 
             // Clean up debugger event listeners
