@@ -144,6 +144,9 @@ export class AudioHandler {
                 } else {
                     throw new Error('No active tab found');
                 }
+                
+                // Set up tab switching listener
+                this.setupTabSwitching();
             } catch (error) {
                 console.log('Screen capture setup failed:', error.message, '- continuing with audio only');
             }
@@ -165,6 +168,43 @@ export class AudioHandler {
             console.error('Error starting listening:', error);
             return { success: false, error: error.message };
         }
+    }
+
+    setupTabSwitching() {
+        // Listen for tab activation changes
+        chrome.tabs.onActivated.addListener(async (activeInfo) => {
+            if (this.state.isListening && this.screenCapture.hasStream()) {
+                try {
+                    console.log('Tab switched to:', activeInfo.tabId);
+                    await this.screenCapture.switchToTab(activeInfo.tabId);
+                } catch (error) {
+                    console.error('Failed to switch to tab:', activeInfo.tabId, error);
+                }
+            }
+        });
+
+        // Listen for tab updates (URL changes)
+        chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+            if (this.state.isListening && 
+                this.screenCapture.getCurrentTabId() === tabId && 
+                changeInfo.status === 'complete') {
+                try {
+                    console.log('Tab updated:', tabId, 'URL:', tab.url);
+                    // Re-attach if needed
+                    if (!this.screenCapture.attachedTabs.has(tabId)) {
+                        await this.screenCapture.setup(tabId);
+                    }
+                } catch (error) {
+                    console.error('Failed to handle tab update:', tabId, error);
+                }
+            }
+        });
+
+        // Listen for tab removal
+        chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
+            console.log('Tab removed:', tabId);
+            // The debugger will automatically detach, but we can clean up our tracking
+        });
     }
 
     async stopListening() {
