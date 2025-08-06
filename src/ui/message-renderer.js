@@ -2,10 +2,7 @@ export class MessageRenderer {
     static debouncedUpdateTimeout = null;
     static lastInterimContent = "";
     static pendingInterimUpdate = "";
-    static currentStreamingMessageId = null; // Track the current streaming message
-    static streamingUpdateQueue = []; // Queue for streaming updates to prevent flickering
-    static isProcessingStreamingUpdate = false;
-    static lastStreamingContent = ""; // Track last content to prevent unnecessary updates
+    static lastStreamingContent = ""; // Track last streaming content
 
     static createMessage(content, type, isLoading = false) {
         const messageDiv = document.createElement("div");
@@ -102,28 +99,15 @@ export class MessageRenderer {
         // Clear any existing streaming message first
         this.clearStreamingMessage();
 
-        console.log("Creating new streaming message with content:", content);
-
         const messageDiv = document.createElement("div");
         messageDiv.className = "message assistant-message streaming-message";
         messageDiv.id = "streaming-message";
 
-        // Generate unique ID for this streaming message
-        const streamingId = `streaming-${Date.now()}-${Math.random()
-            .toString(36)
-            .substr(2, 9)}`;
-        messageDiv.dataset.streamingId = streamingId;
-        this.currentStreamingMessageId = streamingId;
-        this.lastStreamingContent = content;
-
         const contentDiv = document.createElement("div");
         contentDiv.className = "message-content streaming-content";
+        contentDiv.textContent = content;
 
-        // Create a single text node for content
-        const textNode = document.createTextNode(content);
-        contentDiv.appendChild(textNode);
-
-        // Add typing indicator as a separate element
+        // Add typing indicator
         const typingIndicator = document.createElement("span");
         typingIndicator.className = "typing-indicator";
         typingIndicator.textContent = "▋";
@@ -131,7 +115,7 @@ export class MessageRenderer {
 
         messageDiv.appendChild(contentDiv);
 
-        console.log("Created streaming message with ID:", streamingId);
+        this.lastStreamingContent = content;
         return messageDiv;
     }
 
@@ -141,89 +125,27 @@ export class MessageRenderer {
             return;
         }
 
-        // Queue the update to prevent rapid DOM manipulation
-        this.streamingUpdateQueue.push(content);
-
-        if (!this.isProcessingStreamingUpdate) {
-            // Use requestAnimationFrame for smoother updates
-            requestAnimationFrame(() => {
-                this.processStreamingUpdateQueue();
-            });
-        }
-    }
-
-    static processStreamingUpdateQueue() {
-        if (this.streamingUpdateQueue.length === 0) {
-            this.isProcessingStreamingUpdate = false;
-            return;
-        }
-
-        this.isProcessingStreamingUpdate = true;
-
-        // Get the latest content from the queue
-        const latestContent =
-            this.streamingUpdateQueue[this.streamingUpdateQueue.length - 1];
-        this.streamingUpdateQueue = []; // Clear the queue
-
         const streamingMessage = document.getElementById("streaming-message");
-        if (
-            streamingMessage &&
-            streamingMessage.dataset.streamingId ===
-                this.currentStreamingMessageId
-        ) {
-            console.log(
-                "Updating streaming message with content:",
-                latestContent
-            );
+        if (streamingMessage) {
             const contentDiv =
                 streamingMessage.querySelector(".message-content");
             if (contentDiv) {
-                // Find the text node and update it directly
-                const textNode = contentDiv.firstChild;
-                if (textNode && textNode.nodeType === Node.TEXT_NODE) {
-                    // Only update if content actually changed
-                    if (textNode.textContent !== latestContent) {
-                        textNode.textContent = latestContent;
-                        this.lastStreamingContent = latestContent;
-                    }
-                } else {
-                    // Fallback: update the entire content
-                    contentDiv.textContent = latestContent;
-                    this.lastStreamingContent = latestContent;
+                // Update content
+                contentDiv.textContent = content;
+                this.lastStreamingContent = content;
 
-                    // Add typing indicator back
-                    const typingIndicator = document.createElement("span");
-                    typingIndicator.className = "typing-indicator";
-                    typingIndicator.textContent = "▋";
-                    contentDiv.appendChild(typingIndicator);
-                }
+                // Add typing indicator back
+                const typingIndicator = document.createElement("span");
+                typingIndicator.className = "typing-indicator";
+                typingIndicator.textContent = "▋";
+                contentDiv.appendChild(typingIndicator);
             }
-        } else {
-            console.log(
-                "Streaming message not found or ID mismatch. Current ID:",
-                this.currentStreamingMessageId
-            );
         }
-
-        // Process next update using requestAnimationFrame for smoother performance
-        requestAnimationFrame(() => {
-            this.processStreamingUpdateQueue();
-        });
     }
 
     static finalizeStreamingMessage() {
         const streamingMessage = document.getElementById("streaming-message");
-        if (
-            streamingMessage &&
-            streamingMessage.dataset.streamingId ===
-                this.currentStreamingMessageId
-        ) {
-            console.log("Finalizing streaming message");
-
-            // Clear any pending updates
-            this.streamingUpdateQueue = [];
-            this.isProcessingStreamingUpdate = false;
-
+        if (streamingMessage) {
             // Remove typing indicator and convert to regular message
             const contentDiv =
                 streamingMessage.querySelector(".message-content");
@@ -238,16 +160,6 @@ export class MessageRenderer {
             }
             streamingMessage.classList.remove("streaming-message");
             streamingMessage.removeAttribute("id");
-            streamingMessage.removeAttribute("data-streaming-id");
-
-            // Clear the current streaming message ID
-            this.currentStreamingMessageId = null;
-            this.lastStreamingContent = "";
-            console.log("Streaming message finalized");
-        } else {
-            console.log(
-                "Cannot finalize streaming message - not found or ID mismatch"
-            );
         }
     }
 
@@ -273,9 +185,6 @@ export class MessageRenderer {
         if (streamingMessage) {
             streamingMessage.remove();
         }
-        this.currentStreamingMessageId = null;
-        this.streamingUpdateQueue = [];
-        this.isProcessingStreamingUpdate = false;
         this.lastStreamingContent = "";
     }
 

@@ -11,9 +11,6 @@ export class ShoppingAssistant {
     constructor() {
         this.uiState = new UIState();
         this.audioHandler = new AudioHandler();
-        this.scrollTimeout = null; // For throttling scroll updates
-        this.lastStreamingUpdate = 0; // For throttling streaming updates
-        this.streamingUpdateTimeout = null; // For debouncing streaming updates
 
         this.initializeElements();
         this.initializeEventListeners();
@@ -267,16 +264,6 @@ export class ShoppingAssistant {
         MessageRenderer.clearStreamingMessage();
         this.uiState.clearStatus();
 
-        // Clear all timeouts
-        if (this.scrollTimeout) {
-            clearTimeout(this.scrollTimeout);
-            this.scrollTimeout = null;
-        }
-        if (this.streamingUpdateTimeout) {
-            clearTimeout(this.streamingUpdateTimeout);
-            this.streamingUpdateTimeout = null;
-        }
-
         this.elements.userInput.value = "";
         this.adjustTextareaHeight();
 
@@ -406,30 +393,16 @@ export class ShoppingAssistant {
     }
 
     handleBotResponse(response) {
-        console.log("handleBotResponse called with:", response);
-
         // Set responding state when bot starts responding
         this.uiState.setSpeechState("responding");
 
         if (response.isStreaming) {
-            console.log("Handling streaming update:", response.text);
             // Handle streaming update (ChatGPT-style)
             this.updateStreamingMessage(response.text);
         } else {
-            console.log("Handling final response:", response.text);
             // Handle final response - finalize streaming message
             // The streaming message already contains the full text,
             // so we just need to finalize its appearance.
-
-            // Clear all timeouts before finalizing
-            if (this.scrollTimeout) {
-                clearTimeout(this.scrollTimeout);
-                this.scrollTimeout = null;
-            }
-            if (this.streamingUpdateTimeout) {
-                clearTimeout(this.streamingUpdateTimeout);
-                this.streamingUpdateTimeout = null;
-            }
 
             MessageRenderer.finalizeStreamingMessage();
 
@@ -468,36 +441,20 @@ export class ShoppingAssistant {
     }
 
     updateStreamingMessage(text) {
-        // Debounce updates to prevent flickering
-        if (this.streamingUpdateTimeout) {
-            clearTimeout(this.streamingUpdateTimeout);
+        this.hideWelcomeScreen();
+
+        let streamingMessage = document.getElementById("streaming-message");
+
+        if (!streamingMessage) {
+            // Create new streaming message
+            streamingMessage = MessageRenderer.createStreamingMessage(text);
+            this.elements.messages.appendChild(streamingMessage);
+        } else {
+            // Update existing streaming message
+            MessageRenderer.updateStreamingMessage(text);
         }
 
-        this.streamingUpdateTimeout = setTimeout(() => {
-            console.log("updateStreamingMessage called with:", text);
-            this.hideWelcomeScreen();
-
-            let streamingMessage = document.getElementById("streaming-message");
-
-            if (!streamingMessage) {
-                console.log("Creating new streaming message");
-                // Create new streaming message
-                streamingMessage = MessageRenderer.createStreamingMessage(text);
-                this.elements.messages.appendChild(streamingMessage);
-            } else {
-                console.log("Updating existing streaming message");
-                // Update existing streaming message
-                MessageRenderer.updateStreamingMessage(text);
-            }
-
-            // Throttle scrolling to prevent flickering
-            if (!this.scrollTimeout) {
-                this.scrollTimeout = setTimeout(() => {
-                    this.scrollToBottom();
-                    this.scrollTimeout = null;
-                }, 150); // Increased to 150ms
-            }
-        }, 16); // ~60fps debounce
+        this.scrollToBottom();
     }
 
     isErrorTranscription(transcription) {

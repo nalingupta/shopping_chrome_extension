@@ -832,30 +832,17 @@ body {
     opacity: 0.95;
     transition: opacity 0.2s ease;
     animation: streamingFadeIn 0.3s ease-out;
-    will-change: opacity;
-    contain: layout style; /* Prevent layout recalculations */
 }
 
 .streaming-content {
     position: relative;
-    transition: none; /* Disable transitions during streaming to prevent flickering */
     min-height: 1.5em; /* Prevent layout shifts */
-    display: flex;
-    align-items: flex-start;
-    contain: layout; /* Prevent layout recalculations */
-    transform: translateZ(0); /* Force hardware acceleration */
-}
-
-.streaming-content > *:first-child {
-    flex: 1;
-    min-width: 0; /* Allow text to wrap properly */
-    contain: layout; /* Prevent layout recalculations */
 }
 
 @keyframes streamingFadeIn {
     from {
         opacity: 0;
-        transform: translateY(10px);
+        transform: translateY(8px);
     }
     to {
         opacity: 0.95;
@@ -870,11 +857,6 @@ body {
     font-weight: bold;
     margin-left: 2px;
     opacity: 0.8;
-    flex-shrink: 0; /* Prevent the indicator from shrinking */
-    width: 8px; /* Fixed width to prevent layout shifts */
-    height: 1.2em; /* Fixed height to prevent layout shifts */
-    line-height: 1.2em; /* Align with text */
-    vertical-align: baseline; /* Align with text baseline */
 }
 
 @keyframes typingBlink {
