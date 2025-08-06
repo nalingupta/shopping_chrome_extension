@@ -51,8 +51,8 @@ export class AudioHandler {
         this.lastSpeechActivity = null;
         this.videoStreamingStarted = false;
         this.screenshotInterval = null;
-        this.audioStreamingStarted = false;
         this.screenCaptureFailureCount = 0;
+        this.audioStreamingStarted = false;
         this.isTabSwitching = false; // Flag to prevent multiple simultaneous tab switches
         this.cleanupTimer = null; // Timer for periodic cleanup
 
@@ -546,28 +546,43 @@ export class AudioHandler {
                     error?.message || error || "Unknown error"
                 );
 
-                // Handle debugger detach events
+                // Handle debugger detach events - let screen capture service handle re-attachment
                 if (error && error.type === "debugger_detached") {
-                    // Immediately stop listening mode when debugger is detached
-                    if (this.callbacks.status) {
-                        this.callbacks.status(
-                            "Screen capture cancelled - stopping listening mode",
-                            "error",
-                            5000
-                        );
-                    }
+                    console.log(
+                        `Debugger detached from tab ${error.tabId} - screen capture service will handle re-attachment`
+                    );
 
-                    // Use setTimeout to avoid async issues in callback
+                    // Give the screen capture service time to handle the re-attachment
                     setTimeout(async () => {
-                        await this.stopListening();
+                        // Check if we're still listening
+                        if (this.state.isListening) {
+                            // Check if screen capture service has successfully re-attached
+                            if (this.screenCapture.hasStream()) {
+                                const currentTabId =
+                                    this.screenCapture.getCurrentTabId();
+                                console.log(
+                                    `Screen capture service successfully re-attached to tab ${currentTabId}`
+                                );
+                                return; // Continue listening normally
+                            }
 
-                        // Notify UI that listening stopped due to debugger detach
-                        if (this.callbacks.listeningStopped) {
-                            this.callbacks.listeningStopped(
-                                "debugger_detached"
+                            // Screen capture service failed to re-attach
+                            console.log(
+                                `Screen capture service failed to re-attach from tab ${error.tabId} - entering fallback state`
                             );
+
+                            if (this.callbacks.status) {
+                                this.callbacks.status(
+                                    "Screen capture paused - waiting for attachable tab",
+                                    "warning",
+                                    5000
+                                );
+                            }
+
+                            // Don't stop listening mode - just enter fallback state
+                            // The system will try to re-attach when user switches to an attachable tab
                         }
-                    }, 0);
+                    }, 3000); // 3 second grace period for screen capture service to handle re-attachment
                 }
             }
         );

@@ -9,13 +9,14 @@ import { AudioHandler } from "../services/audio-handler.js";
 
 export class ShoppingAssistant {
     constructor() {
+        this.elements = {};
         this.uiState = new UIState();
         this.audioHandler = new AudioHandler();
+        this.currentPageInfo = null;
 
         this.initializeElements();
         this.initializeEventListeners();
         this.initializeCallbacks();
-
         this.trackSidePanelLifecycle();
         this.checkAndClearChatHistoryOnReload();
         this.restoreState();
@@ -110,6 +111,9 @@ export class ShoppingAssistant {
             .catch(() => {});
         chrome.storage.local.set({ sidePanelOpen: true }).catch(() => {});
 
+        let sidepanelCloseTimeout = null;
+        const CLOSE_DELAY = 3000; // 3 seconds delay
+
         const setSidePanelClosed = async () => {
             // Stop listening mode if active
             if (this.audioHandler.isListening()) {
@@ -129,18 +133,57 @@ export class ShoppingAssistant {
             chrome.storage.local.set({ sidePanelOpen: false }).catch(() => {});
         };
 
+        const handleSidePanelHidden = () => {
+            // Clear any existing timeout
+            if (sidepanelCloseTimeout) {
+                clearTimeout(sidepanelCloseTimeout);
+            }
+
+            // Set a delayed timeout for closure
+            sidepanelCloseTimeout = setTimeout(async () => {
+                // Only close if the document is still hidden after the delay
+                if (document.hidden) {
+                    await setSidePanelClosed();
+                }
+            }, CLOSE_DELAY);
+        };
+
+        const handleSidePanelVisible = async () => {
+            // Cancel the delayed closure if sidepanel becomes visible again
+            if (sidepanelCloseTimeout) {
+                clearTimeout(sidepanelCloseTimeout);
+                sidepanelCloseTimeout = null;
+            }
+
+            // Check if debugger is properly attached before resuming
+            if (this.audioHandler.isListening()) {
+                try {
+                    // Give the debugger a moment to re-attach if needed
+                    await this.audioHandler.checkAndSwitchToActiveTab();
+                } catch (error) {
+                    console.log(
+                        "Debugger re-attachment check during visibility change:",
+                        error
+                    );
+                }
+            }
+
+            // Re-open sidepanel
+            chrome.runtime
+                .sendMessage({ type: MESSAGE_TYPES.SIDE_PANEL_OPENED })
+                .catch(() => {});
+            chrome.storage.local.set({ sidePanelOpen: true }).catch(() => {});
+        };
+
+        // Handle beforeunload (actual page unload) - immediate closure
         window.addEventListener("beforeunload", setSidePanelClosed);
 
+        // Handle visibility changes with delay
         document.addEventListener("visibilitychange", () => {
             if (document.hidden) {
-                setSidePanelClosed();
+                handleSidePanelHidden();
             } else {
-                chrome.runtime
-                    .sendMessage({ type: MESSAGE_TYPES.SIDE_PANEL_OPENED })
-                    .catch(() => {});
-                chrome.storage.local
-                    .set({ sidePanelOpen: true })
-                    .catch(() => {});
+                handleSidePanelVisible();
             }
         });
     }

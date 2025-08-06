@@ -191,8 +191,9 @@ export class ScreenCaptureService {
     async handleDebuggerDetach(source, reason) {
         const tabId = source.tabId;
         const tabUrl = await this.getTabUrl(tabId);
+        const timestamp = new Date().toISOString();
         console.log(
-            "Debugger detached from tab:",
+            `[${timestamp}] Debugger detached from tab:`,
             tabId,
             "URL:",
             tabUrl,
@@ -202,13 +203,23 @@ export class ScreenCaptureService {
 
         // Remove from attached tabs
         this.attachedTabs.delete(tabId);
+        console.log(
+            `[${timestamp}] Removed tab ${tabId} from attached tabs tracking`
+        );
 
-        // If the current tab gets closed, automatically try to attach to the new active tab
-        if (this.currentTabId === tabId && reason === "target_closed") {
+        // If a tab was closed, automatically try to switch to the new active tab
+        if (reason === "target_closed") {
             console.log(
-                "Current tab closed, attempting to attach to new active tab..."
+                `[${timestamp}] Tab ${tabId} was closed, attempting to switch to new active tab...`
             );
-            this.currentTabId = null;
+
+            // Clear currentTabId if the closed tab was the current one
+            if (this.currentTabId === tabId) {
+                console.log(
+                    `[${timestamp}] Closed tab ${tabId} was current tab, clearing currentTabId`
+                );
+                this.currentTabId = null;
+            }
 
             try {
                 // Get the current active tab
@@ -218,20 +229,37 @@ export class ScreenCaptureService {
                 });
 
                 if (activeTab) {
-                    // Always try to attach to the active tab where the user is
-                    const result = await this.setup(activeTab.id);
-                    if (result.success) {
+                    console.log(
+                        "Found active tab:",
+                        activeTab.id,
+                        "URL:",
+                        activeTab.url
+                    );
+
+                    // Check if we're already attached to this tab
+                    if (this.attachedTabs.has(activeTab.id)) {
+                        // We're already attached, just switch to it
                         this.currentTabId = activeTab.id;
                         console.log(
-                            "Successfully attached to active tab:",
+                            "Successfully switched to already-attached active tab:",
                             activeTab.id
                         );
                     } else {
-                        // Stay in fallback state - don't switch to a different tab
-                        // User is on the active tab, extension should be there too
-                        console.warn(
-                            "Failed to attach to active tab, staying in fallback state"
-                        );
+                        // Try to attach to the active tab
+                        const result = await this.setup(activeTab.id);
+                        if (result.success) {
+                            this.currentTabId = activeTab.id;
+                            console.log(
+                                "Successfully attached to new active tab:",
+                                activeTab.id
+                            );
+                        } else {
+                            console.warn(
+                                "Failed to attach to active tab - entering fallback state (listening mode continues)"
+                            );
+                            // Don't try to attach to arbitrary tabs - only the active tab matters
+                            // But keep listening mode active in case user switches to an attachable tab
+                        }
                     }
                 } else {
                     console.warn("No active tab found for attachment");
@@ -534,8 +562,11 @@ export class ScreenCaptureService {
                         this.currentTabId = null;
                     }
 
-                    // Try to find and attach to a new tab to maintain hot-switching capability
-                    await this.findAndAttachToNewTab();
+                    // Don't try to find a new tab here - let the debugger detach handler do it
+                    // This prevents the "No new tabs available" error when tabs are closing
+                    console.log(
+                        "Tab closed, waiting for debugger detach handler to re-attach"
+                    );
 
                     return { success: true };
                 }
@@ -820,15 +851,29 @@ export class ScreenCaptureService {
             // Find the best tab to attach to (prioritize active tab, then recent tabs)
             let bestTab = null;
 
+            console.log("Attachable tabs found:", attachableTabs.length);
+            attachableTabs.forEach((tab) => {
+                console.log(
+                    "  - Tab",
+                    tab.id,
+                    "URL:",
+                    tab.url,
+                    "Active:",
+                    tab.active
+                );
+            });
+
             // First, try to find the active tab
             const activeTab = attachableTabs.find((tab) => tab.active);
             if (activeTab) {
                 bestTab = activeTab;
+                console.log("Selected active tab:", activeTab.id);
             } else if (attachableTabs.length > 0) {
                 // If no active tab, pick the most recently accessed tab
                 bestTab = attachableTabs.sort(
                     (a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0)
                 )[0];
+                console.log("Selected most recent tab:", bestTab.id);
             }
 
             if (bestTab) {
@@ -857,8 +902,11 @@ export class ScreenCaptureService {
                     return { success: false, error: result.error };
                 }
             } else {
-                console.log("No new tabs available to attach to");
-                return { success: false, error: "No new tabs available" };
+                // No new tabs available - this means we can't attach to the active tab
+                console.log(
+                    "No new tabs available to attach to - cannot attach to active tab"
+                );
+                return { success: false, error: "Cannot attach to active tab" };
             }
         } catch (error) {
             console.error("Error finding and attaching to new tab:", error);
