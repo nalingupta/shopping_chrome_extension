@@ -25,14 +25,21 @@ export class ScreenCaptureService {
 
     async isDebuggerAttached(tabId) {
         try {
-            // Try to attach a temporary debugger - if it fails, another debugger is attached
-            await chrome.debugger.attach({ tabId }, "1.3");
-            // If we get here, no debugger was attached, so detach immediately
-            await chrome.debugger.detach({ tabId });
-            return false;
+            // Use chrome.debugger.getTargets() to check attachment status
+            const targets = await chrome.debugger.getTargets();
+            const target = targets.find((t) => t.tabId === tabId);
+
+            // If target exists and has an attached debugger, return true
+            return target && target.attached;
         } catch (error) {
-            // If attach fails, another debugger is likely attached
-            return true;
+            // Fallback to the old method if getTargets() fails
+            try {
+                await chrome.debugger.attach({ tabId }, "1.3");
+                await chrome.debugger.detach({ tabId });
+                return false;
+            } catch (attachError) {
+                return true;
+            }
         }
     }
 
@@ -154,14 +161,8 @@ export class ScreenCaptureService {
                 throw new Error("No screenshot data received");
             }
         } catch (error) {
-            const tabUrl = await this.getTabUrl(this.currentTabId);
-            console.error(
-                "Frame capture failed for tab:",
-                this.currentTabId,
-                "URL:",
-                tabUrl,
-                error
-            );
+            // Failsafe mechanism: if debugger capture fails, show warning and skip
+            console.warn("Falling back to failsafe mode - skipping capture");
             throw new Error(error.message || "Frame capture failed");
         }
     }
@@ -215,41 +216,98 @@ export class ScreenCaptureService {
                 return { success: true };
             }
 
-            // Check if the target tab URL is restricted before attempting to attach
-            try {
-                const tab = await chrome.tabs.get(tabId);
-                if (this.isRestrictedUrl(tab.url)) {
-                    console.log("Cannot switch to restricted URL:", tab.url);
+            // Check if this is the current active tab
+            const [activeTab] = await chrome.tabs.query({
+                active: true,
+                currentWindow: true,
+            });
+            const isCurrentActiveTab = activeTab && activeTab.id === tabId;
+
+            // For non-active tabs (hot-switching), query all attachable tabs first
+            if (!isCurrentActiveTab) {
+                // Get all tabs in the current window
+                const allTabs = await chrome.tabs.query({
+                    currentWindow: true,
+                });
+
+                // Filter out restricted URLs and tabs with existing debuggers
+                const attachableTabs = [];
+                for (const tab of allTabs) {
+                    // Skip restricted URLs
+                    if (this.isRestrictedUrl(tab.url)) {
+                        continue;
+                    }
+
+                    // Check if debugger is already attached
+                    const isAttached = await this.isDebuggerAttached(tab.id);
+                    if (isAttached) {
+                        continue;
+                    }
+
+                    attachableTabs.push(tab);
+                }
+
+                // Check if the target tab is in the attachable list
+                const targetTabAttachable = attachableTabs.find(
+                    (tab) => tab.id === tabId
+                );
+                if (!targetTabAttachable) {
+                    // Silently skip if target tab is not attachable
                     return {
                         success: false,
-                        error: "Cannot attach to restricted URL",
+                        error: "Target tab is not attachable",
                     };
                 }
-            } catch (error) {
-                console.log(
-                    "Tab no longer exists or cannot be accessed:",
-                    tabId
-                );
-                return { success: false, error: "Tab no longer exists" };
-            }
 
-            // If we're not attached to the target tab, check if we should attach
-            if (!this.attachedTabs.has(tabId)) {
-                // Check if we're at the attachment limit
+                // Try to attach to top 10 attachable tabs (including the target)
                 const maxAttachments = 10;
-                if (this.attachedTabs.size >= maxAttachments) {
-                    // Try to clean up some old attachments first
-                    await this.cleanupUnusedAttachments();
+                const tabsToAttach = attachableTabs.slice(0, maxAttachments);
 
-                    // If still at limit, force cleanup by removing least recently used tab
-                    if (this.attachedTabs.size >= maxAttachments) {
-                        await this.forceCleanupForNewTab(tabId);
+                for (const tab of tabsToAttach) {
+                    if (!this.attachedTabs.has(tab.id)) {
+                        try {
+                            const result = await this.setup(tab.id);
+                            if (!result.success) {
+                                // Silently skip failed attachments for hot-switching
+                                continue;
+                            }
+                        } catch (error) {
+                            // Silently skip failed attachments for hot-switching
+                            continue;
+                        }
                     }
                 }
 
-                const result = await this.setup(tabId);
-                if (!result.success) {
-                    throw new Error(result.error);
+                // Check if we successfully attached to the target tab
+                if (!this.attachedTabs.has(tabId)) {
+                    return {
+                        success: false,
+                        error: "Failed to attach to target tab",
+                    };
+                }
+            } else {
+                // For current active tab, try to attach directly
+                if (!this.attachedTabs.has(tabId)) {
+                    // Check if we're at the attachment limit
+                    const maxAttachments = 10;
+                    if (this.attachedTabs.size >= maxAttachments) {
+                        // Try to clean up some old attachments first
+                        await this.cleanupUnusedAttachments();
+
+                        // If still at limit, force cleanup by removing least recently used tab
+                        if (this.attachedTabs.size >= maxAttachments) {
+                            await this.forceCleanupForNewTab(tabId);
+                        }
+                    }
+
+                    const result = await this.setup(tabId);
+                    if (!result.success) {
+                        // Failsafe mechanism: if attachment fails, show warning and return failure
+                        console.warn(
+                            "Falling back to failsafe mode - skipping attachment"
+                        );
+                        return { success: false, error: result.error };
+                    }
                 }
             }
 
@@ -284,17 +342,29 @@ export class ScreenCaptureService {
 
     async preAttachToVisibleTabs() {
         try {
-            // Get all tabs in ALL windows, not just current window
-            const allTabs = await chrome.tabs.query({});
+            // Get all tabs in the current window
+            const allTabs = await chrome.tabs.query({ currentWindow: true });
 
-            // Filter out restricted URLs
-            const eligibleTabs = allTabs.filter(
-                (tab) => !this.isRestrictedUrl(tab.url)
-            );
+            // Filter out restricted URLs and tabs with existing debuggers
+            const attachableTabs = [];
+            for (const tab of allTabs) {
+                // Skip restricted URLs
+                if (this.isRestrictedUrl(tab.url)) {
+                    continue;
+                }
+
+                // Check if debugger is already attached
+                const isAttached = await this.isDebuggerAttached(tab.id);
+                if (isAttached) {
+                    continue;
+                }
+
+                attachableTabs.push(tab);
+            }
 
             // Limit to maximum 10 tabs to prevent resource issues
             const maxTabs = 10;
-            const tabsToAttach = eligibleTabs.slice(0, maxTabs);
+            const tabsToAttach = attachableTabs.slice(0, maxTabs);
 
             // Prioritize active tab first, then recent tabs
             const activeTab = tabsToAttach.find((tab) => tab.active);
@@ -677,39 +747,65 @@ export class ScreenCaptureService {
 
     async findAndAttachToNewTab() {
         try {
-            // Get all currently open tabs
-            const allTabs = await chrome.tabs.query({});
+            // Get all tabs in the current window
+            const allTabs = await chrome.tabs.query({ currentWindow: true });
 
-            // Filter out restricted URLs
-            const eligibleTabs = allTabs.filter(
-                (tab) => !this.isRestrictedUrl(tab.url)
-            );
+            // Filter out restricted URLs and tabs with existing debuggers
+            const attachableTabs = [];
+            for (const tab of allTabs) {
+                // Skip restricted URLs
+                if (this.isRestrictedUrl(tab.url)) {
+                    continue;
+                }
 
-            // Find a tab that's not currently being tracked
-            const untrackedTab = eligibleTabs.find(
-                (tab) => !this.attachedTabs.has(tab.id)
-            );
+                // Check if debugger is already attached
+                const isAttached = await this.isDebuggerAttached(tab.id);
+                if (isAttached) {
+                    continue;
+                }
 
-            if (untrackedTab) {
+                // Skip tabs that are already being tracked
+                if (this.attachedTabs.has(tab.id)) {
+                    continue;
+                }
+
+                attachableTabs.push(tab);
+            }
+
+            // Find the best tab to attach to (prioritize active tab, then recent tabs)
+            let bestTab = null;
+
+            // First, try to find the active tab
+            const activeTab = attachableTabs.find((tab) => tab.active);
+            if (activeTab) {
+                bestTab = activeTab;
+            } else if (attachableTabs.length > 0) {
+                // If no active tab, pick the most recently accessed tab
+                bestTab = attachableTabs.sort(
+                    (a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0)
+                )[0];
+            }
+
+            if (bestTab) {
                 console.log(
                     "Found new tab to attach to:",
-                    untrackedTab.id,
+                    bestTab.id,
                     "URL:",
-                    untrackedTab.url
+                    bestTab.url
                 );
-                const result = await this.setup(untrackedTab.id);
+                const result = await this.setup(bestTab.id);
                 if (result.success) {
                     console.log(
                         "Successfully attached to new tab:",
-                        untrackedTab.id,
+                        bestTab.id,
                         "URL:",
-                        untrackedTab.url
+                        bestTab.url
                     );
-                    return { success: true, tabId: untrackedTab.id };
+                    return { success: true, tabId: bestTab.id };
                 } else {
                     console.log(
                         "Failed to attach to new tab:",
-                        untrackedTab.id,
+                        bestTab.id,
                         "Error:",
                         result.error
                     );

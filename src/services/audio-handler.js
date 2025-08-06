@@ -273,12 +273,19 @@ export class AudioHandler {
                 ) {
                     try {
                         this.isTabSwitching = true;
-                        await this.screenCapture.switchToTab(activeInfo.tabId);
+                        const result = await this.screenCapture.switchToTab(
+                            activeInfo.tabId
+                        );
+                        if (!result.success) {
+                            // Failsafe mechanism: if switching fails, do nothing and continue listening
+                            console.warn(
+                                "Falling back to failsafe mode - skipping tab switch"
+                            );
+                        }
                     } catch (error) {
-                        console.error(
-                            "Failed to switch to tab:",
-                            activeInfo.tabId,
-                            error
+                        // Failsafe mechanism: if switching fails, do nothing and continue listening
+                        console.warn(
+                            "Falling back to failsafe mode - skipping tab switch"
                         );
                     } finally {
                         this.isTabSwitching = false;
