@@ -77,6 +77,10 @@ export class ShoppingAssistant {
         this.audioHandler.setStatusCallback((status, type, duration) => {
             this.uiState.showStatus(status, type, duration);
         });
+
+        this.audioHandler.setListeningStoppedCallback((reason) => {
+            this.handleListeningStopped(reason);
+        });
     }
 
     trackSidePanelLifecycle() {
@@ -280,6 +284,30 @@ export class ShoppingAssistant {
         
         this.uiState.setSpeechState("idle");
         this.uiState.showStatus("Start a chat", "info");
+    }
+
+    handleListeningStopped(reason) {
+        // Reset UI state when listening stops due to external factors
+        this.elements.voiceButton.classList.remove("listening");
+        this.elements.voiceButton.title = "";
+        MessageRenderer.clearInterimMessage();
+        
+        this.uiState.setSpeechState("idle");
+        
+        // Show appropriate message based on reason
+        switch (reason) {
+            case 'screen_capture_failed':
+                this.uiState.showStatus("Screen capture failed - listening stopped", "error");
+                break;
+            case 'setup_failed':
+                this.uiState.showStatus("Setup failed - please try again", "error");
+                break;
+            case 'debugger_detached':
+                this.uiState.showStatus("Screen capture cancelled - listening stopped", "error");
+                break;
+            default:
+                this.uiState.showStatus("Listening stopped", "info");
+        }
     }
 
     handleVoiceError(result) {

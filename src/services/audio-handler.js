@@ -13,7 +13,8 @@ export class AudioHandler {
             transcription: null,
             interim: null,
             botResponse: null,
-            status: null
+            status: null,
+            listeningStopped: null
         };
         
         // Gemini-first speech segmentation
@@ -157,6 +158,12 @@ export class AudioHandler {
                 console.error('Screen capture setup failed:', error.message);
                 // Stop listening mode if screen capture fails
                 await this.stopListening();
+                
+                // Notify UI that listening stopped due to setup failure
+                if (this.callbacks.listeningStopped) {
+                    this.callbacks.listeningStopped('setup_failed');
+                }
+                
                 return { success: false, error: 'Screen capture is required for this assistant. Please allow debugger access and try again.' };
             }
 
@@ -228,6 +235,11 @@ export class AudioHandler {
             }
             
             await this.stopListening();
+            
+            // Notify UI that listening stopped due to screen capture failure
+            if (this.callbacks.listeningStopped) {
+                this.callbacks.listeningStopped('screen_capture_failed');
+            }
         }
     }
 
@@ -351,7 +363,21 @@ export class AudioHandler {
                 // Handle debugger detach events
                 if (error && error.type === 'debugger_detached') {
                     console.error('Debugger detached:', error.reason);
-                    this.handleScreenCaptureFailure();
+                    
+                    // Immediately stop listening mode when debugger is detached
+                    if (this.callbacks.status) {
+                        this.callbacks.status('Screen capture cancelled - stopping listening mode', 'error', 5000);
+                    }
+                    
+                    // Use setTimeout to avoid async issues in callback
+                    setTimeout(async () => {
+                        await this.stopListening();
+                        
+                        // Notify UI that listening stopped due to debugger detach
+                        if (this.callbacks.listeningStopped) {
+                            this.callbacks.listeningStopped('debugger_detached');
+                        }
+                    }, 0);
                 }
             }
         );
@@ -675,6 +701,10 @@ export class AudioHandler {
 
     setStatusCallback(callback) {
         this.callbacks.status = callback;
+    }
+
+    setListeningStoppedCallback(callback) {
+        this.callbacks.listeningStopped = callback;
     }
 
     // Getters
