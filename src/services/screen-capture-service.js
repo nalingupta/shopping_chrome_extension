@@ -7,7 +7,6 @@ export class ScreenCaptureService {
         this.frameCallback = null;
         this.errorCallback = null;
         this.isInitialized = false;
-        this.isCleaningUp = false; // Flag to prevent re-attachment during cleanup
     }
 
     // Track when a tab is accessed for better cleanup prioritization
@@ -233,41 +232,16 @@ export class ScreenCaptureService {
             `[${timestamp}] Removed tab ${tabId} from attached tabs tracking`
         );
 
-        // If we're in cleanup mode, don't re-attach automatically
-        if (this.isCleaningUp) {
-            console.log(
-                `[${timestamp}] Cleanup in progress - skipping automatic re-attachment for tab ${tabId}`
-            );
-            
-            // Clear currentTabId if the detached tab was the current one
-            if (this.currentTabId === tabId) {
-                this.currentTabId = null;
-            }
-            
-            // Notify about the detach if we have an error callback
-            if (this.errorCallback) {
-                this.errorCallback({
-                    type: "debugger_detached",
-                    tabId: tabId,
-                    reason: reason,
-                });
-            }
-            return;
+        // Clear currentTabId if the detached tab was the current one
+        if (this.currentTabId === tabId) {
+            this.currentTabId = null;
         }
 
-        // If a tab was closed, automatically try to switch to the new active tab
+        // Only re-attach if the tab was actually closed by the user
         if (reason === "target_closed") {
             console.log(
                 `[${timestamp}] Tab ${tabId} was closed, attempting to switch to new active tab...`
             );
-
-            // Clear currentTabId if the closed tab was the current one
-            if (this.currentTabId === tabId) {
-                console.log(
-                    `[${timestamp}] Closed tab ${tabId} was current tab, clearing currentTabId`
-                );
-                this.currentTabId = null;
-            }
 
             try {
                 // Get the current active tab
@@ -315,9 +289,11 @@ export class ScreenCaptureService {
             } catch (error) {
                 console.error("Error during automatic tab attachment:", error);
             }
-        } else if (this.currentTabId === tabId) {
-            // If current tab is detached for other reasons, clear it
-            this.currentTabId = null;
+        } else {
+            // For all other reasons (programmatic detach, etc.), just log and don't re-attach
+            console.log(
+                `[${timestamp}] Debugger detached for reason: ${reason} - not re-attaching automatically`
+            );
         }
 
         // Notify about the detach if we have an error callback
@@ -661,16 +637,12 @@ export class ScreenCaptureService {
 
     async cleanup() {
         try {
-            // Set cleanup flag to prevent automatic re-attachment
-            this.isCleaningUp = true;
-            
             // Stop recording
             await this.stopRecording();
 
             // Check if there are any attached tabs before attempting to detach
             if (this.attachedTabs.size === 0) {
                 console.log("No tabs attached, skipping detachment");
-                this.isCleaningUp = false;
                 return;
             }
 
@@ -725,9 +697,6 @@ export class ScreenCaptureService {
             console.log("Debugger cleanup completed");
         } catch (error) {
             console.error("Error during cleanup:", error);
-        } finally {
-            // Always clear the cleanup flag
-            this.isCleaningUp = false;
         }
     }
 
