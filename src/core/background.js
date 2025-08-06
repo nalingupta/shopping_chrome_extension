@@ -5,8 +5,6 @@ import { MicrophoneService } from '../services/microphone-service.js';
 
 class BackgroundService {
     constructor() {
-        this.tabCaptureStream = null;
-        this.tabCaptureActive = false;
         this.currentTabId = null;
         this.initializeExtension();
         this.setupEventListeners();
@@ -73,8 +71,7 @@ class BackgroundService {
             [MESSAGE_TYPES.REQUEST_MIC_PERMISSION]: this.handleMicPermissionRequest.bind(this),
             [MESSAGE_TYPES.SIDE_PANEL_OPENED]: this.handleSidePanelOpened.bind(this),
             [MESSAGE_TYPES.SIDE_PANEL_CLOSED]: this.handleSidePanelClosed.bind(this),
-            [MESSAGE_TYPES.CAPTURE_TAB]: this.handleCaptureTab.bind(this),
-            [MESSAGE_TYPES.STOP_TAB_CAPTURE]: this.handleStopTabCapture.bind(this)
+
         };
         
         return handlers[type] || null;
@@ -213,71 +210,7 @@ class BackgroundService {
         }
     }
 
-    async handleCaptureTab(request, sender, sendResponse) {
-        try {
-            console.log('Background: handleCaptureTab called');
-            console.log('Background: Current tab ID from click:', this.currentTabId);
-            
-            // Get current active tab
-            const tabs = await new Promise((resolve) => {
-                chrome.tabs.query({active: true, currentWindow: true}, (tabs) => {
-                    console.log('Background: Active tabs query result:', tabs?.length);
-                    if (chrome.runtime.lastError) {
-                        console.log('Background: tabs.query error:', chrome.runtime.lastError);
-                    }
-                    resolve(tabs || []);
-                });
-            });
-            
-            if (tabs.length === 0) {
-                throw new Error('No active tab found');
-            }
-            
-            const activeTab = tabs[0];
-            console.log('Background: Active tab ID:', activeTab.id, 'URL:', activeTab.url);
-            
-            // Check if it's a capturable page
-            if (activeTab.url.startsWith('chrome://') || 
-                activeTab.url.startsWith('chrome-extension://') ||
-                activeTab.url.startsWith('edge://') ||
-                activeTab.url.startsWith('about:')) {
-                throw new Error(`Cannot capture browser internal page: ${activeTab.url}`);
-            }
-            
-            // Try to capture with explicit window ID
-            const dataUrl = await new Promise((resolve, reject) => {
-                console.log('Background: Attempting captureVisibleTab for window:', activeTab.windowId);
-                chrome.tabs.captureVisibleTab(
-                    activeTab.windowId,
-                    {format: 'png', quality: 80},
-                    (dataUrl) => {
-                        console.log('Background: captureVisibleTab completed');
-                        console.log('Background: Has dataUrl:', !!dataUrl);
-                        console.log('Background: Runtime error:', chrome.runtime.lastError?.message);
-                        
-                        if (chrome.runtime.lastError) {
-                            reject(new Error(chrome.runtime.lastError.message));
-                        } else if (dataUrl) {
-                            console.log('Background: DataUrl length:', dataUrl.length);
-                            resolve(dataUrl);
-                        } else {
-                            reject(new Error('No data returned from captureVisibleTab'));
-                        }
-                    }
-                );
-            });
-            
-            sendResponse({ success: true, dataUrl });
-        } catch (error) {
-            console.error('Background: handleCaptureTab failed:', error.message);
-            sendResponse({ success: false, error: error.message });
-        }
-    }
 
-    async handleStopTabCapture(request, sender, sendResponse) {
-        // No-op since we're using static capture now
-        sendResponse({ success: true });
-    }
 
     async showReloadNotification() {
         try {

@@ -6,7 +6,7 @@
     "permissions": [
         "activeTab",
         "tabs",
-        "tabCapture",
+        "debugger",
         "storage",
         "sidePanel",
         "scripting"

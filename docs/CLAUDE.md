@@ -5,7 +5,7 @@
 2. **Maintain clean codebase** - No console debugging statements in production code
 3. **Refactor as you go** - Don't accumulate technical debt
 4. **No garbage code** - Every line should have a purpose
-5. **Focus on tab capture** - Use chrome.tabCapture API for browser-only capture without OS prompts
+5. **Focus on debugger capture** - Use Chrome debugger API for browser-only capture without OS prompts
 
 ## Code Structure Requirements
 - **Modular Architecture**: Separate concerns into distinct modules/files

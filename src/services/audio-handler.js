@@ -1,5 +1,5 @@
 import { GeminiLiveAPI } from './gemini-api.js';
-import { ScreenCapture } from './screen-capture.js';
+import { DebuggerScreenCapture } from './debugger-screen-capture.js';
 
 export class AudioHandler {
     constructor() {
@@ -23,7 +23,7 @@ export class AudioHandler {
         };
         
         this.geminiAPI = new GeminiLiveAPI();
-        this.screenCapture = new ScreenCapture();
+        this.screenCapture = new DebuggerScreenCapture();
         this.speechRecognition = null;
         this.audioStream = null;
         this.audioWorkletNode = null;
@@ -136,7 +136,12 @@ export class AudioHandler {
             // Setup screen capture
             try {
                 console.log('Setting up screen capture...');
-                await this.screenCapture.setup();
+                const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+                if (tabs.length > 0) {
+                    await this.screenCapture.setup(tabs[0].id);
+                } else {
+                    throw new Error('No active tab found');
+                }
             } catch (error) {
                 console.log('Screen capture setup failed:', error.message, '- continuing with audio only');
             }
@@ -198,7 +203,7 @@ export class AudioHandler {
             await this.geminiAPI.disconnect();
             
             // Stop screen capture
-            this.screenCapture.stop();
+            await this.screenCapture.cleanup();
             
             // Clear timers and stop all streaming
             this.clearInactivityTimer();
@@ -261,42 +266,57 @@ export class AudioHandler {
     }
 
     startScreenshotStreaming() {
-        if (!this.screenCapture.isActive() || !this.geminiAPI.getConnectionStatus().isConnected) {
-            console.log('Screenshot streaming skipped - screenActive:', this.screenCapture.isActive(), 'geminiConnected:', this.geminiAPI.getConnectionStatus().isConnected);
+        if (!this.screenCapture.hasStream() || !this.geminiAPI.getConnectionStatus().isConnected) {
+            console.log('Screenshot streaming skipped - screenActive:', this.screenCapture.hasStream(), 'geminiConnected:', this.geminiAPI.getConnectionStatus().isConnected);
             return;
         }
 
-        // Send first screenshot immediately
-        this.captureAndSendScreenshot();
+        // Start recording with frame callback
+        this.screenCapture.startRecording(
+            (frameData) => {
+                // Frame callback - send to Gemini
+                if (this.geminiAPI.getConnectionStatus().isConnected) {
+                    console.log('Sending debugger frame to Gemini, size:', Math.round(frameData.length * 0.75), 'bytes');
+                    this.geminiAPI.sendVideoFrame(frameData);
+                }
+            },
+            (error) => {
+                console.error('Debugger screen capture error:', error);
+            }
+        );
 
-        // Then send screenshots at 2 FPS (every 500ms) during speech
-        this.screenshotInterval = setInterval(() => {
-            if (!this.screenCapture.isActive() || !this.geminiAPI.getConnectionStatus().isConnected) {
-                console.log('Screenshot interval check failed - screenActive:', this.screenCapture.isActive(), 'geminiConnected:', this.geminiAPI.getConnectionStatus().isConnected);
+        // Also capture frames at regular intervals as backup
+        this.screenshotInterval = setInterval(async () => {
+            if (!this.screenCapture.hasStream() || !this.geminiAPI.getConnectionStatus().isConnected) {
+                console.log('Screenshot interval check failed - screenActive:', this.screenCapture.hasStream(), 'geminiConnected:', this.geminiAPI.getConnectionStatus().isConnected);
                 this.stopScreenshotStreaming();
                 return;
             }
             
-            this.captureAndSendScreenshot();
-        }, 500); // 2 FPS
-    }
-
-    async captureAndSendScreenshot() {
-        try {
-            const base64Data = await this.screenCapture.captureScreenshot();
-            console.log('Sending screenshot to Gemini, size:', Math.round(base64Data.length * 0.75), 'bytes');
-            this.geminiAPI.sendVideoFrame(base64Data);
-        } catch (error) {
-            console.error('Screenshot capture error:', error);
-        }
+            try {
+                const frameData = await this.screenCapture.captureFrame();
+                if (this.geminiAPI.getConnectionStatus().isConnected) {
+                    console.log('Sending interval frame to Gemini, size:', Math.round(frameData.length * 0.75), 'bytes');
+                    this.geminiAPI.sendVideoFrame(frameData);
+                }
+            } catch (error) {
+                console.error('Interval frame capture failed:', error);
+            }
+        }, 500); // 2 FPS backup
     }
 
     stopScreenshotStreaming() {
         if (this.screenshotInterval) {
             clearInterval(this.screenshotInterval);
             this.screenshotInterval = null;
-            console.log('Screenshot streaming stopped');
         }
+        
+        // Stop debugger recording
+        if (this.screenCapture.isActive()) {
+            this.screenCapture.stopRecording();
+        }
+        
+        console.log('Screenshot streaming stopped');
     }
 
     stopAudioStreaming() {
