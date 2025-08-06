@@ -51,34 +51,34 @@ export class ScreenCaptureService {
                 return { success: true };
             }
 
-            // Check if another debugger is already attached
-            const isAttached = await this.isDebuggerAttached(tabId);
-            if (isAttached) {
-                const tabUrl = await this.getTabUrl(tabId);
-                console.warn(
-                    "Another debugger is already attached to tab:",
-                    tabId,
-                    "URL:",
-                    tabUrl
-                );
-                return {
-                    success: false,
-                    error: "Another debugger is already attached to this tab",
-                };
-            }
-
-            // Attach debugger to the tab
+            // Attach debugger to the tab immediately without checking isDebuggerAttached()
+            console.log("🔍 Attaching debugger to tab:", tabId);
             await chrome.debugger.attach({ tabId }, "1.3");
+            console.log("✅ Debugger attached successfully");
 
             // Enable Page domain for screen capture
+            console.log("🔍 Enabling Page domain");
             await chrome.debugger.sendCommand({ tabId }, "Page.enable");
+            console.log("✅ Page domain enabled");
 
             // Enable Runtime domain for error handling
+            console.log("🔍 Enabling Runtime domain");
             await chrome.debugger.sendCommand({ tabId }, "Runtime.enable");
+            console.log("✅ Runtime domain enabled");
 
             // Mark tab as attached
+            console.log("🔍 Setting attachedTabs for tab:", tabId);
             this.attachedTabs.set(tabId, true);
+            console.log("🔍 Setting currentTabId to:", tabId);
             this.currentTabId = tabId;
+            console.log(
+                "🔍 After state setting - attachedTabs:",
+                Array.from(this.attachedTabs.keys())
+            );
+            console.log(
+                "🔍 After state setting - currentTabId:",
+                this.currentTabId
+            );
 
             // Set up event listener if not already done
             if (!this.isInitialized) {
@@ -93,6 +93,31 @@ export class ScreenCaptureService {
 
             const tabUrl = await this.getTabUrl(tabId);
             console.log("Debugger attached to tab:", tabId, "URL:", tabUrl);
+            console.log("🔍 After setup - currentTabId:", this.currentTabId);
+            console.log(
+                "🔍 After setup - attachedTabs:",
+                Array.from(this.attachedTabs.keys())
+            );
+            console.log("🔍 After setup - hasStream():", this.hasStream());
+
+            // Ensure hasStream() will return true after setup
+            if (!this.hasStream()) {
+                console.error(
+                    "❌ Setup completed but hasStream() still returns false"
+                );
+                console.error("❌ currentTabId:", this.currentTabId);
+                console.error(
+                    "❌ attachedTabs:",
+                    Array.from(this.attachedTabs.keys())
+                );
+                throw new Error(
+                    "Setup completed but hasStream() still returns false"
+                );
+            }
+
+            console.log(
+                "✅ Setup completed successfully - hasStream() returns true"
+            );
             return { success: true };
         } catch (error) {
             const tabUrl = await this.getTabUrl(tabId);
@@ -415,6 +440,9 @@ export class ScreenCaptureService {
 
     async preAttachToVisibleTabs() {
         try {
+            // Store the original current tab ID to preserve it
+            const originalCurrentTabId = this.currentTabId;
+
             // Get all tabs in the current window
             const allTabs = await chrome.tabs.query({ currentWindow: true });
 
@@ -426,9 +454,17 @@ export class ScreenCaptureService {
                     continue;
                 }
 
-                // Check if debugger is already attached
+                // Skip the current active tab (it's already handled in setup())
+                if (tab.active) {
+                    continue;
+                }
+
+                // Use isDebuggerAttached() to check for conflicts (hot-switching candidates only)
                 const isAttached = await this.isDebuggerAttached(tab.id);
                 if (isAttached) {
+                    console.log(
+                        `Skipping tab ${tab.id} - debugger already attached (hot-switching candidate)`
+                    );
                     continue;
                 }
 
@@ -439,21 +475,13 @@ export class ScreenCaptureService {
             const maxTabs = 10;
             const tabsToAttach = attachableTabs.slice(0, maxTabs);
 
-            // Prioritize active tab first, then recent tabs
-            const activeTab = tabsToAttach.find((tab) => tab.active);
-            const otherTabs = tabsToAttach.filter((tab) => !tab.active);
-
-            // Sort other tabs by last accessed time (most recent first)
-            otherTabs.sort(
+            // Sort tabs by last accessed time (most recent first) for hot-switching priority
+            tabsToAttach.sort(
                 (a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0)
             );
 
-            const prioritizedTabs = activeTab
-                ? [activeTab, ...otherTabs]
-                : otherTabs;
-
             const results = [];
-            for (const tab of prioritizedTabs) {
+            for (const tab of tabsToAttach) {
                 try {
                     const result = await this.setup(tab.id);
                     results.push({
@@ -476,6 +504,12 @@ export class ScreenCaptureService {
                 }
             }
 
+            // Restore the original current tab ID
+            this.currentTabId = originalCurrentTabId;
+
+            console.log(
+                `Pre-attached to ${results.length} hot-switching candidate tabs`
+            );
             return results;
         } catch (error) {
             console.error("Failed to pre-attach to visible tabs:", error);

@@ -8,7 +8,6 @@ export class AudioHandler {
         this.state = {
             isListening: false,
             isProcessingResponse: false,
-            isStopping: false, // Flag to prevent race conditions during stop
         };
 
         this.callbacks = {
@@ -188,8 +187,6 @@ export class AudioHandler {
         }
 
         try {
-            // Clear stopping flag when starting
-            this.state.isStopping = false;
             this.resetInactivityTimer();
 
             // Connect to Gemini
@@ -215,9 +212,6 @@ export class AudioHandler {
                                 "Failed to setup screen capture"
                         );
                     }
-
-                    // Pre-attach to other visible tabs for low-latency switching
-                    await this.screenCapture.preAttachToVisibleTabs();
                 } else {
                     throw new Error("No active tab found");
                 }
@@ -253,6 +247,11 @@ export class AudioHandler {
             this.state.isListening = true;
 
             console.log("Listening mode started successfully");
+
+            // Pre-attach to other visible tabs in the background (non-blocking)
+            this.screenCapture.preAttachToVisibleTabs().catch((error) => {
+                console.warn("Background pre-attachment failed:", error);
+            });
 
             return { success: true };
         } catch (error) {
@@ -404,8 +403,6 @@ export class AudioHandler {
         }
 
         try {
-            // Set stopping flag immediately to prevent race conditions
-            this.state.isStopping = true;
             this.state.isListening = false;
 
             // Process any remaining interim text before stopping
@@ -448,9 +445,6 @@ export class AudioHandler {
             // Stop Gemini streaming
             await this.geminiAPI.disconnect();
 
-            // Add delay before cleanup to prevent race condition with screenshot interval
-            await new Promise((resolve) => setTimeout(resolve, 1500));
-
             // Stop screen capture
             await this.screenCapture.cleanup();
 
@@ -467,14 +461,10 @@ export class AudioHandler {
             this.videoStreamingStarted = false;
             this.audioStreamingStarted = false;
 
-            // Clear stopping flag
-            this.state.isStopping = false;
-
             return { success: true };
         } catch (error) {
             console.error("Error stopping listening:", error);
             this.state.isListening = false;
-            this.state.isStopping = false; // Clear stopping flag on error
             return { success: false, error: error.message };
         }
     }
@@ -546,43 +536,28 @@ export class AudioHandler {
                     error?.message || error || "Unknown error"
                 );
 
-                // Handle debugger detach events - let screen capture service handle re-attachment
+                // Handle debugger detach events
                 if (error && error.type === "debugger_detached") {
-                    console.log(
-                        `Debugger detached from tab ${error.tabId} - screen capture service will handle re-attachment`
-                    );
+                    // Immediately stop listening mode when debugger is detached
+                    if (this.callbacks.status) {
+                        this.callbacks.status(
+                            "Screen capture cancelled - stopping listening mode",
+                            "error",
+                            5000
+                        );
+                    }
 
-                    // Give the screen capture service time to handle the re-attachment
+                    // Use setTimeout to avoid async issues in callback
                     setTimeout(async () => {
-                        // Check if we're still listening
-                        if (this.state.isListening) {
-                            // Check if screen capture service has successfully re-attached
-                            if (this.screenCapture.hasStream()) {
-                                const currentTabId =
-                                    this.screenCapture.getCurrentTabId();
-                                console.log(
-                                    `Screen capture service successfully re-attached to tab ${currentTabId}`
-                                );
-                                return; // Continue listening normally
-                            }
+                        await this.stopListening();
 
-                            // Screen capture service failed to re-attach
-                            console.log(
-                                `Screen capture service failed to re-attach from tab ${error.tabId} - entering fallback state`
+                        // Notify UI that listening stopped due to debugger detach
+                        if (this.callbacks.listeningStopped) {
+                            this.callbacks.listeningStopped(
+                                "debugger_detached"
                             );
-
-                            if (this.callbacks.status) {
-                                this.callbacks.status(
-                                    "Screen capture paused - waiting for attachable tab",
-                                    "warning",
-                                    5000
-                                );
-                            }
-
-                            // Don't stop listening mode - just enter fallback state
-                            // The system will try to re-attach when user switches to an attachable tab
                         }
-                    }, 3000); // 3 second grace period for screen capture service to handle re-attachment
+                    }, 0);
                 }
             }
         );
@@ -591,57 +566,14 @@ export class AudioHandler {
 
         // Capture frames at regular intervals
         this.screenshotInterval = setInterval(async () => {
-            // Check if we're in the process of stopping to prevent race conditions
-            if (this.state.isStopping) {
+            if (!this.screenCapture.hasStream()) {
                 this.stopScreenshotStreaming();
                 return;
-            }
-
-            // Check if we have a valid stream before attempting capture
-            if (!this.screenCapture.hasStream()) {
-                console.log(
-                    "No valid stream, attempting to re-establish connection..."
-                );
-                try {
-                    await this.checkAndSwitchToActiveTab();
-                    if (!this.screenCapture.hasStream()) {
-                        console.log(
-                            "Failed to re-establish stream, stopping capture"
-                        );
-                        this.stopScreenshotStreaming();
-                        return;
-                    }
-                } catch (error) {
-                    console.error("Error re-establishing stream:", error);
-                    this.stopScreenshotStreaming();
-                    return;
-                }
             }
 
             try {
                 // Check if we're capturing from the correct active tab
                 await this.checkAndSwitchToActiveTab();
-
-                // Double-check that we still have a valid stream before attempting capture
-                if (!this.screenCapture.hasStream()) {
-                    console.log(
-                        "Lost stream after tab check, skipping this capture cycle"
-                    );
-                    return; // Skip this capture cycle and try again next time
-                }
-
-                // Additional safety check: verify the current tab still exists
-                const currentTabId = this.screenCapture.getCurrentTabId();
-                if (currentTabId) {
-                    try {
-                        await chrome.tabs.get(currentTabId);
-                    } catch (error) {
-                        console.log(
-                            `Current tab ${currentTabId} no longer exists, skipping capture`
-                        );
-                        return; // Skip this capture cycle
-                    }
-                }
 
                 const frameData = await this.screenCapture.captureFrame();
 
@@ -659,40 +591,12 @@ export class AudioHandler {
                     this.geminiAPI.sendVideoFrame(frameData);
                 }
             } catch (error) {
-                // Check if we're in the process of stopping to prevent race conditions
-                if (this.state.isStopping) {
-                    this.stopScreenshotStreaming();
-                    return;
-                }
-
                 // Check if this is a debugger detachment error (which is expected during tab switches)
                 if (
                     error.message &&
                     error.message.includes("Detached while handling command")
                 ) {
-                    console.log(
-                        "Debugger detached during capture, attempting to re-attach..."
-                    );
-
-                    // Try to re-attach to the current active tab instead of stopping
-                    try {
-                        await this.checkAndSwitchToActiveTab();
-
-                        // If we successfully re-attached, continue the loop
-                        if (this.screenCapture.hasStream()) {
-                            console.log(
-                                "Successfully re-attached, continuing capture"
-                            );
-                            return; // Continue the interval loop
-                        }
-                    } catch (reattachError) {
-                        console.error(
-                            "Failed to re-attach after detachment:",
-                            reattachError
-                        );
-                    }
-
-                    // If re-attachment failed, then stop the interval
+                    // Don't count this as a failure, just stop the interval
                     this.stopScreenshotStreaming();
                     return;
                 }
@@ -746,8 +650,8 @@ export class AudioHandler {
             this.screenshotInterval = null;
         }
 
-        // Stop debugger recording (only if not in stopping process to avoid race conditions)
-        if (this.screenCapture.isActive() && !this.state.isStopping) {
+        // Stop debugger recording
+        if (this.screenCapture.isActive()) {
             this.screenCapture.stopRecording();
         }
 
@@ -897,6 +801,7 @@ export class AudioHandler {
     }
 
     startLocalSpeechRecognition() {
+        console.log("🎤 startLocalSpeechRecognition() called");
         const SpeechRecognition =
             window.SpeechRecognition || window.webkitSpeechRecognition;
         if (!SpeechRecognition) {
@@ -1004,7 +909,9 @@ export class AudioHandler {
         };
 
         try {
+            console.log("🎤 Starting speech recognition...");
             this.speechRecognition.start();
+            console.log("🎤 Speech recognition started successfully");
         } catch (error) {
             console.error("Failed to start speech recognition:", error);
         }
@@ -1059,7 +966,9 @@ export class AudioHandler {
     resetInactivityTimer() {
         this.clearInactivityTimer();
 
+        console.log("🔍 Setting inactivity timer for 20 minutes");
         this.inactivityTimer = setTimeout(() => {
+            console.log("⏰ Inactivity timer triggered - stopping listening");
             this.stopListening();
             if (this.callbacks.status) {
                 this.callbacks.status("Session timed out", "warning", 5000);

@@ -112,7 +112,7 @@ export class ShoppingAssistant {
         chrome.storage.local.set({ sidePanelOpen: true }).catch(() => {});
 
         let sidepanelCloseTimeout = null;
-        const CLOSE_DELAY = 3000; // 3 seconds delay
+        const CLOSE_DELAY = 10000; // 10 seconds delay - increased to prevent premature closure
 
         const setSidePanelClosed = async () => {
             // Stop listening mode if active
@@ -134,16 +134,41 @@ export class ShoppingAssistant {
         };
 
         const handleSidePanelHidden = () => {
+            console.log(
+                "🔍 Side panel hidden detected - document.hidden:",
+                document.hidden
+            );
+
             // Clear any existing timeout
             if (sidepanelCloseTimeout) {
                 clearTimeout(sidepanelCloseTimeout);
+                console.log("🔍 Cleared existing close timeout");
+            }
+
+            // Don't set close timeout if listening mode is active
+            if (this.audioHandler.isListening()) {
+                console.log(
+                    "🔍 Listening mode active - not setting close timeout"
+                );
+                return;
             }
 
             // Set a delayed timeout for closure
             sidepanelCloseTimeout = setTimeout(async () => {
+                console.log(
+                    "🔍 Close timeout triggered - document.hidden:",
+                    document.hidden
+                );
                 // Only close if the document is still hidden after the delay
                 if (document.hidden) {
+                    console.log(
+                        "🔍 Side panel still hidden after delay, closing..."
+                    );
                     await setSidePanelClosed();
+                } else {
+                    console.log(
+                        "🔍 Side panel became visible again, not closing"
+                    );
                 }
             }, CLOSE_DELAY);
         };
@@ -180,9 +205,15 @@ export class ShoppingAssistant {
 
         // Handle visibility changes with delay
         document.addEventListener("visibilitychange", () => {
+            console.log(
+                "🔍 Visibility change event - document.hidden:",
+                document.hidden
+            );
             if (document.hidden) {
+                console.log("🔍 Calling handleSidePanelHidden()");
                 handleSidePanelHidden();
             } else {
+                console.log("🔍 Calling handleSidePanelVisible()");
                 handleSidePanelVisible();
             }
         });
