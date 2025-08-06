@@ -51,6 +51,8 @@ export class AudioHandler {
         this.screenshotInterval = null;
         this.audioStreamingStarted = false;
         this.screenCaptureFailureCount = 0;
+        this.isTabSwitching = false; // Flag to prevent multiple simultaneous tab switches
+        this.cleanupTimer = null; // Timer for periodic cleanup
 
         this.setupGeminiCallbacks();
         this.initializeGemini();
@@ -215,6 +217,9 @@ export class AudioHandler {
                                 "Failed to setup screen capture"
                         );
                     }
+
+                    // Pre-attach to other visible tabs for low-latency switching
+                    await this.screenCapture.preAttachToVisibleTabs();
                 } else {
                     throw new Error("No active tab found");
                 }
@@ -225,19 +230,8 @@ export class AudioHandler {
                 // Start continuous screen capture immediately
                 this.startScreenshotStreaming();
             } catch (error) {
-                console.error("Screen capture setup failed:", error.message);
-                // Stop listening mode if screen capture fails
-                await this.stopListening();
-
-                // Notify UI that listening stopped due to setup failure
-                if (this.callbacks.listeningStopped) {
-                    this.callbacks.listeningStopped("setup_failed");
-                }
-
-                return {
-                    success: false,
-                    error: "Screen capture is required for this assistant. Please allow debugger access and try again.",
-                };
+                console.error("Screen capture setup failed:", error);
+                throw error;
             }
 
             // Setup audio capture
@@ -246,32 +240,76 @@ export class AudioHandler {
             // Start media streaming
             await this.startMediaStreaming();
 
-            // Start local speech recognition for UI feedback
+            // Start speech recognition
             this.startLocalSpeechRecognition();
+
+            // Start endpoint detection
+            this.startEndpointDetection();
+
+            // Start speech keep-alive
             this.startSpeechKeepAlive();
 
+            // Start periodic cleanup of debugger attachments
+            this.startPeriodicCleanup();
+
             this.state.isListening = true;
+
+            console.log("Listening mode started successfully");
+
             return { success: true };
         } catch (error) {
-            console.error("Error starting listening:", error);
+            console.error("Failed to start listening:", error);
+            this.state.isListening = false;
             return { success: false, error: error.message };
         }
     }
 
     setupTabSwitching() {
+        console.log("🔧 Setting up tab switching listeners...");
+
         // Listen for tab activation changes
         chrome.tabs.onActivated.addListener(async (activeInfo) => {
-            if (this.state.isListening && this.screenCapture.hasStream()) {
+            console.log("🎯 Tab activation event received:", activeInfo);
+
+            if (
+                this.state.isListening &&
+                this.screenCapture.hasStream() &&
+                !this.isTabSwitching
+            ) {
                 try {
-                    console.log("Tab switched to:", activeInfo.tabId);
-                    await this.screenCapture.switchToTab(activeInfo.tabId);
+                    this.isTabSwitching = true;
+                    console.log(
+                        "🔄 Tab activation detected:",
+                        activeInfo.tabId
+                    );
+
+                    // Use low-latency tab switching - no need to stop/start screenshot streaming
+                    const result = await this.screenCapture.switchToTab(
+                        activeInfo.tabId
+                    );
+
+                    if (result.success) {
+                        console.log(
+                            "✅ Low-latency tab switch completed successfully"
+                        );
+                    } else {
+                        console.error("❌ Tab switch failed:", result.error);
+                    }
                 } catch (error) {
                     console.error(
-                        "Failed to switch to tab:",
+                        "❌ Failed to switch to tab:",
                         activeInfo.tabId,
                         error
                     );
+                } finally {
+                    this.isTabSwitching = false;
                 }
+            } else {
+                console.log("⏭️ Tab activation ignored - conditions not met:", {
+                    isListening: this.state.isListening,
+                    hasStream: this.screenCapture.hasStream(),
+                    isTabSwitching: this.isTabSwitching,
+                });
             }
         });
 
@@ -284,9 +322,21 @@ export class AudioHandler {
             ) {
                 try {
                     console.log("Tab updated:", tabId, "URL:", tab.url);
-                    // Re-attach if needed
-                    if (!this.screenCapture.attachedTabs.has(tabId)) {
-                        await this.screenCapture.setup(tabId);
+
+                    // Check if the new URL is valid for debugger attachment
+                    if (
+                        tab.url.startsWith("chrome://") ||
+                        tab.url.startsWith("chrome-extension://")
+                    ) {
+                        console.log(
+                            "Tab now has invalid URL, detaching debugger"
+                        );
+                        await this.screenCapture.detachFromTab(tabId);
+                    } else {
+                        // Re-attach if needed
+                        if (!this.screenCapture.attachedTabs.has(tabId)) {
+                            await this.screenCapture.setup(tabId);
+                        }
                     }
                 } catch (error) {
                     console.error("Failed to handle tab update:", tabId, error);
@@ -294,11 +344,48 @@ export class AudioHandler {
             }
         });
 
-        // Listen for tab removal
-        chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
+        // Listen for tab removal - IMPROVED CLEANUP
+        chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
             console.log("Tab removed:", tabId);
-            // The debugger will automatically detach, but we can clean up our tracking
+
+            // Clean up debugger attachment for the removed tab
+            if (this.screenCapture.attachedTabs.has(tabId)) {
+                try {
+                    console.log("Detaching debugger from removed tab:", tabId);
+                    await this.screenCapture.detachFromTab(tabId);
+                    console.log(
+                        "Successfully detached from removed tab:",
+                        tabId
+                    );
+                } catch (error) {
+                    console.error(
+                        "Failed to detach from removed tab:",
+                        tabId,
+                        error
+                    );
+                }
+            }
         });
+
+        // Listen for window focus changes (window management)
+        chrome.windows.onFocusChanged.addListener(async (windowId) => {
+            if (this.state.isListening) {
+                try {
+                    console.log("Window focus changed to:", windowId);
+
+                    // Validate all attached tabs when window focus changes
+                    // This helps catch any tabs that might have become invalid
+                    await this.screenCapture.validateAttachedTabs();
+                } catch (error) {
+                    console.error(
+                        "Failed to handle window focus change:",
+                        error
+                    );
+                }
+            }
+        });
+
+        console.log("✅ Tab switching listeners setup complete");
     }
 
     async handleScreenCaptureFailure() {
@@ -382,6 +469,7 @@ export class AudioHandler {
             this.clearInactivityTimer();
             this.clearSpeechKeepAlive();
             this.stopScreenshotStreaming();
+            this.stopPeriodicCleanup(); // Stop periodic cleanup on stop
 
             // Reset streaming flags for next session
             this.videoStreamingStarted = false;
@@ -519,6 +607,9 @@ export class AudioHandler {
             }
 
             try {
+                // FALLBACK: Check if we're capturing from the correct active tab
+                await this.checkAndSwitchToActiveTab();
+
                 console.log(
                     "Screenshot interval triggered - capturing frame..."
                 );
@@ -556,6 +647,19 @@ export class AudioHandler {
                     );
                 }
             } catch (error) {
+                // Check if this is a debugger detachment error (which is expected during tab switches)
+                if (
+                    error.message &&
+                    error.message.includes("Detached while handling command")
+                ) {
+                    console.log(
+                        "Debugger detached during frame capture (expected during tab switch)"
+                    );
+                    // Don't count this as a failure, just stop the interval
+                    this.stopScreenshotStreaming();
+                    return;
+                }
+
                 console.error(
                     "Frame capture failed:",
                     error?.message || error || "Unknown error"
@@ -565,6 +669,46 @@ export class AudioHandler {
                 this.handleScreenCaptureFailure();
             }
         }, 100); // 10 FPS
+    }
+
+    // Fallback method to check and switch to the active tab
+    async checkAndSwitchToActiveTab() {
+        try {
+            // Get the currently active tab
+            const [activeTab] = await chrome.tabs.query({
+                active: true,
+                currentWindow: true,
+            });
+
+            if (!activeTab) {
+                console.warn("⚠️ No active tab found");
+                return;
+            }
+
+            const currentTabId = this.screenCapture.getCurrentTabId();
+
+            // If we're not capturing from the active tab, switch to it
+            if (currentTabId !== activeTab.id) {
+                console.log(
+                    `🔄 FALLBACK: Switching from tab ${currentTabId} to active tab ${activeTab.id}`
+                );
+
+                // Use the same switching logic
+                const result = await this.screenCapture.switchToTab(
+                    activeTab.id
+                );
+                if (result.success) {
+                    console.log("✅ Fallback tab switch successful");
+                } else {
+                    console.error(
+                        "❌ Fallback tab switch failed:",
+                        result.error
+                    );
+                }
+            }
+        } catch (error) {
+            console.error("❌ Error in fallback tab check:", error);
+        }
     }
 
     stopScreenshotStreaming() {
@@ -1090,5 +1234,39 @@ export class AudioHandler {
 
     isProcessingResponse() {
         return this.state.isProcessingResponse;
+    }
+
+    startPeriodicCleanup() {
+        // Clean up unused debugger attachments every 30 seconds
+        this.cleanupTimer = setInterval(async () => {
+            if (this.state.isListening) {
+                try {
+                    // First validate all attached tabs
+                    await this.screenCapture.validateAttachedTabs();
+
+                    // Then do regular cleanup
+                    await this.screenCapture.cleanupUnusedAttachments();
+                } catch (error) {
+                    console.error("Error during periodic cleanup:", error);
+                }
+            }
+        }, 30000); // 30 seconds
+    }
+
+    stopPeriodicCleanup() {
+        if (this.cleanupTimer) {
+            clearInterval(this.cleanupTimer);
+            this.cleanupTimer = null;
+        }
+    }
+
+    // Debug method to get current state
+    getDebuggerState() {
+        return {
+            isListening: this.state.isListening,
+            isTabSwitching: this.isTabSwitching,
+            screenCaptureState: this.screenCapture.getDebuggerState(),
+            detailedState: this.screenCapture.getDetailedAttachmentStatus(),
+        };
     }
 }
