@@ -441,6 +441,9 @@ export class AudioHandler {
             // Stop Gemini streaming
             await this.geminiAPI.disconnect();
 
+            // Add delay before cleanup to prevent race condition with screenshot interval
+            await new Promise((resolve) => setTimeout(resolve, 1500));
+
             // Stop screen capture
             await this.screenCapture.cleanup();
 
@@ -572,14 +575,51 @@ export class AudioHandler {
                 return;
             }
 
+            // Check if we have a valid stream before attempting capture
             if (!this.screenCapture.hasStream()) {
-                this.stopScreenshotStreaming();
-                return;
+                console.log(
+                    "No valid stream, attempting to re-establish connection..."
+                );
+                try {
+                    await this.checkAndSwitchToActiveTab();
+                    if (!this.screenCapture.hasStream()) {
+                        console.log(
+                            "Failed to re-establish stream, stopping capture"
+                        );
+                        this.stopScreenshotStreaming();
+                        return;
+                    }
+                } catch (error) {
+                    console.error("Error re-establishing stream:", error);
+                    this.stopScreenshotStreaming();
+                    return;
+                }
             }
 
             try {
                 // Check if we're capturing from the correct active tab
                 await this.checkAndSwitchToActiveTab();
+
+                // Double-check that we still have a valid stream before attempting capture
+                if (!this.screenCapture.hasStream()) {
+                    console.log(
+                        "Lost stream after tab check, skipping this capture cycle"
+                    );
+                    return; // Skip this capture cycle and try again next time
+                }
+
+                // Additional safety check: verify the current tab still exists
+                const currentTabId = this.screenCapture.getCurrentTabId();
+                if (currentTabId) {
+                    try {
+                        await chrome.tabs.get(currentTabId);
+                    } catch (error) {
+                        console.log(
+                            `Current tab ${currentTabId} no longer exists, skipping capture`
+                        );
+                        return; // Skip this capture cycle
+                    }
+                }
 
                 const frameData = await this.screenCapture.captureFrame();
 
@@ -608,7 +648,29 @@ export class AudioHandler {
                     error.message &&
                     error.message.includes("Detached while handling command")
                 ) {
-                    // Don't count this as a failure, just stop the interval
+                    console.log(
+                        "Debugger detached during capture, attempting to re-attach..."
+                    );
+
+                    // Try to re-attach to the current active tab instead of stopping
+                    try {
+                        await this.checkAndSwitchToActiveTab();
+
+                        // If we successfully re-attached, continue the loop
+                        if (this.screenCapture.hasStream()) {
+                            console.log(
+                                "Successfully re-attached, continuing capture"
+                            );
+                            return; // Continue the interval loop
+                        }
+                    } catch (reattachError) {
+                        console.error(
+                            "Failed to re-attach after detachment:",
+                            reattachError
+                        );
+                    }
+
+                    // If re-attachment failed, then stop the interval
                     this.stopScreenshotStreaming();
                     return;
                 }
@@ -634,17 +696,25 @@ export class AudioHandler {
             });
 
             if (!activeTab) {
+                console.log("No active tab found");
                 return;
             }
 
             const currentTabId = this.screenCapture.getCurrentTabId();
 
-            // If we're not capturing from the active tab, switch to it
-            if (currentTabId !== activeTab.id) {
+            // If we're not capturing from the active tab, or if we don't have a stream, switch to it
+            if (
+                currentTabId !== activeTab.id ||
+                !this.screenCapture.hasStream()
+            ) {
+                console.log(
+                    `Switching from tab ${currentTabId} to active tab ${activeTab.id}`
+                );
                 await this.screenCapture.switchToTab(activeTab.id);
             }
         } catch (error) {
             console.error("Error in fallback tab check:", error);
+            throw error; // Re-throw so caller can handle it
         }
     }
 

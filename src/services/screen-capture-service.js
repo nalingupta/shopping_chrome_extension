@@ -47,9 +47,12 @@ export class ScreenCaptureService {
             // Check if another debugger is already attached
             const isAttached = await this.isDebuggerAttached(tabId);
             if (isAttached) {
+                const tabUrl = await this.getTabUrl(tabId);
                 console.warn(
                     "Another debugger is already attached to tab:",
-                    tabId
+                    tabId,
+                    "URL:",
+                    tabUrl
                 );
                 return {
                     success: false,
@@ -75,16 +78,24 @@ export class ScreenCaptureService {
                 chrome.debugger.onEvent.addListener(
                     this.handleDebuggerEvent.bind(this)
                 );
-                chrome.debugger.onDetach.addListener(
-                    this.handleDebuggerDetach.bind(this)
+                chrome.debugger.onDetach.addListener((source, reason) =>
+                    this.handleDebuggerDetach(source, reason)
                 );
                 this.isInitialized = true;
             }
 
-            console.log("Debugger attached to tab:", tabId);
+            const tabUrl = await this.getTabUrl(tabId);
+            console.log("Debugger attached to tab:", tabId, "URL:", tabUrl);
             return { success: true };
         } catch (error) {
-            console.error("Failed to attach debugger to tab:", tabId, error);
+            const tabUrl = await this.getTabUrl(tabId);
+            console.error(
+                "Failed to attach debugger to tab:",
+                tabId,
+                "URL:",
+                tabUrl,
+                error
+            );
             return {
                 success: false,
                 error: error.message || "Unknown debugger error",
@@ -102,9 +113,12 @@ export class ScreenCaptureService {
             this.errorCallback = errorCallback;
 
             this.isRecording = true;
+            const tabUrl = await this.getTabUrl(this.currentTabId);
             console.log(
                 "Screen recording started via debugger for tab:",
-                this.currentTabId
+                this.currentTabId,
+                "URL:",
+                tabUrl
             );
 
             return { success: true };
@@ -140,9 +154,12 @@ export class ScreenCaptureService {
                 throw new Error("No screenshot data received");
             }
         } catch (error) {
+            const tabUrl = await this.getTabUrl(this.currentTabId);
             console.error(
                 "Frame capture failed for tab:",
                 this.currentTabId,
+                "URL:",
+                tabUrl,
                 error
             );
             throw new Error(error.message || "Frame capture failed");
@@ -161,9 +178,17 @@ export class ScreenCaptureService {
         }
     }
 
-    handleDebuggerDetach(source, reason) {
+    async handleDebuggerDetach(source, reason) {
         const tabId = source.tabId;
-        console.log("Debugger detached from tab:", tabId, "Reason:", reason);
+        const tabUrl = await this.getTabUrl(tabId);
+        console.log(
+            "Debugger detached from tab:",
+            tabId,
+            "URL:",
+            tabUrl,
+            "Reason:",
+            reason
+        );
 
         // Remove from attached tabs
         this.attachedTabs.delete(tabId);
@@ -188,6 +213,24 @@ export class ScreenCaptureService {
             // If we're already on this tab, no need to switch
             if (this.currentTabId === tabId && this.attachedTabs.has(tabId)) {
                 return { success: true };
+            }
+
+            // Check if the target tab URL is restricted before attempting to attach
+            try {
+                const tab = await chrome.tabs.get(tabId);
+                if (this.isRestrictedUrl(tab.url)) {
+                    console.log("Cannot switch to restricted URL:", tab.url);
+                    return {
+                        success: false,
+                        error: "Cannot attach to restricted URL",
+                    };
+                }
+            } catch (error) {
+                console.log(
+                    "Tab no longer exists or cannot be accessed:",
+                    tabId
+                );
+                return { success: false, error: "Tab no longer exists" };
             }
 
             // If we're not attached to the target tab, check if we should attach
@@ -244,11 +287,9 @@ export class ScreenCaptureService {
             // Get all tabs in ALL windows, not just current window
             const allTabs = await chrome.tabs.query({});
 
-            // Filter out chrome:// and chrome-extension:// tabs
+            // Filter out restricted URLs
             const eligibleTabs = allTabs.filter(
-                (tab) =>
-                    !tab.url.startsWith("chrome://") &&
-                    !tab.url.startsWith("chrome-extension://")
+                (tab) => !this.isRestrictedUrl(tab.url)
             );
 
             // Limit to maximum 10 tabs to prevent resource issues
@@ -305,11 +346,8 @@ export class ScreenCaptureService {
             const results = [];
 
             for (const tab of tabs) {
-                // Skip chrome:// and chrome-extension:// tabs
-                if (
-                    tab.url.startsWith("chrome://") ||
-                    tab.url.startsWith("chrome-extension://")
-                ) {
+                // Skip restricted URLs
+                if (this.isRestrictedUrl(tab.url)) {
                     continue;
                 }
 
@@ -367,6 +405,26 @@ export class ScreenCaptureService {
     async detachFromTab(tabId) {
         try {
             if (this.attachedTabs.has(tabId)) {
+                // Check if the tab still exists before attempting to detach
+                try {
+                    await chrome.tabs.get(tabId);
+                } catch (error) {
+                    // Tab no longer exists, just remove from tracking
+                    console.log(
+                        "Tab no longer exists, removing from tracking:",
+                        tabId
+                    );
+                    this.attachedTabs.delete(tabId);
+                    if (this.currentTabId === tabId) {
+                        this.currentTabId = null;
+                    }
+
+                    // Try to find and attach to a new tab to maintain hot-switching capability
+                    await this.findAndAttachToNewTab();
+
+                    return { success: true };
+                }
+
                 await chrome.debugger.detach({ tabId });
                 this.attachedTabs.delete(tabId);
 
@@ -375,12 +433,20 @@ export class ScreenCaptureService {
                     this.currentTabId = null;
                 }
 
-                console.log("Detached from tab:", tabId);
+                const tabUrl = await this.getTabUrl(tabId);
+                console.log("Detached from tab:", tabId, "URL:", tabUrl);
                 return { success: true };
             }
             return { success: true }; // Already detached
         } catch (error) {
-            console.error("Failed to detach from tab:", tabId, error);
+            const tabUrl = await this.getTabUrl(tabId);
+            console.error(
+                "Failed to detach from tab:",
+                tabId,
+                "URL:",
+                tabUrl,
+                error
+            );
             // Remove from our tracking even if detach failed
             this.attachedTabs.delete(tabId);
             if (this.currentTabId === tabId) {
@@ -395,14 +461,52 @@ export class ScreenCaptureService {
             // Stop recording
             await this.stopRecording();
 
-            // Detach from all tabs
+            // Check if there are any attached tabs before attempting to detach
+            if (this.attachedTabs.size === 0) {
+                console.log("No tabs attached, skipping detachment");
+                return;
+            }
+
+            // Get all currently open tabs to filter out closed ones
+            const allTabs = await chrome.tabs.query({});
+            const openTabIds = new Set(allTabs.map((tab) => tab.id));
+
+            // Track how many tabs we're removing to maintain hot-switching capability
+            let removedTabsCount = 0;
+
+            // Detach from all tabs that still exist
             const tabIds = Array.from(this.attachedTabs.keys());
             for (const tabId of tabIds) {
+                // Skip tabs that no longer exist
+                if (!openTabIds.has(tabId)) {
+                    console.log("Skipping detach for closed tab:", tabId);
+                    removedTabsCount++;
+                    continue;
+                }
+
                 try {
                     await chrome.debugger.detach({ tabId });
-                    console.log("Detached from tab:", tabId);
+                    const tabUrl = await this.getTabUrl(tabId);
+                    console.log("Detached from tab:", tabId, "URL:", tabUrl);
                 } catch (error) {
-                    console.error("Failed to detach from tab:", tabId, error);
+                    const tabUrl = await this.getTabUrl(tabId);
+                    console.error(
+                        "Failed to detach from tab:",
+                        tabId,
+                        "URL:",
+                        tabUrl,
+                        error
+                    );
+                }
+            }
+
+            // Try to replace removed tabs with new ones to maintain hot-switching capability
+            if (removedTabsCount > 0) {
+                console.log(
+                    `Attempting to replace ${removedTabsCount} removed tabs with new ones`
+                );
+                for (let i = 0; i < removedTabsCount; i++) {
+                    await this.findAndAttachToNewTab();
                 }
             }
 
@@ -426,8 +530,8 @@ export class ScreenCaptureService {
                 chrome.debugger.onEvent.removeListener(
                     this.handleDebuggerEvent.bind(this)
                 );
-                chrome.debugger.onDetach.removeListener(
-                    this.handleDebuggerDetach.bind(this)
+                chrome.debugger.onDetach.removeListener((source, reason) =>
+                    this.handleDebuggerDetach(source, reason)
                 );
                 this.isInitialized = false;
             } catch (error) {
@@ -515,10 +619,7 @@ export class ScreenCaptureService {
                     const tab = await chrome.tabs.get(tabId);
 
                     // Check if URL is still valid for debugger attachment
-                    if (
-                        tab.url.startsWith("chrome://") ||
-                        tab.url.startsWith("chrome-extension://")
-                    ) {
+                    if (this.isRestrictedUrl(tab.url)) {
                         tabsToDetach.push(tabId);
                     }
                 } catch (error) {
@@ -553,5 +654,74 @@ export class ScreenCaptureService {
 
     getAttachedTabs() {
         return Array.from(this.attachedTabs.keys());
+    }
+
+    async getTabUrl(tabId) {
+        try {
+            const tab = await chrome.tabs.get(tabId);
+            return tab.url;
+        } catch (error) {
+            return "unknown";
+        }
+    }
+
+    isRestrictedUrl(url) {
+        return (
+            url.startsWith("chrome://") ||
+            url.startsWith("chrome-extension://") ||
+            url.startsWith("moz-extension://") ||
+            url.startsWith("edge://") ||
+            url.startsWith("about:")
+        );
+    }
+
+    async findAndAttachToNewTab() {
+        try {
+            // Get all currently open tabs
+            const allTabs = await chrome.tabs.query({});
+
+            // Filter out restricted URLs
+            const eligibleTabs = allTabs.filter(
+                (tab) => !this.isRestrictedUrl(tab.url)
+            );
+
+            // Find a tab that's not currently being tracked
+            const untrackedTab = eligibleTabs.find(
+                (tab) => !this.attachedTabs.has(tab.id)
+            );
+
+            if (untrackedTab) {
+                console.log(
+                    "Found new tab to attach to:",
+                    untrackedTab.id,
+                    "URL:",
+                    untrackedTab.url
+                );
+                const result = await this.setup(untrackedTab.id);
+                if (result.success) {
+                    console.log(
+                        "Successfully attached to new tab:",
+                        untrackedTab.id,
+                        "URL:",
+                        untrackedTab.url
+                    );
+                    return { success: true, tabId: untrackedTab.id };
+                } else {
+                    console.log(
+                        "Failed to attach to new tab:",
+                        untrackedTab.id,
+                        "Error:",
+                        result.error
+                    );
+                    return { success: false, error: result.error };
+                }
+            } else {
+                console.log("No new tabs available to attach to");
+                return { success: false, error: "No new tabs available" };
+            }
+        } catch (error) {
+            console.error("Error finding and attaching to new tab:", error);
+            return { success: false, error: error.message };
+        }
     }
 }

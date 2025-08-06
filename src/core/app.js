@@ -102,6 +102,9 @@ export class ShoppingAssistant {
     }
 
     trackSidePanelLifecycle() {
+        // Clean up any orphaned debugger attachments when sidepanel opens
+        this.cleanupDebuggerAttachments();
+
         chrome.runtime
             .sendMessage({ type: MESSAGE_TYPES.SIDE_PANEL_OPENED })
             .catch(() => {});
@@ -116,6 +119,9 @@ export class ShoppingAssistant {
                     .sendMessage({ type: MESSAGE_TYPES.LISTENING_STOPPED })
                     .catch(() => {});
             }
+
+            // Clean up debugger attachments when sidepanel closes
+            await this.cleanupDebuggerAttachments();
 
             chrome.runtime
                 .sendMessage({ type: MESSAGE_TYPES.SIDE_PANEL_CLOSED })
@@ -594,6 +600,20 @@ export class ShoppingAssistant {
             this.hideWelcomeScreen();
         } else {
             this.uiState.showStatus("Start a chat", "info");
+        }
+    }
+
+    async cleanupDebuggerAttachments() {
+        try {
+            console.log("Cleaning up debugger attachments...");
+
+            // Clean up any existing debugger attachments
+            if (this.audioHandler && this.audioHandler.screenCapture) {
+                await this.audioHandler.screenCapture.cleanup();
+                console.log("Debugger attachments cleaned up successfully");
+            }
+        } catch (error) {
+            console.error("Error cleaning up debugger attachments:", error);
         }
     }
 }
