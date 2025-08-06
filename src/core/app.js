@@ -11,6 +11,9 @@ export class ShoppingAssistant {
     constructor() {
         this.uiState = new UIState();
         this.audioHandler = new AudioHandler();
+        this.scrollTimeout = null; // For throttling scroll updates
+        this.lastStreamingUpdate = 0; // For throttling streaming updates
+        this.streamingUpdateTimeout = null; // For debouncing streaming updates
 
         this.initializeElements();
         this.initializeEventListeners();
@@ -261,7 +264,18 @@ export class ShoppingAssistant {
     handleClearChat() {
         this.elements.messages.innerHTML = "";
         MessageRenderer.clearInterimMessage();
+        MessageRenderer.clearStreamingMessage();
         this.uiState.clearStatus();
+
+        // Clear all timeouts
+        if (this.scrollTimeout) {
+            clearTimeout(this.scrollTimeout);
+            this.scrollTimeout = null;
+        }
+        if (this.streamingUpdateTimeout) {
+            clearTimeout(this.streamingUpdateTimeout);
+            this.streamingUpdateTimeout = null;
+        }
 
         this.elements.userInput.value = "";
         this.adjustTextareaHeight();
@@ -369,6 +383,7 @@ export class ShoppingAssistant {
     handleTranscriptionReceived(transcription) {
         if (transcription) {
             MessageRenderer.clearInterimMessage();
+            MessageRenderer.clearStreamingMessage(); // Clear any existing streaming messages
 
             if (this.isErrorTranscription(transcription)) {
                 this.uiState.showStatus("Speech failed", "error", 4000);
@@ -391,22 +406,54 @@ export class ShoppingAssistant {
     }
 
     handleBotResponse(response) {
+        console.log("handleBotResponse called with:", response);
+
         // Set responding state when bot starts responding
         this.uiState.setSpeechState("responding");
 
-        this.addMessage(response.text, "assistant");
-
-        // Return to listening state if still listening, otherwise idle
-        if (this.audioHandler.isListening()) {
-            this.uiState.setSpeechState("listening");
-            this.uiState.showStatus("Listening...", "info");
+        if (response.isStreaming) {
+            console.log("Handling streaming update:", response.text);
+            // Handle streaming update (ChatGPT-style)
+            this.updateStreamingMessage(response.text);
         } else {
-            this.uiState.setSpeechState("idle");
+            console.log("Handling final response:", response.text);
+            // Handle final response - finalize streaming message
+            // The streaming message already contains the full text,
+            // so we just need to finalize its appearance.
+
+            // Clear all timeouts before finalizing
+            if (this.scrollTimeout) {
+                clearTimeout(this.scrollTimeout);
+                this.scrollTimeout = null;
+            }
+            if (this.streamingUpdateTimeout) {
+                clearTimeout(this.streamingUpdateTimeout);
+                this.streamingUpdateTimeout = null;
+            }
+
+            MessageRenderer.finalizeStreamingMessage();
+
+            // Ensure final scroll to bottom
+            this.scrollToBottom();
+
+            // Save the finalized message to chat history
+            this.saveState();
+
+            // Return to listening state if still listening, otherwise idle
+            if (this.audioHandler.isListening()) {
+                this.uiState.setSpeechState("listening");
+                this.uiState.showStatus("Listening...", "info");
+            } else {
+                this.uiState.setSpeechState("idle");
+            }
         }
     }
 
     showInterimText(text) {
         this.hideWelcomeScreen();
+
+        // Clear any existing streaming messages when showing new interim text
+        MessageRenderer.clearStreamingMessage();
 
         let interimMessage = document.getElementById("interim-message");
 
@@ -418,6 +465,39 @@ export class ShoppingAssistant {
         }
 
         this.scrollToBottom();
+    }
+
+    updateStreamingMessage(text) {
+        // Debounce updates to prevent flickering
+        if (this.streamingUpdateTimeout) {
+            clearTimeout(this.streamingUpdateTimeout);
+        }
+
+        this.streamingUpdateTimeout = setTimeout(() => {
+            console.log("updateStreamingMessage called with:", text);
+            this.hideWelcomeScreen();
+
+            let streamingMessage = document.getElementById("streaming-message");
+
+            if (!streamingMessage) {
+                console.log("Creating new streaming message");
+                // Create new streaming message
+                streamingMessage = MessageRenderer.createStreamingMessage(text);
+                this.elements.messages.appendChild(streamingMessage);
+            } else {
+                console.log("Updating existing streaming message");
+                // Update existing streaming message
+                MessageRenderer.updateStreamingMessage(text);
+            }
+
+            // Throttle scrolling to prevent flickering
+            if (!this.scrollTimeout) {
+                this.scrollTimeout = setTimeout(() => {
+                    this.scrollToBottom();
+                    this.scrollTimeout = null;
+                }, 150); // Increased to 150ms
+            }
+        }, 16); // ~60fps debounce
     }
 
     isErrorTranscription(transcription) {
@@ -448,7 +528,7 @@ export class ShoppingAssistant {
     saveState() {
         const messages = Array.from(
             this.elements.messages.querySelectorAll(
-                ".message:not(.interim-message):not(.status-message)"
+                ".message:not(.interim-message):not(.status-message):not(.streaming-message)"
             )
         ).map((msg) => ({
             content: msg.querySelector(".message-content").textContent,
