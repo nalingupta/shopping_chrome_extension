@@ -8,6 +8,7 @@ export class AudioHandler {
         this.state = {
             isListening: false,
             isProcessingResponse: false,
+            isStopping: false, // Flag to prevent race conditions during stop
         };
 
         this.callbacks = {
@@ -187,6 +188,8 @@ export class AudioHandler {
         }
 
         try {
+            // Clear stopping flag when starting
+            this.state.isStopping = false;
             this.resetInactivityTimer();
 
             // Connect to Gemini
@@ -394,6 +397,8 @@ export class AudioHandler {
         }
 
         try {
+            // Set stopping flag immediately to prevent race conditions
+            this.state.isStopping = true;
             this.state.isListening = false;
 
             // Process any remaining interim text before stopping
@@ -452,10 +457,14 @@ export class AudioHandler {
             this.videoStreamingStarted = false;
             this.audioStreamingStarted = false;
 
+            // Clear stopping flag
+            this.state.isStopping = false;
+
             return { success: true };
         } catch (error) {
             console.error("Error stopping listening:", error);
             this.state.isListening = false;
+            this.state.isStopping = false; // Clear stopping flag on error
             return { success: false, error: error.message };
         }
     }
@@ -557,6 +566,12 @@ export class AudioHandler {
 
         // Capture frames at regular intervals
         this.screenshotInterval = setInterval(async () => {
+            // Check if we're in the process of stopping to prevent race conditions
+            if (this.state.isStopping) {
+                this.stopScreenshotStreaming();
+                return;
+            }
+
             if (!this.screenCapture.hasStream()) {
                 this.stopScreenshotStreaming();
                 return;
@@ -582,6 +597,12 @@ export class AudioHandler {
                     this.geminiAPI.sendVideoFrame(frameData);
                 }
             } catch (error) {
+                // Check if we're in the process of stopping to prevent race conditions
+                if (this.state.isStopping) {
+                    this.stopScreenshotStreaming();
+                    return;
+                }
+
                 // Check if this is a debugger detachment error (which is expected during tab switches)
                 if (
                     error.message &&
@@ -633,8 +654,8 @@ export class AudioHandler {
             this.screenshotInterval = null;
         }
 
-        // Stop debugger recording
-        if (this.screenCapture.isActive()) {
+        // Stop debugger recording (only if not in stopping process to avoid race conditions)
+        if (this.screenCapture.isActive() && !this.state.isStopping) {
             this.screenCapture.stopRecording();
         }
 
