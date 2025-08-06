@@ -280,11 +280,17 @@ export class WebSocketManager {
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
             try {
                 const messageJson = JSON.stringify(message);
-                console.log(
-                    "📤 WebSocketManager: Sending message:",
-                    messageJson.substring(0, 200) +
-                        (messageJson.length > 200 ? "..." : "")
-                );
+                // Only log non-media messages to reduce console noise
+                if (
+                    !message.realtimeInput?.audio &&
+                    !message.realtimeInput?.mediaChunks
+                ) {
+                    console.log(
+                        "📤 WebSocketManager: Sending message:",
+                        messageJson.substring(0, 200) +
+                            (messageJson.length > 200 ? "..." : "")
+                    );
+                }
                 this.ws.send(messageJson);
             } catch (error) {
                 console.error(

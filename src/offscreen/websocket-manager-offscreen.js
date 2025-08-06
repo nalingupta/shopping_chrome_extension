@@ -105,30 +105,28 @@ class OffscreenWebSocketManager {
 
                 case MESSAGE_TYPES.SEND_AUDIO_CHUNK:
                     if (!this.isInitialized) {
-                        throw new Error('WebSocket manager not initialized');
+                        throw new Error("WebSocket manager not initialized");
                     }
-                    
+
                     const { audioData } = request.data;
-                    console.log('🎤 Offscreen: Sending audio chunk');
-                    
+
                     // Send audio data through WebSocket
                     this.webSocketManager.sendAudioChunk(audioData);
                     sendResponse({ success: true });
                     break;
-                    
+
                 case MESSAGE_TYPES.SEND_VIDEO_FRAME:
                     if (!this.isInitialized) {
-                        throw new Error('WebSocket manager not initialized');
+                        throw new Error("WebSocket manager not initialized");
                     }
-                    
+
                     const { videoData } = request.data;
-                    console.log('📹 Offscreen: Sending video frame');
-                    
+
                     // Send video data through WebSocket
                     this.webSocketManager.sendVideoFrame(videoData);
                     sendResponse({ success: true });
                     break;
-                    
+
                 case MESSAGE_TYPES.RECONNECT_WEBSOCKET:
                     console.log("🔄 Offscreen: Reconnecting WebSocket");
                     await this.webSocketManager.disconnect();

@@ -1,4 +1,5 @@
 import { API_CONFIG } from "../config/api-keys.js";
+import { streamingLogger } from "../utils/streaming-logger.js";
 
 export class GeminiLiveAPI {
     constructor() {
@@ -67,6 +68,9 @@ export class GeminiLiveAPI {
                     this.sendConfiguration();
                     this.startKeepAlive();
 
+                    // Start streaming logger
+                    streamingLogger.start();
+
                     if (this.callbacks.onConnectionStateChange) {
                         this.callbacks.onConnectionStateChange("connected");
                     }
@@ -95,6 +99,9 @@ export class GeminiLiveAPI {
                     this.isSetupComplete = false;
                     this.stopKeepAlive();
                     this.clearBuffers();
+
+                    // Stop streaming logger
+                    streamingLogger.stop();
 
                     if (this.callbacks.onConnectionStateChange) {
                         this.callbacks.onConnectionStateChange("disconnected");
@@ -166,6 +173,9 @@ Important: Only describe what you can actually see in the provided screen captur
             return;
         }
 
+        // Log audio chunk for streaming statistics
+        streamingLogger.logAudioChunk(base64Data.length);
+
         const message = {
             realtimeInput: {
                 audio: {
@@ -183,18 +193,12 @@ Important: Only describe what you can actually see in the provided screen captur
             !this.ws ||
             this.ws.readyState !== WebSocket.OPEN
         ) {
-            console.log(
-                "Video frame queued - setup incomplete or connection not ready"
-            );
             this.pendingVideoFrames.push(base64Data);
             return;
         }
 
-        console.log(
-            "Sending video frame to Gemini, size:",
-            base64Data.length,
-            "bytes"
-        );
+        // Log video frame for streaming statistics
+        streamingLogger.logVideoFrame(base64Data.length);
 
         const message = {
             realtimeInput: {
@@ -213,11 +217,17 @@ Important: Only describe what you can actually see in the provided screen captur
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
             try {
                 const messageStr = JSON.stringify(message);
-                console.log(
-                    "Sending message to Gemini:",
-                    messageStr.substring(0, 200) +
-                        (messageStr.length > 200 ? "..." : "")
-                );
+                // Only log non-media messages to reduce console noise
+                if (
+                    !message.realtimeInput?.audio &&
+                    !message.realtimeInput?.mediaChunks
+                ) {
+                    console.log(
+                        "Sending message to Gemini:",
+                        messageStr.substring(0, 200) +
+                            (messageStr.length > 200 ? "..." : "")
+                    );
+                }
                 this.ws.send(messageStr);
             } catch (error) {
                 console.error("Failed to send message:", error);
@@ -233,8 +243,6 @@ Important: Only describe what you can actually see in the provided screen captur
     handleMessage(data) {
         try {
             const message = JSON.parse(data);
-            console.log("Received Gemini message:", message);
-            console.log("Message keys:", Object.keys(message));
 
             if (
                 message.setupComplete !== undefined ||
@@ -246,34 +254,9 @@ Important: Only describe what you can actually see in the provided screen captur
                 return;
             }
 
-            // Debug: Log ALL messages we receive, not just ones with serverContent
-            console.log("Processing non-setup message:", message);
-
-            // Debug: Log the structure of serverContent if it exists
-            if (message.serverContent) {
-                console.log(
-                    "ServerContent keys:",
-                    Object.keys(message.serverContent)
-                );
-                console.log("ServerContent:", message.serverContent);
-            }
-
-            // Debug: Check for different possible response structures
-            if (message.serverContent && message.serverContent.modelTurn) {
-                console.log(
-                    "Found modelTurn:",
-                    message.serverContent.modelTurn
-                );
-            }
-
-            if (
-                message.serverContent &&
-                message.serverContent.turnComplete !== undefined
-            ) {
-                console.log(
-                    "Turn complete flag found:",
-                    message.serverContent.turnComplete
-                );
+            // Only log important messages to reduce console noise
+            if (message.serverContent?.turnComplete === true) {
+                console.log("Turn complete flag found");
             }
 
             this.responseQueue.push(message);
@@ -285,31 +268,18 @@ Important: Only describe what you can actually see in the provided screen captur
 
     async processResponseQueue() {
         if (this.isProcessingTurn) {
-            console.log("Already processing turn, skipping");
             return;
         }
-
-        console.log(
-            "Processing response queue, length:",
-            this.responseQueue.length
-        );
 
         while (this.responseQueue.length > 0) {
             const message = this.responseQueue.shift();
             this.currentTurn.push(message);
-
-            console.log("Processing message in turn:", message);
-            console.log("Message keys:", Object.keys(message));
 
             // Extract text from this message chunk
             const chunkText = this.extractTextFromMessage(message);
             if (chunkText) {
                 this.currentStreamingResponse += chunkText;
                 this.isStreaming = true;
-                console.log(
-                    "Accumulated streaming response:",
-                    this.currentStreamingResponse
-                );
 
                 // Send real-time streaming update to UI (ChatGPT-style)
                 if (this.callbacks.onStreamingUpdate) {
@@ -328,16 +298,6 @@ Important: Only describe what you can actually see in the provided screen captur
                 message.turnComplete === true ||
                 message.turn_complete === true;
 
-            console.log("Turn completion check:", {
-                hasServerContent: !!message.serverContent,
-                serverContentTurnComplete: message.serverContent?.turnComplete,
-                serverContentTurn_complete:
-                    message.serverContent?.turn_complete,
-                messageTurnComplete: message.turnComplete,
-                messageTurn_complete: message.turn_complete,
-                isTurnComplete: isTurnComplete,
-            });
-
             if (isTurnComplete) {
                 console.log(
                     "Turn complete detected, processing final response"
@@ -349,10 +309,6 @@ Important: Only describe what you can actually see in the provided screen captur
                 this.isStreaming = false;
                 this.isProcessingTurn = false;
                 break;
-            } else {
-                console.log(
-                    "Turn not complete, continuing to collect messages"
-                );
             }
         }
     }
@@ -396,17 +352,12 @@ Important: Only describe what you can actually see in the provided screen captur
     }
 
     async handleCompleteTurn(finalText) {
-        console.log("Handling complete turn with final text:", finalText);
-
         if (finalText && this.callbacks.onBotResponse) {
-            console.log("Calling bot response callback with:", finalText);
             this.callbacks.onBotResponse({
                 text: finalText,
                 isStreaming: false, // Explicitly mark as final response
                 timestamp: Date.now(),
             });
-        } else {
-            console.log("No text to send or no callback available");
         }
     }
 
@@ -508,6 +459,9 @@ Important: Only describe what you can actually see in the provided screen captur
         this.isConnected = false;
         this.isSetupComplete = false;
         this.clearBuffers();
+
+        // Stop streaming logger
+        streamingLogger.stop();
     }
 
     setBotResponseCallback(callback) {

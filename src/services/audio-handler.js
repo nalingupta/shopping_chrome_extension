@@ -1,6 +1,7 @@
 import { GeminiLiveAPI } from "./gemini-api.js";
 import { DebuggerScreenCapture } from "./debugger-screen-capture.js";
 import { LivePreviewManager } from "./live-preview-manager.js";
+import { streamingLogger } from "../utils/streaming-logger.js";
 
 export class AudioHandler {
     constructor() {
@@ -121,9 +122,6 @@ export class AudioHandler {
 
             // Restart endpoint detection for next speech input
             if (this.state.isListening && this.endpointDetection.isActive) {
-                console.log(
-                    "🔄 Restarting endpoint detection for next speech input"
-                );
                 this.startEndpointDetection();
             }
 
@@ -135,8 +133,6 @@ export class AudioHandler {
     }
 
     handleStreamingUpdate(update) {
-        console.log("handleStreamingUpdate called with:", update);
-
         if (update.text) {
             // Finalize user message on first streaming update
             if (
@@ -265,12 +261,8 @@ export class AudioHandler {
     }
 
     setupTabSwitching() {
-        console.log("🔧 Setting up tab switching listeners...");
-
         // Listen for tab activation changes
         chrome.tabs.onActivated.addListener(async (activeInfo) => {
-            console.log("🎯 Tab activation event received:", activeInfo);
-
             if (
                 this.state.isListening &&
                 this.screenCapture.hasStream() &&
@@ -278,38 +270,16 @@ export class AudioHandler {
             ) {
                 try {
                     this.isTabSwitching = true;
-                    console.log(
-                        "🔄 Tab activation detected:",
-                        activeInfo.tabId
-                    );
-
-                    // Use low-latency tab switching - no need to stop/start screenshot streaming
-                    const result = await this.screenCapture.switchToTab(
-                        activeInfo.tabId
-                    );
-
-                    if (result.success) {
-                        console.log(
-                            "✅ Low-latency tab switch completed successfully"
-                        );
-                    } else {
-                        console.error("❌ Tab switch failed:", result.error);
-                    }
+                    await this.screenCapture.switchToTab(activeInfo.tabId);
                 } catch (error) {
                     console.error(
-                        "❌ Failed to switch to tab:",
+                        "Failed to switch to tab:",
                         activeInfo.tabId,
                         error
                     );
                 } finally {
                     this.isTabSwitching = false;
                 }
-            } else {
-                console.log("⏭️ Tab activation ignored - conditions not met:", {
-                    isListening: this.state.isListening,
-                    hasStream: this.screenCapture.hasStream(),
-                    isTabSwitching: this.isTabSwitching,
-                });
             }
         });
 
@@ -321,16 +291,11 @@ export class AudioHandler {
                 changeInfo.status === "complete"
             ) {
                 try {
-                    console.log("Tab updated:", tabId, "URL:", tab.url);
-
                     // Check if the new URL is valid for debugger attachment
                     if (
                         tab.url.startsWith("chrome://") ||
                         tab.url.startsWith("chrome-extension://")
                     ) {
-                        console.log(
-                            "Tab now has invalid URL, detaching debugger"
-                        );
                         await this.screenCapture.detachFromTab(tabId);
                     } else {
                         // Re-attach if needed
@@ -344,19 +309,12 @@ export class AudioHandler {
             }
         });
 
-        // Listen for tab removal - IMPROVED CLEANUP
+        // Listen for tab removal
         chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
-            console.log("Tab removed:", tabId);
-
             // Clean up debugger attachment for the removed tab
             if (this.screenCapture.attachedTabs.has(tabId)) {
                 try {
-                    console.log("Detaching debugger from removed tab:", tabId);
                     await this.screenCapture.detachFromTab(tabId);
-                    console.log(
-                        "Successfully detached from removed tab:",
-                        tabId
-                    );
                 } catch (error) {
                     console.error(
                         "Failed to detach from removed tab:",
@@ -371,10 +329,7 @@ export class AudioHandler {
         chrome.windows.onFocusChanged.addListener(async (windowId) => {
             if (this.state.isListening) {
                 try {
-                    console.log("Window focus changed to:", windowId);
-
                     // Validate all attached tabs when window focus changes
-                    // This helps catch any tabs that might have become invalid
                     await this.screenCapture.validateAttachedTabs();
                 } catch (error) {
                     console.error(
@@ -384,8 +339,6 @@ export class AudioHandler {
                 }
             }
         });
-
-        console.log("✅ Tab switching listeners setup complete");
     }
 
     async handleScreenCaptureFailure() {
@@ -529,26 +482,10 @@ export class AudioHandler {
     }
 
     startScreenshotStreaming() {
-        console.log("Starting screenshot streaming...");
-        console.log(
-            "Screen capture has stream:",
-            this.screenCapture.hasStream()
-        );
-        console.log(
-            "Gemini connected:",
-            this.geminiAPI.getConnectionStatus().isConnected
-        );
-
         if (
             !this.screenCapture.hasStream() ||
             !this.geminiAPI.getConnectionStatus().isConnected
         ) {
-            console.log(
-                "Screenshot streaming skipped - screenActive:",
-                this.screenCapture.hasStream(),
-                "geminiConnected:",
-                this.geminiAPI.getConnectionStatus().isConnected
-            );
             return;
         }
 
@@ -568,8 +505,6 @@ export class AudioHandler {
 
                 // Handle debugger detach events
                 if (error && error.type === "debugger_detached") {
-                    console.error("Debugger detached:", error.reason);
-
                     // Immediately stop listening mode when debugger is detached
                     if (this.callbacks.status) {
                         this.callbacks.status(
@@ -594,25 +529,19 @@ export class AudioHandler {
             }
         );
 
+        streamingLogger.logInfo("📹 Video stream started (10 FPS)");
+
         // Capture frames at regular intervals
-        console.log("Setting up screenshot interval (10 FPS)...");
         this.screenshotInterval = setInterval(async () => {
             if (!this.screenCapture.hasStream()) {
-                console.log(
-                    "Screenshot interval check failed - screenActive:",
-                    this.screenCapture.hasStream()
-                );
                 this.stopScreenshotStreaming();
                 return;
             }
 
             try {
-                // FALLBACK: Check if we're capturing from the correct active tab
+                // Check if we're capturing from the correct active tab
                 await this.checkAndSwitchToActiveTab();
 
-                console.log(
-                    "Screenshot interval triggered - capturing frame..."
-                );
                 const frameData = await this.screenCapture.captureFrame();
 
                 // Reset failure counter on successful capture
@@ -626,25 +555,7 @@ export class AudioHandler {
                     this.videoStreamingStarted &&
                     this.geminiAPI.getConnectionStatus().isConnected
                 ) {
-                    console.log(
-                        "Sending frame to Gemini, size:",
-                        Math.round(frameData.length * 0.75),
-                        "bytes"
-                    );
-                    console.log(
-                        "Video streaming started:",
-                        this.videoStreamingStarted,
-                        "Gemini connected:",
-                        this.geminiAPI.getConnectionStatus().isConnected
-                    );
                     this.geminiAPI.sendVideoFrame(frameData);
-                } else {
-                    console.log(
-                        "Frame captured but not sent to Gemini - videoStreamingStarted:",
-                        this.videoStreamingStarted,
-                        "geminiConnected:",
-                        this.geminiAPI.getConnectionStatus().isConnected
-                    );
                 }
             } catch (error) {
                 // Check if this is a debugger detachment error (which is expected during tab switches)
@@ -652,9 +563,6 @@ export class AudioHandler {
                     error.message &&
                     error.message.includes("Detached while handling command")
                 ) {
-                    console.log(
-                        "Debugger detached during frame capture (expected during tab switch)"
-                    );
                     // Don't count this as a failure, just stop the interval
                     this.stopScreenshotStreaming();
                     return;
@@ -681,7 +589,6 @@ export class AudioHandler {
             });
 
             if (!activeTab) {
-                console.warn("⚠️ No active tab found");
                 return;
             }
 
@@ -689,25 +596,10 @@ export class AudioHandler {
 
             // If we're not capturing from the active tab, switch to it
             if (currentTabId !== activeTab.id) {
-                console.log(
-                    `🔄 FALLBACK: Switching from tab ${currentTabId} to active tab ${activeTab.id}`
-                );
-
-                // Use the same switching logic
-                const result = await this.screenCapture.switchToTab(
-                    activeTab.id
-                );
-                if (result.success) {
-                    console.log("✅ Fallback tab switch successful");
-                } else {
-                    console.error(
-                        "❌ Fallback tab switch failed:",
-                        result.error
-                    );
-                }
+                await this.screenCapture.switchToTab(activeTab.id);
             }
         } catch (error) {
-            console.error("❌ Error in fallback tab check:", error);
+            console.error("Error in fallback tab check:", error);
         }
     }
 
@@ -725,7 +617,7 @@ export class AudioHandler {
         // Stop live preview
         this.previewManager.stopPreview();
 
-        console.log("Screenshot streaming stopped");
+        streamingLogger.logInfo("📹 Video stream stopped");
     }
 
     stopAudioStreaming() {
@@ -744,7 +636,7 @@ export class AudioHandler {
             this.audioSource = null;
         }
 
-        console.log("Audio streaming to Gemini stopped");
+        streamingLogger.logInfo("🎤 Audio stream stopped");
     }
 
     async startAudioStreaming() {
@@ -756,13 +648,20 @@ export class AudioHandler {
             // Use AudioWorklet for real-time PCM conversion
             if (this.geminiAPI.audioContext.audioWorklet) {
                 await this.startAudioWorkletProcessing();
+                streamingLogger.logInfo(
+                    "🎤 Audio stream started (AudioWorklet)"
+                );
             } else {
                 console.warn("AudioWorklet not supported, using fallback");
                 this.startScriptProcessorFallback();
+                streamingLogger.logInfo(
+                    "🎤 Audio stream started (ScriptProcessor)"
+                );
             }
         } catch (error) {
             console.error("Audio streaming failed:", error);
             this.startScriptProcessorFallback();
+            streamingLogger.logInfo("🎤 Audio stream started (fallback)");
         }
     }
 
@@ -879,14 +778,13 @@ export class AudioHandler {
 
             // Start audio streaming on first speech detection
             if (!this.audioStreamingStarted) {
-                console.log(
-                    "🎤 First speech detected - starting audio streaming to Gemini"
+                streamingLogger.logInfo(
+                    "🎤 Speech detected - starting AUDIO & VIDEO streams"
                 );
 
                 // Set flags immediately to prevent race conditions from rapid speech events
                 this.audioStreamingStarted = true;
                 this.videoStreamingStarted = true;
-                console.log("Audio and video streaming flags set to true");
 
                 // Start audio streaming to Gemini
                 await this.startAudioStreaming();
@@ -1052,7 +950,7 @@ export class AudioHandler {
         this.clearSilenceTimer();
         this.clearResponseTimeout();
         this.endpointDetection.audioLevelHistory = [];
-        console.log("Endpoint detection stopped");
+        streamingLogger.logInfo("Endpoint detection stopped");
     }
 
     resetSilenceTimer() {
@@ -1104,9 +1002,7 @@ export class AudioHandler {
             return;
         }
 
-        console.log(
-            "Silence detection triggered - fallback endpoint detection"
-        );
+        streamingLogger.logInfo("Silence detection triggered");
         this.triggerResponseGeneration("silence_detection");
     }
 
@@ -1115,32 +1011,16 @@ export class AudioHandler {
             return;
         }
 
-        console.log("Web Speech API final result - primary endpoint detection");
+        streamingLogger.logInfo("Web Speech API final result");
         this.triggerResponseGeneration("web_speech_final");
     }
 
     triggerResponseGeneration(source) {
         if (this.speechBuffer.isGeminiProcessing) {
-            console.log(
-                "Already processing response, ignoring endpoint detection from:",
-                source
-            );
             return;
         }
 
-        console.log("🎯 TRIGGERING RESPONSE GENERATION from:", source);
-        console.log(
-            "   - Audio streaming started:",
-            this.audioStreamingStarted
-        );
-        console.log(
-            "   - Endpoint detection active:",
-            this.endpointDetection.isActive
-        );
-        console.log(
-            "   - Speech buffer interim text:",
-            this.speechBuffer.interimText
-        );
+        streamingLogger.logInfo(`Response generation triggered (${source})`);
 
         // Mark that we're waiting for Gemini to process
         this.speechBuffer.isGeminiProcessing = true;
@@ -1258,15 +1138,5 @@ export class AudioHandler {
             clearInterval(this.cleanupTimer);
             this.cleanupTimer = null;
         }
-    }
-
-    // Debug method to get current state
-    getDebuggerState() {
-        return {
-            isListening: this.state.isListening,
-            isTabSwitching: this.isTabSwitching,
-            screenCaptureState: this.screenCapture.getDebuggerState(),
-            detailedState: this.screenCapture.getDetailedAttachmentStatus(),
-        };
     }
 }

@@ -123,22 +123,6 @@ export class DebuggerScreenCapture {
         }
 
         try {
-            console.log("🔍 Capturing frame for tab:", this.currentTabId);
-
-            // Get current tab info for debugging
-            try {
-                const tab = await chrome.tabs.get(this.currentTabId);
-                console.log("📋 Current tab info:", {
-                    id: tab.id,
-                    url: tab.url,
-                    title: tab.title,
-                    active: tab.active,
-                    windowId: tab.windowId,
-                });
-            } catch (error) {
-                console.warn("⚠️ Could not get tab info:", error);
-            }
-
             const result = await chrome.debugger.sendCommand(
                 { tabId: this.currentTabId },
                 "Page.captureScreenshot",
@@ -151,19 +135,13 @@ export class DebuggerScreenCapture {
             );
 
             if (result && result.data) {
-                console.log(
-                    "✅ Frame captured successfully, size:",
-                    result.data.length,
-                    "bytes for tab:",
-                    this.currentTabId
-                );
                 return result.data;
             } else {
                 throw new Error("No screenshot data received");
             }
         } catch (error) {
             console.error(
-                "❌ Frame capture failed for tab:",
+                "Frame capture failed for tab:",
                 this.currentTabId,
                 error
             );
@@ -207,81 +185,44 @@ export class DebuggerScreenCapture {
 
     async switchToTab(tabId) {
         try {
-            console.log(
-                "🔄 Attempting to switch to tab:",
-                tabId,
-                "Current tab:",
-                this.currentTabId
-            );
-            console.log(
-                "📊 Currently attached tabs:",
-                Array.from(this.attachedTabs.keys())
-            );
-
             // If we're already on this tab, no need to switch
             if (this.currentTabId === tabId && this.attachedTabs.has(tabId)) {
-                console.log("✅ Already on tab:", tabId);
                 return { success: true };
             }
 
             // If we're not attached to the target tab, check if we should attach
             if (!this.attachedTabs.has(tabId)) {
-                console.log(
-                    "🔗 Tab not attached, checking attachment limit..."
-                );
-
                 // Check if we're at the attachment limit
                 const maxAttachments = 10;
                 if (this.attachedTabs.size >= maxAttachments) {
-                    console.warn(
-                        `⚠️ At attachment limit (${maxAttachments}), attempting to make room for tab: ${tabId}`
-                    );
-
                     // Try to clean up some old attachments first
                     await this.cleanupUnusedAttachments();
 
                     // If still at limit, force cleanup by removing least recently used tab
                     if (this.attachedTabs.size >= maxAttachments) {
-                        console.log(
-                            "🛠️ Forcing cleanup to make room for new tab"
-                        );
                         await this.forceCleanupForNewTab(tabId);
                     }
                 }
 
-                console.log("🔗 Attaching to tab:", tabId);
                 const result = await this.setup(tabId);
                 if (!result.success) {
                     throw new Error(result.error);
                 }
-                console.log("✅ Successfully attached to tab:", tabId);
             }
 
-            // Simply switch the current tab ID - no need to detach from previous tab
-            // This allows for instant switching with minimal latency
-            const previousTabId = this.currentTabId;
+            // Switch the current tab ID - no need to detach from previous tab
             this.currentTabId = tabId;
-
-            // Track that this tab was accessed
             this.markTabAccessed(tabId);
 
-            console.log(
-                "✅ Successfully switched from tab:",
-                previousTabId,
-                "to tab:",
-                tabId
-            );
             return { success: true };
         } catch (error) {
-            console.error("❌ Failed to switch to tab:", tabId, error);
+            console.error("Failed to switch to tab:", tabId, error);
             return { success: false, error: error.message };
         }
     }
 
     async forceCleanupForNewTab(newTabId) {
         try {
-            console.log("Forcing cleanup to make room for new tab:", newTabId);
-
             // Get tabs sorted by usage (least recently used first)
             const tabsByUsage = this.getTabsByUsage(true); // ascending order - least recent first
 
@@ -291,12 +232,7 @@ export class DebuggerScreenCapture {
                 .shift(); // Get the least recently used tab (first in ascending order)
 
             if (tabToRemove) {
-                console.log(
-                    `Removing least recently used tab: ${tabToRemove} to make room for: ${newTabId}`
-                );
                 await this.detachFromTab(tabToRemove);
-            } else {
-                console.warn("No suitable tab found to remove for cleanup");
             }
         } catch (error) {
             console.error("Error during forced cleanup:", error);
@@ -305,10 +241,6 @@ export class DebuggerScreenCapture {
 
     async preAttachToVisibleTabs() {
         try {
-            console.log(
-                "Pre-attaching to visible tabs for low-latency switching..."
-            );
-
             // Get all tabs in ALL windows, not just current window
             const allTabs = await chrome.tabs.query({});
 
@@ -319,21 +251,9 @@ export class DebuggerScreenCapture {
                     !tab.url.startsWith("chrome-extension://")
             );
 
-            console.log(
-                `Found ${eligibleTabs.length} eligible tabs out of ${allTabs.length} total tabs across all windows`
-            );
-
             // Limit to maximum 10 tabs to prevent resource issues
             const maxTabs = 10;
             const tabsToAttach = eligibleTabs.slice(0, maxTabs);
-
-            if (eligibleTabs.length > maxTabs) {
-                console.warn(
-                    `Limiting attachments to ${maxTabs} tabs (${
-                        eligibleTabs.length - maxTabs
-                    } tabs skipped)`
-                );
-            }
 
             // Prioritize active tab first, then recent tabs
             const activeTab = tabsToAttach.find((tab) => tab.active);
@@ -372,10 +292,6 @@ export class DebuggerScreenCapture {
                 }
             }
 
-            console.log("Pre-attached to tabs:", results);
-            console.log(
-                `Total debugger attachments: ${this.attachedTabs.size}`
-            );
             return results;
         } catch (error) {
             console.error("Failed to pre-attach to visible tabs:", error);
@@ -503,8 +419,6 @@ export class DebuggerScreenCapture {
 
     async cleanupUnusedAttachments() {
         try {
-            console.log("Cleaning up unused debugger attachments...");
-
             // First, validate all attached tabs (check URLs and existence)
             await this.validateAttachedTabs();
 
@@ -524,7 +438,6 @@ export class DebuggerScreenCapture {
             for (const tabId of tabsToDetach) {
                 try {
                     await this.detachFromTab(tabId);
-                    console.log("Cleaned up attachment to closed tab:", tabId);
                 } catch (error) {
                     console.error(
                         "Failed to cleanup attachment to tab:",
@@ -537,10 +450,6 @@ export class DebuggerScreenCapture {
             // Limit the number of attached tabs to prevent resource issues
             const maxAttachments = 10;
             if (this.attachedTabs.size > maxAttachments) {
-                console.log(
-                    `Too many attachments (${this.attachedTabs.size}), cleaning up...`
-                );
-
                 // Get all attached tab IDs
                 const attachedTabIds = Array.from(this.attachedTabs.keys());
 
@@ -559,13 +468,9 @@ export class DebuggerScreenCapture {
                     (tabId) => !tabsToKeep.includes(tabId)
                 );
 
-                console.log(`Keeping tabs: ${tabsToKeep.join(", ")}`);
-                console.log(`Removing tabs: ${tabsToRemove.join(", ")}`);
-
                 for (const tabId of tabsToRemove) {
                     try {
                         await this.detachFromTab(tabId);
-                        console.log("Removed excess attachment to tab:", tabId);
                     } catch (error) {
                         console.error(
                             "Failed to remove excess attachment to tab:",
@@ -575,11 +480,6 @@ export class DebuggerScreenCapture {
                     }
                 }
             }
-
-            console.log(
-                "Cleanup completed. Current attachments:",
-                this.attachedTabs.size
-            );
         } catch (error) {
             console.error("Error during cleanup:", error);
         }
@@ -587,8 +487,6 @@ export class DebuggerScreenCapture {
 
     async validateAttachedTabs() {
         try {
-            console.log("Validating attached tabs...");
-
             const tabsToDetach = [];
 
             // Check each attached tab
@@ -602,16 +500,10 @@ export class DebuggerScreenCapture {
                         tab.url.startsWith("chrome://") ||
                         tab.url.startsWith("chrome-extension://")
                     ) {
-                        console.log(
-                            `Tab ${tabId} now has invalid URL: ${tab.url}, marking for detachment`
-                        );
                         tabsToDetach.push(tabId);
                     }
                 } catch (error) {
                     // Tab might not exist anymore
-                    console.log(
-                        `Tab ${tabId} no longer exists, marking for detachment`
-                    );
                     tabsToDetach.push(tabId);
                 }
             }
@@ -620,19 +512,13 @@ export class DebuggerScreenCapture {
             for (const tabId of tabsToDetach) {
                 try {
                     await this.detachFromTab(tabId);
-                    console.log(`Detached from invalid tab: ${tabId}`);
                 } catch (error) {
                     console.error(
-                        `Failed to detach from invalid tab: ${tabId}`,
+                        "Failed to detach from invalid tab:",
+                        tabId,
                         error
                     );
                 }
-            }
-
-            if (tabsToDetach.length > 0) {
-                console.log(
-                    `Validated and cleaned up ${tabsToDetach.length} invalid tabs`
-                );
             }
 
             return tabsToDetach.length;
@@ -642,39 +528,11 @@ export class DebuggerScreenCapture {
         }
     }
 
-    getAttachedTabs() {
-        return Array.from(this.attachedTabs.keys());
-    }
-
     getCurrentTabId() {
         return this.currentTabId;
     }
 
-    getDebuggerState() {
-        return {
-            currentTabId: this.currentTabId,
-            attachedTabs: Array.from(this.attachedTabs.keys()),
-            isRecording: this.isRecording,
-            isInitialized: this.isInitialized,
-        };
-    }
-
-    getDetailedAttachmentStatus() {
-        const tabsByUsage = this.getTabsByUsage(false); // most recent first
-        const attachmentDetails = tabsByUsage.map((tabId) => ({
-            tabId,
-            lastAccessed: this.tabUsageHistory.get(tabId) || 0,
-            isCurrent: tabId === this.currentTabId,
-            timeSinceAccess:
-                Date.now() - (this.tabUsageHistory.get(tabId) || 0),
-        }));
-
-        return {
-            totalAttachments: this.attachedTabs.size,
-            maxAttachments: 10,
-            currentTabId: this.currentTabId,
-            attachments: attachmentDetails,
-            canAttachMore: this.attachedTabs.size < 10,
-        };
+    getAttachedTabs() {
+        return Array.from(this.attachedTabs.keys());
     }
 }
