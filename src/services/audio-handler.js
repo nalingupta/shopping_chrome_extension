@@ -445,17 +445,17 @@ export class AudioHandler {
             // Stop Gemini streaming
             await this.geminiAPI.disconnect();
 
-            // Stop screen capture
-            await this.screenCapture.cleanup();
-
-            // Clean up Chrome extension event listeners
-            this.cleanupTabListeners();
-
-            // Clear timers and stop all streaming
+            // Clear timers and stop all streaming FIRST
             this.clearInactivityTimer();
             this.clearSpeechKeepAlive();
             this.stopScreenshotStreaming();
             this.stopPeriodicCleanup(); // Stop periodic cleanup on stop
+
+            // Stop screen capture AFTER stopping streaming
+            await this.screenCapture.cleanup();
+
+            // Clean up Chrome extension event listeners
+            this.cleanupTabListeners();
 
             // Reset streaming flags for next session
             this.videoStreamingStarted = false;
