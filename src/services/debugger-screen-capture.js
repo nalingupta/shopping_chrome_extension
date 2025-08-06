@@ -25,7 +25,7 @@ export class DebuggerScreenCapture {
             return { success: true };
         } catch (error) {
             console.error('Failed to attach debugger:', error);
-            return { success: false, error: error.message };
+            return { success: false, error: error.message || 'Unknown debugger error' };
         }
     }
 
@@ -38,18 +38,6 @@ export class DebuggerScreenCapture {
             this.frameCallback = frameCallback;
             this.errorCallback = errorCallback;
             
-            // Start screen capture using Page.captureScreenshot
-            await chrome.debugger.sendCommand(
-                { tabId: this.currentTabId },
-                'Page.captureScreenshot',
-                {
-                    format: 'jpeg',
-                    quality: 80,
-                    clip: null,
-                    fromSurface: true
-                }
-            );
-            
             this.isRecording = true;
             console.log('Screen recording started via debugger');
             
@@ -59,7 +47,7 @@ export class DebuggerScreenCapture {
             return { success: true };
         } catch (error) {
             console.error('Failed to start recording:', error);
-            return { success: false, error: error.message };
+            return { success: false, error: error.message || 'Unknown recording error' };
         }
     }
 
@@ -87,7 +75,7 @@ export class DebuggerScreenCapture {
             }
         } catch (error) {
             console.error('Frame capture failed:', error);
-            throw error;
+            throw new Error(error.message || 'Frame capture failed');
         }
     }
 
@@ -96,11 +84,7 @@ export class DebuggerScreenCapture {
             return;
         }
 
-        if (method === 'Page.screenshotCaptured') {
-            if (this.frameCallback && params.data) {
-                this.frameCallback(params.data);
-            }
-        } else if (method === 'Runtime.exceptionThrown') {
+        if (method === 'Runtime.exceptionThrown') {
             if (this.errorCallback) {
                 this.errorCallback(params.exceptionDetails);
             }

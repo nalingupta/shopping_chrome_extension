@@ -276,24 +276,17 @@ export class AudioHandler {
         // Start live preview
         this.previewManager.startPreview();
         
-        // Start recording with frame callback
+        // Start recording (just sets up the debugger connection)
         this.screenCapture.startRecording(
             (frameData) => {
-                // Frame callback - send to Gemini
-                if (this.geminiAPI.getConnectionStatus().isConnected) {
-                    console.log('Sending debugger frame to Gemini, size:', Math.round(frameData.length * 0.75), 'bytes');
-                    this.geminiAPI.sendVideoFrame(frameData);
-                }
-                
-                // Update live preview
-                this.previewManager.updatePreview(frameData);
+                // This callback won't be used since we're using interval-based capture
             },
             (error) => {
-                console.error('Debugger screen capture error:', error);
+                console.error('Debugger screen capture error:', error?.message || error || 'Unknown error');
             }
         );
 
-        // Also capture frames at regular intervals as backup
+        // Capture frames at regular intervals
         this.screenshotInterval = setInterval(async () => {
             if (!this.screenCapture.hasStream() || !this.geminiAPI.getConnectionStatus().isConnected) {
                 console.log('Screenshot interval check failed - screenActive:', this.screenCapture.hasStream(), 'geminiConnected:', this.geminiAPI.getConnectionStatus().isConnected);
@@ -304,16 +297,16 @@ export class AudioHandler {
             try {
                 const frameData = await this.screenCapture.captureFrame();
                 if (this.geminiAPI.getConnectionStatus().isConnected) {
-                    console.log('Sending interval frame to Gemini, size:', Math.round(frameData.length * 0.75), 'bytes');
+                    console.log('Sending frame to Gemini, size:', Math.round(frameData.length * 0.75), 'bytes');
                     this.geminiAPI.sendVideoFrame(frameData);
                 }
                 
                 // Update live preview
                 this.previewManager.updatePreview(frameData);
             } catch (error) {
-                console.error('Interval frame capture failed:', error);
+                console.error('Frame capture failed:', error?.message || error || 'Unknown error');
             }
-        }, 500); // 2 FPS backup
+        }, 500); // 2 FPS
     }
 
     stopScreenshotStreaming() {
