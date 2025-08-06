@@ -24,6 +24,19 @@ export class AudioHandler {
             isGeminiProcessing: false,
         };
 
+        // Hybrid endpoint detection system
+        this.endpointDetection = {
+            isActive: false,
+            lastSpeechTime: null,
+            silenceThreshold: 2000, // 2 seconds of silence as fallback
+            audioLevelThreshold: 0.01, // Minimum audio level to consider as speech
+            silenceTimer: null,
+            audioLevelHistory: [], // Track recent audio levels
+            audioLevelWindow: 10, // Number of samples to average
+            responseTimeout: null, // Timeout for Gemini response
+            responseTimeoutDuration: 10000, // 10 seconds timeout
+        };
+
         this.geminiAPI = new GeminiLiveAPI();
         this.screenCapture = new DebuggerScreenCapture();
         this.previewManager = new LivePreviewManager();
@@ -87,16 +100,30 @@ export class AudioHandler {
 
     handleGeminiResponse(data) {
         if (data.text) {
-            // Gemini has processed a complete utterance - stop audio streaming only
+            console.log(
+                "✅ Gemini response received - resetting for next speech input"
+            );
+
+            // Clear response timeout since we got a response
+            this.clearResponseTimeout();
+
+            // Gemini has processed a complete utterance
             this.speechBuffer.isGeminiProcessing = false;
-            this.stopAudioStreaming();
+
+            // Clear interim text since Gemini has processed it
+            this.speechBuffer.interimText = "";
 
             // Reset streaming flags for next speech detection
             this.audioStreamingStarted = false;
             this.videoStreamingStarted = false;
 
-            // Clear interim text since Gemini has processed it
-            this.speechBuffer.interimText = "";
+            // Restart endpoint detection for next speech input
+            if (this.state.isListening && this.endpointDetection.isActive) {
+                console.log(
+                    "🔄 Restarting endpoint detection for next speech input"
+                );
+                this.startEndpointDetection();
+            }
 
             // Send bot response
             if (this.callbacks.botResponse) {
@@ -328,6 +355,9 @@ export class AudioHandler {
                 lastWebSpeechUpdate: 0,
                 isGeminiProcessing: false,
             };
+
+            // Stop endpoint detection
+            this.stopEndpointDetection();
 
             // Stop local speech recognition
             if (this.speechRecognition) {
@@ -604,7 +634,7 @@ export class AudioHandler {
         );
 
         this.audioWorkletNode.port.onmessage = (event) => {
-            const { type, pcmData } = event.data;
+            const { type, pcmData, maxAmplitude } = event.data;
 
             if (
                 type === "audioData" &&
@@ -613,6 +643,11 @@ export class AudioHandler {
                 const uint8Array = new Uint8Array(pcmData.buffer);
                 const base64 = btoa(String.fromCharCode(...uint8Array));
                 this.geminiAPI.sendAudioChunk(base64);
+
+                // Send audio level for endpoint detection (tertiary fallback)
+                if (maxAmplitude !== undefined) {
+                    this.onAudioLevelDetected(maxAmplitude);
+                }
             }
         };
 
@@ -643,6 +678,16 @@ export class AudioHandler {
             for (let i = 0; i < inputData.length; i++) {
                 outputData[i] = inputData[i];
             }
+
+            // Calculate max amplitude for audio level detection
+            let maxAmplitude = 0;
+            for (let i = 0; i < inputData.length; i++) {
+                const amplitude = Math.abs(inputData[i]);
+                maxAmplitude = Math.max(maxAmplitude, amplitude);
+            }
+
+            // Send audio level for endpoint detection (tertiary fallback)
+            this.onAudioLevelDetected(maxAmplitude);
 
             // Convert to PCM and send to Gemini
             const pcmData = new Int16Array(inputData.length);
@@ -691,7 +736,7 @@ export class AudioHandler {
             // Start audio streaming on first speech detection
             if (!this.audioStreamingStarted) {
                 console.log(
-                    "First speech detected - starting audio streaming to Gemini"
+                    "🎤 First speech detected - starting audio streaming to Gemini"
                 );
 
                 // Set flags immediately to prevent race conditions from rapid speech events
@@ -701,11 +746,18 @@ export class AudioHandler {
 
                 // Start audio streaming to Gemini
                 await this.startAudioStreaming();
+
+                // Start endpoint detection
+                this.startEndpointDetection();
             }
+
+            // Signal that speech is detected for endpoint detection
+            this.onSpeechDetected();
 
             // Only process the latest result to avoid accumulating old speech
             let latestTranscript = "";
             let hasInterimResults = false;
+            let hasFinalResults = false;
 
             // Get only the most recent result (not all accumulated results)
             for (let i = event.resultIndex; i < event.results.length; i++) {
@@ -716,6 +768,8 @@ export class AudioHandler {
 
                 if (!isFinal) {
                     hasInterimResults = true;
+                } else {
+                    hasFinalResults = true;
                 }
             }
 
@@ -726,6 +780,15 @@ export class AudioHandler {
             // Show only the latest interim text in UI
             if (hasInterimResults && this.callbacks.interim) {
                 this.callbacks.interim(latestTranscript);
+            }
+
+            // Handle final results from Web Speech API (primary endpoint detection)
+            if (hasFinalResults) {
+                console.log(
+                    "🎯 Web Speech API detected final result:",
+                    latestTranscript
+                );
+                this.handleWebSpeechFinalResult();
             }
 
             // NOTE: Final transcriptions are now handled by Gemini responses only
@@ -830,6 +893,173 @@ export class AudioHandler {
             clearTimeout(this.inactivityTimer);
             this.inactivityTimer = null;
         }
+    }
+
+    // Hybrid endpoint detection methods
+    startEndpointDetection() {
+        this.endpointDetection.isActive = true;
+        this.endpointDetection.lastSpeechTime = Date.now();
+        this.resetSilenceTimer();
+        console.log("Endpoint detection started");
+    }
+
+    stopEndpointDetection() {
+        this.endpointDetection.isActive = false;
+        this.clearSilenceTimer();
+        this.clearResponseTimeout();
+        this.endpointDetection.audioLevelHistory = [];
+        console.log("Endpoint detection stopped");
+    }
+
+    resetSilenceTimer() {
+        this.clearSilenceTimer();
+
+        this.endpointDetection.silenceTimer = setTimeout(() => {
+            this.handleSilenceDetected();
+        }, this.endpointDetection.silenceThreshold);
+    }
+
+    clearSilenceTimer() {
+        if (this.endpointDetection.silenceTimer) {
+            clearTimeout(this.endpointDetection.silenceTimer);
+            this.endpointDetection.silenceTimer = null;
+        }
+    }
+
+    onSpeechDetected() {
+        this.endpointDetection.lastSpeechTime = Date.now();
+        this.resetSilenceTimer();
+    }
+
+    onAudioLevelDetected(level) {
+        if (!this.endpointDetection.isActive) return;
+
+        // Add to history and maintain window size
+        this.endpointDetection.audioLevelHistory.push(level);
+        if (
+            this.endpointDetection.audioLevelHistory.length >
+            this.endpointDetection.audioLevelWindow
+        ) {
+            this.endpointDetection.audioLevelHistory.shift();
+        }
+
+        // Check if audio level indicates speech activity
+        const averageLevel =
+            this.endpointDetection.audioLevelHistory.reduce(
+                (a, b) => a + b,
+                0
+            ) / this.endpointDetection.audioLevelHistory.length;
+
+        if (averageLevel > this.endpointDetection.audioLevelThreshold) {
+            this.onSpeechDetected();
+        }
+    }
+
+    handleSilenceDetected() {
+        if (!this.endpointDetection.isActive || !this.audioStreamingStarted) {
+            return;
+        }
+
+        console.log(
+            "Silence detection triggered - fallback endpoint detection"
+        );
+        this.triggerResponseGeneration("silence_detection");
+    }
+
+    handleWebSpeechFinalResult() {
+        if (!this.endpointDetection.isActive || !this.audioStreamingStarted) {
+            return;
+        }
+
+        console.log("Web Speech API final result - primary endpoint detection");
+        this.triggerResponseGeneration("web_speech_final");
+    }
+
+    triggerResponseGeneration(source) {
+        if (this.speechBuffer.isGeminiProcessing) {
+            console.log(
+                "Already processing response, ignoring endpoint detection from:",
+                source
+            );
+            return;
+        }
+
+        console.log("🎯 TRIGGERING RESPONSE GENERATION from:", source);
+        console.log(
+            "   - Audio streaming started:",
+            this.audioStreamingStarted
+        );
+        console.log(
+            "   - Endpoint detection active:",
+            this.endpointDetection.isActive
+        );
+        console.log(
+            "   - Speech buffer interim text:",
+            this.speechBuffer.interimText
+        );
+
+        // Mark that we're waiting for Gemini to process
+        this.speechBuffer.isGeminiProcessing = true;
+
+        // DON'T stop audio streaming or send signals - let Gemini handle speech endpoint detection
+        // The audio should continue flowing to Gemini so it can properly detect when speech ends
+        console.log("🔄 Waiting for Gemini to process speech naturally...");
+
+        // Set a timeout in case Gemini doesn't respond
+        this.setResponseTimeout();
+
+        // Update UI to show processing state
+        if (this.callbacks.status) {
+            this.callbacks.status("Processing speech...", "info");
+        }
+
+        // Reset streaming flags for next speech detection
+        this.audioStreamingStarted = false;
+        this.videoStreamingStarted = false;
+    }
+
+    setResponseTimeout() {
+        this.clearResponseTimeout();
+
+        this.endpointDetection.responseTimeout = setTimeout(() => {
+            console.log("⏰ Response timeout - resetting system");
+            this.handleResponseTimeout();
+        }, this.endpointDetection.responseTimeoutDuration);
+    }
+
+    clearResponseTimeout() {
+        if (this.endpointDetection.responseTimeout) {
+            clearTimeout(this.endpointDetection.responseTimeout);
+            this.endpointDetection.responseTimeout = null;
+        }
+    }
+
+    handleResponseTimeout() {
+        console.log("🔄 Response timeout - resetting for next speech input");
+
+        // Reset processing state
+        this.speechBuffer.isGeminiProcessing = false;
+        this.speechBuffer.interimText = "";
+
+        // Reset streaming flags
+        this.audioStreamingStarted = false;
+        this.videoStreamingStarted = false;
+
+        // Restart endpoint detection
+        if (this.state.isListening && this.endpointDetection.isActive) {
+            this.startEndpointDetection();
+        }
+
+        // Update UI
+        if (this.callbacks.status) {
+            this.callbacks.status("Ready for next input", "info");
+        }
+    }
+
+    // Manual method to force response generation (for debugging/testing)
+    forceResponseGeneration() {
+        console.log("🔧 Manually forcing response generation");
+        this.triggerResponseGeneration("manual_trigger");
     }
 
     // Callback setters
