@@ -4,22 +4,11 @@ import { LivePreviewManager } from "./live-preview-manager.js";
 import { AudioCaptureService } from "./audio/audio-capture-service.js";
 import { SpeechRecognitionService } from "./audio/speech-recognition-service.js";
 import { EndpointDetectionService } from "./audio/endpoint-detection-service.js";
+import { AudioStateManager } from "./audio/audio-state-manager.js";
 import { streamingLogger } from "../utils/streaming-logger.js";
 
 export class AudioHandler {
     constructor() {
-        this.state = {
-            isListening: false,
-        };
-
-        this.callbacks = {
-            transcription: null,
-            interim: null,
-            botResponse: null,
-            status: null,
-            listeningStopped: null,
-        };
-
         // Gemini-first speech segmentation
         this.speechBuffer = {
             interimText: "",
@@ -33,7 +22,7 @@ export class AudioHandler {
         this.audioCapture = new AudioCaptureService(this.geminiAPI);
         this.speechRecognition = new SpeechRecognitionService();
         this.endpointDetection = new EndpointDetectionService();
-        this.inactivityTimer = null;
+        this.stateManager = new AudioStateManager();
         this.videoStreamingStarted = false;
         this.screenshotInterval = null;
         this.screenCaptureFailureCount = 0;
@@ -53,8 +42,9 @@ export class AudioHandler {
         this.speechRecognition.setCallbacks({
             onSpeechDetected: () => this.onSpeechDetected(),
             onInterimResult: (text) => {
-                if (this.callbacks.interim) {
-                    this.callbacks.interim(text);
+                const callbacks = this.stateManager.getCallbacks();
+                if (callbacks.interim) {
+                    callbacks.interim(text);
                 }
             },
             onAudioStreamingStart: async () => {
@@ -78,8 +68,9 @@ export class AudioHandler {
                 this.videoStreamingStarted = false;
             },
             onStatus: (status, type, duration) => {
-                if (this.callbacks.status) {
-                    this.callbacks.status(status, type, duration);
+                const callbacks = this.stateManager.getCallbacks();
+                if (callbacks.status) {
+                    callbacks.status(status, type, duration);
                 }
             },
             onEndpointDetectionStart: () => this.startEndpointDetection(),
@@ -107,23 +98,21 @@ export class AudioHandler {
         });
 
         this.geminiAPI.setConnectionStateCallback((state) => {
-            if (this.callbacks.status) {
+            const callbacks = this.stateManager.getCallbacks();
+            if (callbacks.status) {
                 if (state === "connected") {
-                    this.callbacks.status(
-                        "Connected to Gemini",
-                        "success",
-                        2000
-                    );
+                    callbacks.status("Connected to Gemini", "success", 2000);
                 } else if (state === "disconnected") {
-                    this.callbacks.status("Disconnected", "error", 3000);
+                    callbacks.status("Disconnected", "error", 3000);
                 }
             }
         });
 
         this.geminiAPI.setErrorCallback((error) => {
             console.error("Gemini error:", error);
-            if (this.callbacks.status) {
-                this.callbacks.status("Connection error", "error", 3000);
+            const callbacks = this.stateManager.getCallbacks();
+            if (callbacks.status) {
+                callbacks.status("Connection error", "error", 3000);
             }
         });
     }
@@ -136,29 +125,34 @@ export class AudioHandler {
             this.audioStreamingStarted = false;
             this.videoStreamingStarted = false;
 
-            if (this.state.isListening && this.endpointDetection.isActive) {
+            if (
+                this.stateManager.isListening() &&
+                this.endpointDetection.isActive
+            ) {
                 this.startEndpointDetection();
             }
 
-            if (this.callbacks.botResponse) {
-                this.callbacks.botResponse(data);
+            const callbacks = this.stateManager.getCallbacks();
+            if (callbacks.botResponse) {
+                callbacks.botResponse(data);
             }
         }
     }
 
     handleStreamingUpdate(update) {
         if (update.text) {
+            const callbacks = this.stateManager.getCallbacks();
             if (
                 this.speechBuffer.interimText.trim() &&
-                this.callbacks.transcription
+                callbacks.transcription
             ) {
                 const userMessage = this.speechBuffer.interimText.trim();
-                this.callbacks.transcription(userMessage);
+                callbacks.transcription(userMessage);
                 this.speechBuffer.interimText = "";
             }
 
-            if (this.callbacks.botResponse) {
-                this.callbacks.botResponse({
+            if (callbacks.botResponse) {
+                callbacks.botResponse({
                     text: update.text,
                     isStreaming: true,
                     timestamp: update.timestamp,
@@ -176,17 +170,16 @@ export class AudioHandler {
             !this.speechBuffer.isGeminiProcessing &&
             timeSinceLastUpdate > 3000
         ) {
-            if (this.callbacks.transcription) {
-                this.callbacks.transcription(
-                    this.speechBuffer.interimText.trim()
-                );
+            const callbacks = this.stateManager.getCallbacks();
+            if (callbacks.transcription) {
+                callbacks.transcription(this.speechBuffer.interimText.trim());
             }
             this.speechBuffer.interimText = "";
         }
     }
 
     async startListening() {
-        if (this.state.isListening) {
+        if (this.stateManager.isListening()) {
             return { success: false, error: "Already listening" };
         }
 
@@ -231,7 +224,7 @@ export class AudioHandler {
             this.startSpeechKeepAlive();
             this.startPeriodicCleanup();
 
-            this.state.isListening = true;
+            this.stateManager.setListeningState(true);
 
             this.screenCapture.preAttachToVisibleTabs().catch((error) => {
                 console.warn("Background pre-attachment failed:", error);
@@ -240,7 +233,7 @@ export class AudioHandler {
             return { success: true };
         } catch (error) {
             console.error("Failed to start listening:", error);
-            this.state.isListening = false;
+            this.stateManager.setListeningState(false);
             return { success: false, error: error.message };
         }
     }
@@ -249,7 +242,7 @@ export class AudioHandler {
         this.tabListeners = {
             onActivated: async (activeInfo) => {
                 const shouldSwitch =
-                    this.state.isListening && !this.isTabSwitching;
+                    this.stateManager.isListening() && !this.isTabSwitching;
 
                 if (shouldSwitch) {
                     try {
@@ -279,7 +272,7 @@ export class AudioHandler {
             },
             onUpdated: async (tabId, changeInfo, tab) => {
                 if (
-                    this.state.isListening &&
+                    this.stateManager.isListening() &&
                     changeInfo.status === "complete"
                 ) {
                     try {
@@ -329,12 +322,12 @@ export class AudioHandler {
                 }
             },
             onCreated: async (tab) => {
-                if (tab.active && this.state.isListening) {
+                if (tab.active && this.stateManager.isListening()) {
                     // Will be handled by onActivated listener
                 }
             },
             onFocusChanged: async (windowId) => {
-                if (this.state.isListening) {
+                if (this.stateManager.isListening()) {
                     try {
                         await this.screenCapture.validateAttachedTabs();
                     } catch (error) {
@@ -379,8 +372,9 @@ export class AudioHandler {
                 "Multiple screen capture failures detected, stopping listening mode"
             );
 
-            if (this.callbacks.status) {
-                this.callbacks.status(
+            const callbacks = this.stateManager.getCallbacks();
+            if (callbacks.status) {
+                callbacks.status(
                     "Screen capture failed - stopping listening mode",
                     "error",
                     5000
@@ -389,8 +383,8 @@ export class AudioHandler {
 
             await this.stopListening();
 
-            if (this.callbacks.listeningStopped) {
-                this.callbacks.listeningStopped("screen_capture_failed");
+            if (callbacks.listeningStopped) {
+                callbacks.listeningStopped("screen_capture_failed");
             }
         }
     }
@@ -410,8 +404,9 @@ export class AudioHandler {
                     "Multiple critical failures detected, stopping listening mode"
                 );
 
-                if (this.callbacks.status) {
-                    this.callbacks.status(
+                const callbacks = this.stateManager.getCallbacks();
+                if (callbacks.status) {
+                    callbacks.status(
                         "Critical failures detected - stopping listening mode",
                         "error",
                         5000
@@ -420,20 +415,20 @@ export class AudioHandler {
 
                 await this.stopListening();
 
-                if (this.callbacks.listeningStopped) {
-                    this.callbacks.listeningStopped("critical_failures");
+                if (callbacks.listeningStopped) {
+                    callbacks.listeningStopped("critical_failures");
                 }
             }
         }
     }
 
     async stopListening() {
-        if (!this.state.isListening) {
+        if (!this.stateManager.isListening()) {
             return { success: false, error: "Not currently listening" };
         }
 
         try {
-            this.state.isListening = false;
+            this.stateManager.setListeningState(false);
 
             if (
                 this.speechBuffer.interimText.trim() &&
@@ -473,7 +468,7 @@ export class AudioHandler {
             return { success: true };
         } catch (error) {
             console.error("Error stopping listening:", error);
-            this.state.isListening = false;
+            this.stateManager.setListeningState(false);
             return { success: false, error: error.message };
         }
     }
@@ -658,7 +653,7 @@ export class AudioHandler {
     startLocalSpeechRecognition() {
         this.resetInactivityTimer();
         this.speechRecognition.setState({
-            isListening: this.state.isListening,
+            isListening: this.stateManager.isListening(),
             audioStreamingStarted: this.audioStreamingStarted,
             videoStreamingStarted: this.videoStreamingStarted,
         });
@@ -679,26 +674,22 @@ export class AudioHandler {
     }
 
     resetInactivityTimer() {
-        this.clearInactivityTimer();
-
-        this.inactivityTimer = setTimeout(() => {
+        this.stateManager.resetInactivityTimer(() => {
             this.stopListening();
-            if (this.callbacks.status) {
-                this.callbacks.status("Session timed out", "warning", 5000);
+            const callbacks = this.stateManager.getCallbacks();
+            if (callbacks.status) {
+                callbacks.status("Session timed out", "warning", 5000);
             }
-        }, 20 * 60 * 1000);
+        });
     }
 
     clearInactivityTimer() {
-        if (this.inactivityTimer) {
-            clearTimeout(this.inactivityTimer);
-            this.inactivityTimer = null;
-        }
+        this.stateManager.clearInactivityTimer();
     }
 
     startEndpointDetection() {
         this.endpointDetection.setState({
-            isListening: this.state.isListening,
+            isListening: this.stateManager.isListening(),
             audioStreamingStarted: this.audioStreamingStarted,
         });
         this.endpointDetection.setSpeechBuffer(this.speechBuffer);
@@ -754,46 +745,37 @@ export class AudioHandler {
     }
 
     setTranscriptionCallback(callback) {
-        this.callbacks.transcription = callback;
+        this.stateManager.setTranscriptionCallback(callback);
     }
 
     setInterimCallback(callback) {
-        this.callbacks.interim = callback;
+        this.stateManager.setInterimCallback(callback);
     }
 
     setBotResponseCallback(callback) {
-        this.callbacks.botResponse = callback;
+        this.stateManager.setBotResponseCallback(callback);
     }
 
     setStatusCallback(callback) {
-        this.callbacks.status = callback;
+        this.stateManager.setStatusCallback(callback);
     }
 
     setListeningStoppedCallback(callback) {
-        this.callbacks.listeningStopped = callback;
+        this.stateManager.setListeningStoppedCallback(callback);
     }
 
     isListening() {
-        return this.state.isListening;
+        return this.stateManager.isListening();
     }
 
     startPeriodicCleanup() {
-        this.cleanupTimer = setInterval(async () => {
-            if (this.state.isListening) {
-                try {
-                    await this.screenCapture.validateAttachedTabs();
-                    await this.screenCapture.cleanupUnusedAttachments();
-                } catch (error) {
-                    console.error("Error during periodic cleanup:", error);
-                }
-            }
-        }, 30000);
+        this.stateManager.startPeriodicCleanup(async () => {
+            await this.screenCapture.validateAttachedTabs();
+            await this.screenCapture.cleanupUnusedAttachments();
+        });
     }
 
     stopPeriodicCleanup() {
-        if (this.cleanupTimer) {
-            clearInterval(this.cleanupTimer);
-            this.cleanupTimer = null;
-        }
+        this.stateManager.stopPeriodicCleanup();
     }
 }

@@ -3,15 +3,15 @@ import { UnifiedConversationManager } from "../utils/storage.js";
 import { MessageRenderer } from "../ui/message-renderer.js";
 import { UIState } from "../ui/ui-state.js";
 import { AudioHandler } from "../services/audio-handler.js";
+import { UIManager } from "./ui-manager.js";
 
 export class ShoppingAssistant {
     constructor() {
-        this.elements = {};
-        this.uiState = new UIState();
+        this.uiManager = new UIManager();
         this.audioHandler = new AudioHandler();
         this.currentPageInfo = null;
 
-        this.initializeElements();
+        this.uiManager.initializeElements();
         this.initializeEventListeners();
         this.initializeCallbacks();
         this.trackSidePanelLifecycle();
@@ -21,37 +21,25 @@ export class ShoppingAssistant {
         this.getCurrentPageInfo();
     }
 
-    initializeElements() {
-        this.elements = {
-            messages: document.getElementById("messages"),
-            userInput: document.getElementById("userInput"),
-            sendButton: document.getElementById("sendButton"),
-            voiceButton: document.getElementById("voiceButton"),
-            clearChatButton: document.getElementById("clearChatButton"),
-            headerStatus: document.getElementById("headerStatus"),
-            welcomeScreen: document.getElementById("welcomeScreen"),
-        };
-    }
-
     initializeEventListeners() {
-        this.elements.sendButton.addEventListener("click", () =>
+        this.uiManager.elements.sendButton.addEventListener("click", () =>
             this.handleSendMessage()
         );
-        this.elements.voiceButton.addEventListener("click", () =>
+        this.uiManager.elements.voiceButton.addEventListener("click", () =>
             this.handleVoiceInput()
         );
-        this.elements.clearChatButton.addEventListener("click", () =>
+        this.uiManager.elements.clearChatButton.addEventListener("click", () =>
             this.handleClearChat()
         );
 
-        this.elements.userInput.addEventListener("keydown", (e) => {
+        this.uiManager.elements.userInput.addEventListener("keydown", (e) => {
             if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
                 this.handleSendMessage();
             }
         });
 
-        this.elements.userInput.addEventListener("input", () => {
+        this.uiManager.elements.userInput.addEventListener("input", () => {
             this.adjustTextareaHeight();
         });
 
@@ -108,7 +96,7 @@ export class ShoppingAssistant {
                 await UnifiedConversationManager.getWelcomeScreenState();
 
             // Clear current UI
-            this.elements.messages.innerHTML = "";
+            this.uiManager.elements.messages.innerHTML = "";
 
             // Restore messages
             if (messages && messages.length > 0) {
@@ -117,7 +105,7 @@ export class ShoppingAssistant {
                         msg.content,
                         msg.type
                     );
-                    this.elements.messages.appendChild(messageDiv);
+                    this.uiManager.elements.messages.appendChild(messageDiv);
                 });
 
                 this.hideWelcomeScreen();
@@ -125,7 +113,7 @@ export class ShoppingAssistant {
             } else if (!isWelcomeVisible) {
                 this.hideWelcomeScreen();
             } else {
-                this.uiState.showStatus("Start a chat", "info");
+                this.uiManager.uiState.showStatus("Start a chat", "info");
             }
         } catch (error) {
             console.error("Error refreshing conversation UI:", error);
@@ -146,7 +134,7 @@ export class ShoppingAssistant {
         });
 
         this.audioHandler.setStatusCallback((status, type, duration) => {
-            this.uiState.showStatus(status, type, duration);
+            this.uiManager.uiState.showStatus(status, type, duration);
         });
 
         this.audioHandler.setListeningStoppedCallback((reason) => {
@@ -264,19 +252,19 @@ export class ShoppingAssistant {
     }
 
     async handleSendMessage() {
-        const message = this.elements.userInput.value.trim();
-        if (!message || this.uiState.isProcessing) return;
+        const message = this.uiManager.elements.userInput.value.trim();
+        if (!message || this.uiManager.uiState.isProcessing) return;
 
         this.addMessage(message, "user");
-        this.elements.userInput.value = "";
+        this.uiManager.elements.userInput.value = "";
         this.adjustTextareaHeight();
 
         await this.processMessage(message);
     }
 
     async processMessage(message) {
-        this.uiState.setProcessing(true);
-        this.elements.sendButton.disabled = true;
+        this.uiManager.uiState.setProcessing(true);
+        this.uiManager.elements.sendButton.disabled = true;
 
         const loadingMessage = this.addMessage(
             "Thinking...",
@@ -304,9 +292,9 @@ export class ShoppingAssistant {
                 "assistant"
             );
         } finally {
-            this.uiState.setProcessing(false);
-            this.elements.sendButton.disabled = false;
-            this.elements.userInput.focus();
+            this.uiManager.uiState.setProcessing(false);
+            this.uiManager.elements.sendButton.disabled = false;
+            this.uiManager.elements.userInput.focus();
         }
     }
 
@@ -326,76 +314,47 @@ export class ShoppingAssistant {
     }
 
     addMessage(content, type, isLoading = false) {
-        this.hideWelcomeScreen();
-
-        const messageDiv = MessageRenderer.createMessage(
-            content,
-            type,
-            isLoading
-        );
-        this.elements.messages.appendChild(messageDiv);
-
-        this.scrollToBottom();
-
-        if (!isLoading) {
-            this.saveState();
-        }
-
-        return messageDiv;
+        return this.uiManager.addMessage(content, type, isLoading);
     }
 
     removeMessage(messageElement) {
-        if (messageElement && messageElement.parentNode) {
-            messageElement.parentNode.removeChild(messageElement);
-        }
+        return this.uiManager.removeMessage(messageElement);
     }
 
     hideWelcomeScreen() {
-        if (
-            this.elements.welcomeScreen &&
-            !this.elements.welcomeScreen.classList.contains("hidden")
-        ) {
-            this.elements.welcomeScreen.classList.add("hidden");
-            this.uiState.clearStatus();
-        }
+        return this.uiManager.hideWelcomeScreen();
     }
 
     showWelcomeScreen() {
-        if (
-            this.elements.welcomeScreen &&
-            this.elements.welcomeScreen.classList.contains("hidden")
-        ) {
-            this.elements.welcomeScreen.classList.remove("hidden");
-        }
-        this.uiState.showStatus("Start a chat", "info");
+        return this.uiManager.showWelcomeScreen();
     }
 
     async handleClearChat() {
-        this.elements.messages.innerHTML = "";
+        this.uiManager.elements.messages.innerHTML = "";
         MessageRenderer.clearInterimMessage();
         MessageRenderer.clearStreamingMessage();
-        this.uiState.clearStatus();
+        this.uiManager.uiState.clearStatus();
 
-        this.elements.userInput.value = "";
+        this.uiManager.elements.userInput.value = "";
         this.adjustTextareaHeight();
 
         if (this.audioHandler.isListening()) {
-            this.elements.voiceButton.classList.remove("listening");
-            this.elements.voiceButton.title = "";
+            this.uiManager.elements.voiceButton.classList.remove("listening");
+            this.uiManager.elements.voiceButton.title = "";
             this.audioHandler.stopListening();
         }
 
         // Reset speech state
-        this.uiState.setSpeechState("idle");
+        this.uiManager.uiState.setSpeechState("idle");
 
         this.showWelcomeScreen();
-        this.uiState.setProcessing(false);
-        this.elements.sendButton.disabled = false;
+        this.uiManager.uiState.setProcessing(false);
+        this.uiManager.elements.sendButton.disabled = false;
 
         // Clear conversation using unified manager
         await UnifiedConversationManager.clearConversation();
 
-        this.elements.userInput.focus();
+        this.uiManager.elements.userInput.focus();
     }
 
     async handleVoiceInput() {
@@ -411,59 +370,63 @@ export class ShoppingAssistant {
             const result = await this.audioHandler.startListening();
             if (result.success) {
                 this.hideWelcomeScreen();
-                this.elements.voiceButton.classList.add("listening");
-                this.elements.voiceButton.title = "";
-                this.uiState.setSpeechState("listening");
-                this.uiState.showStatus("Listening...", "info");
+                this.uiManager.elements.voiceButton.classList.add("listening");
+                this.uiManager.elements.voiceButton.title = "";
+                this.uiManager.uiState.setSpeechState("listening");
+                this.uiManager.uiState.showStatus("Listening...", "info");
             } else {
                 this.handleVoiceError(result);
             }
         } catch (error) {
             console.error("Voice input error:", error);
-            this.uiState.showTemporaryStatus("Voice failed", "error", 4000);
+            this.uiManager.uiState.showTemporaryStatus(
+                "Voice failed",
+                "error",
+                4000
+            );
         }
     }
 
     async stopVoiceInput() {
-        this.elements.voiceButton.classList.remove("listening");
-        this.elements.voiceButton.title = "";
+        this.uiManager.elements.voiceButton.classList.remove("listening");
+        this.uiManager.elements.voiceButton.title = "";
         await this.audioHandler.stopListening();
         MessageRenderer.clearInterimMessage();
 
-        this.uiState.setSpeechState("idle");
-        this.uiState.showStatus("Start a chat", "info");
+        this.uiManager.uiState.setSpeechState("idle");
+        this.uiManager.uiState.showStatus("Start a chat", "info");
     }
 
     handleListeningStopped(reason) {
         // Reset UI state when listening stops due to external factors
-        this.elements.voiceButton.classList.remove("listening");
-        this.elements.voiceButton.title = "";
+        this.uiManager.elements.voiceButton.classList.remove("listening");
+        this.uiManager.elements.voiceButton.title = "";
         MessageRenderer.clearInterimMessage();
 
-        this.uiState.setSpeechState("idle");
+        this.uiManager.uiState.setSpeechState("idle");
 
         // Show appropriate message based on reason
         switch (reason) {
             case "screen_capture_failed":
-                this.uiState.showStatus(
+                this.uiManager.uiState.showStatus(
                     "Screen capture failed - listening stopped",
                     "error"
                 );
                 break;
             case "setup_failed":
-                this.uiState.showStatus(
+                this.uiManager.uiState.showStatus(
                     "Setup failed - please try again",
                     "error"
                 );
                 break;
             case "debugger_detached":
-                this.uiState.showStatus(
+                this.uiManager.uiState.showStatus(
                     "Screen capture cancelled - listening stopped",
                     "error"
                 );
                 break;
             default:
-                this.uiState.showStatus("Listening stopped", "info");
+                this.uiManager.uiState.showStatus("Listening stopped", "info");
         }
     }
 
@@ -478,7 +441,7 @@ export class ShoppingAssistant {
         };
 
         const shortMessage = shortMessages[result.error] || "Voice error";
-        this.uiState.showTemporaryStatus(shortMessage, "error", 5000);
+        this.uiManager.uiState.showTemporaryStatus(shortMessage, "error", 5000);
     }
 
     handleTranscriptionReceived(transcription) {
@@ -487,16 +450,23 @@ export class ShoppingAssistant {
             MessageRenderer.clearStreamingMessage(); // Clear any existing streaming messages
 
             if (this.isErrorTranscription(transcription)) {
-                this.uiState.showStatus("Speech failed", "error", 4000);
-                this.uiState.setSpeechState("idle");
+                this.uiManager.uiState.showStatus(
+                    "Speech failed",
+                    "error",
+                    4000
+                );
+                this.uiManager.uiState.setSpeechState("idle");
                 return;
             }
 
             this.addMessage(transcription, "user", false);
 
             // Set processing state when user message is finalized
-            this.uiState.setSpeechState("processing");
-            this.uiState.showStatus("Processing with Gemini...", "info");
+            this.uiManager.uiState.setSpeechState("processing");
+            this.uiManager.uiState.showStatus(
+                "Processing with Gemini...",
+                "info"
+            );
         }
     }
 
@@ -508,7 +478,7 @@ export class ShoppingAssistant {
 
     handleBotResponse(response) {
         // Set responding state when bot starts responding
-        this.uiState.setSpeechState("responding");
+        this.uiManager.uiState.setSpeechState("responding");
 
         if (response.isStreaming) {
             // Handle streaming update (ChatGPT-style)
@@ -528,47 +498,20 @@ export class ShoppingAssistant {
 
             // Return to listening state if still listening, otherwise idle
             if (this.audioHandler.isListening()) {
-                this.uiState.setSpeechState("listening");
-                this.uiState.showStatus("Listening...", "info");
+                this.uiManager.uiState.setSpeechState("listening");
+                this.uiManager.uiState.showStatus("Listening...", "info");
             } else {
-                this.uiState.setSpeechState("idle");
+                this.uiManager.uiState.setSpeechState("idle");
             }
         }
     }
 
     showInterimText(text) {
-        this.hideWelcomeScreen();
-
-        // Clear any existing streaming messages when showing new interim text
-        MessageRenderer.clearStreamingMessage();
-
-        let interimMessage = document.getElementById("interim-message");
-
-        if (!interimMessage) {
-            interimMessage = MessageRenderer.createInterimMessage(text);
-            this.elements.messages.appendChild(interimMessage);
-        } else {
-            MessageRenderer.updateInterimMessage(text);
-        }
-
-        this.scrollToBottom();
+        return this.uiManager.showInterimText(text);
     }
 
     updateStreamingMessage(text) {
-        this.hideWelcomeScreen();
-
-        let streamingMessage = document.getElementById("streaming-message");
-
-        if (!streamingMessage) {
-            // Create new streaming message
-            streamingMessage = MessageRenderer.createStreamingMessage(text);
-            this.elements.messages.appendChild(streamingMessage);
-        } else {
-            // Update existing streaming message
-            MessageRenderer.updateStreamingMessage(text);
-        }
-
-        this.scrollToBottom();
+        return this.uiManager.updateStreamingMessage(text);
     }
 
     isErrorTranscription(transcription) {
@@ -579,42 +522,15 @@ export class ShoppingAssistant {
     }
 
     scrollToBottom() {
-        if (this.elements.messages) {
-            this.elements.messages.scrollTop =
-                this.elements.messages.scrollHeight;
-        }
+        return this.uiManager.scrollToBottom();
     }
 
     adjustTextareaHeight() {
-        const textarea = this.elements.userInput;
-        const maxHeight = 80;
-
-        if (textarea) {
-            textarea.style.height = "auto";
-            textarea.style.height =
-                Math.min(textarea.scrollHeight, maxHeight) + "px";
-        }
+        return this.uiManager.adjustTextareaHeight();
     }
 
     async saveState() {
-        const messages = Array.from(
-            this.elements.messages.querySelectorAll(
-                ".message:not(.interim-message):not(.status-message):not(.streaming-message)"
-            )
-        ).map((msg) => ({
-            content: msg.querySelector(".message-content").textContent,
-            type: msg.classList.contains("user-message") ? "user" : "assistant",
-        }));
-
-        const isWelcomeVisible =
-            !this.elements.welcomeScreen ||
-            !this.elements.welcomeScreen.classList.contains("hidden");
-
-        // Save using unified manager
-        await UnifiedConversationManager.saveMessages(
-            messages,
-            isWelcomeVisible
-        );
+        return this.uiManager.saveState();
     }
 
     async checkAndClearChatHistoryOnReload() {
@@ -669,7 +585,7 @@ export class ShoppingAssistant {
     async handleExtensionReloaded() {
         try {
             await UnifiedConversationManager.clearConversation();
-            this.elements.messages.innerHTML = "";
+            this.uiManager.elements.messages.innerHTML = "";
             this.showWelcomeScreen();
         } catch (error) {
             // Ignore errors
@@ -693,7 +609,7 @@ export class ShoppingAssistant {
                         msg.content,
                         msg.type
                     );
-                    this.elements.messages.appendChild(messageDiv);
+                    this.uiManager.elements.messages.appendChild(messageDiv);
                 });
 
                 this.hideWelcomeScreen();
@@ -701,11 +617,11 @@ export class ShoppingAssistant {
             } else if (!isWelcomeVisible) {
                 this.hideWelcomeScreen();
             } else {
-                this.uiState.showStatus("Start a chat", "info");
+                this.uiManager.uiState.showStatus("Start a chat", "info");
             }
         } catch (error) {
             console.error("Error restoring state:", error);
-            this.uiState.showStatus("Start a chat", "info");
+            this.uiManager.uiState.showStatus("Start a chat", "info");
         }
     }
 
