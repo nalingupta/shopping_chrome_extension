@@ -45,16 +45,28 @@ export class ScreenCaptureService {
 
     async setup(tabId) {
         try {
+            const timestamp = new Date().toISOString();
+            console.log(
+                `[${timestamp}] 🔧 DEBUGGER SETUP: Starting setup for tab ${tabId}`
+            );
+
             // If already attached to this tab, just return success
             if (this.attachedTabs.has(tabId)) {
+                console.log(
+                    `[${timestamp}] ✅ DEBUGGER SETUP: Already attached to tab ${tabId}`
+                );
                 this.currentTabId = tabId;
                 return { success: true };
             }
 
             // Attach debugger to the tab immediately without checking isDebuggerAttached()
-            console.log("🔍 Attaching debugger to tab:", tabId);
+            console.log(
+                `[${timestamp}] 🔧 DEBUGGER SETUP: Attaching debugger to tab: ${tabId}`
+            );
             await chrome.debugger.attach({ tabId }, "1.3");
-            console.log("✅ Debugger attached successfully");
+            console.log(
+                `[${timestamp}] ✅ DEBUGGER SETUP: Debugger attached successfully to tab ${tabId}`
+            );
 
             // Enable Page domain for screen capture
             console.log("🔍 Enabling Page domain");
@@ -67,16 +79,20 @@ export class ScreenCaptureService {
             console.log("✅ Runtime domain enabled");
 
             // Mark tab as attached
-            console.log("🔍 Setting attachedTabs for tab:", tabId);
+            console.log(
+                `[${timestamp}] 🔧 DEBUGGER SETUP: Setting attachedTabs for tab: ${tabId}`
+            );
             this.attachedTabs.set(tabId, true);
-            console.log("🔍 Setting currentTabId to:", tabId);
+            console.log(
+                `[${timestamp}] 🔧 DEBUGGER SETUP: Setting currentTabId to: ${tabId}`
+            );
             this.currentTabId = tabId;
             console.log(
-                "🔍 After state setting - attachedTabs:",
+                `[${timestamp}] 📊 DEBUGGER SETUP: After state setting - attachedTabs:`,
                 Array.from(this.attachedTabs.keys())
             );
             console.log(
-                "🔍 After state setting - currentTabId:",
+                `[${timestamp}] 📊 DEBUGGER SETUP: After state setting - currentTabId:`,
                 this.currentTabId
             );
 
@@ -146,8 +162,9 @@ export class ScreenCaptureService {
 
             this.isRecording = true;
             const tabUrl = await this.getTabUrl(this.currentTabId);
+            const timestamp = new Date().toISOString();
             console.log(
-                "Screen recording started via debugger for tab:",
+                `[${timestamp}] 🎬 SCREEN RECORDING: Started via debugger for tab:`,
                 this.currentTabId,
                 "URL:",
                 tabUrl
@@ -164,7 +181,15 @@ export class ScreenCaptureService {
     }
 
     async captureFrame() {
+        const timestamp = new Date().toISOString();
+        console.log(
+            `[${timestamp}] 📸 SCREEN CAPTURE: Attempting to capture from tab ${this.currentTabId}`
+        );
+
         if (!this.currentTabId || !this.attachedTabs.has(this.currentTabId)) {
+            console.log(
+                `[${timestamp}] ❌ SCREEN CAPTURE: Debugger not attached to current tab ${this.currentTabId}`
+            );
             throw new Error("Debugger not attached to current tab");
         }
 
@@ -173,7 +198,9 @@ export class ScreenCaptureService {
             await chrome.tabs.get(this.currentTabId);
         } catch (error) {
             // Tab no longer exists, skip capture
-            console.log("Current tab no longer exists, skipping capture");
+            console.log(
+                `[${timestamp}] ❌ SCREEN CAPTURE: Current tab ${this.currentTabId} no longer exists, skipping capture`
+            );
             throw new Error("Current tab no longer exists");
         }
 
@@ -190,13 +217,30 @@ export class ScreenCaptureService {
             );
 
             if (result && result.data) {
+                console.log(
+                    `[${timestamp}] ✅ SCREEN CAPTURE: Successfully captured frame from tab ${this.currentTabId}`
+                );
                 return result.data;
             } else {
+                console.log(
+                    `[${timestamp}] ❌ SCREEN CAPTURE: No screenshot data received from tab ${this.currentTabId}`
+                );
                 throw new Error("No screenshot data received");
             }
         } catch (error) {
             // Failsafe mechanism: if debugger capture fails, show warning and skip
-            console.warn("Falling back to failsafe mode - skipping capture");
+            try {
+                const tab = await chrome.tabs.get(this.currentTabId);
+                const tabName = tab.title || "Unknown";
+                const tabUrl = tab.url || "Unknown";
+                console.warn(
+                    `[${timestamp}] ⚠️ FALLBACK: Screen capture failed - Tab ID: ${this.currentTabId}, Name: "${tabName}", URL: "${tabUrl}", Reason: "Debugger capture command failed - ${error.message}"`
+                );
+            } catch (tabError) {
+                console.warn(
+                    `[${timestamp}] ⚠️ FALLBACK: Screen capture failed - Tab ID: ${this.currentTabId}, Name: "Unknown", URL: "Unknown", Reason: "Debugger capture command failed - ${error.message} (Tab info unavailable: ${tabError.message})"`
+                );
+            }
             throw new Error(error.message || "Frame capture failed");
         }
     }
@@ -218,7 +262,7 @@ export class ScreenCaptureService {
         const tabUrl = await this.getTabUrl(tabId);
         const timestamp = new Date().toISOString();
         console.log(
-            `[${timestamp}] Debugger detached from tab:`,
+            `[${timestamp}] 🔌 DEBUGGER DETACH: Debugger detached from tab:`,
             tabId,
             "URL:",
             tabUrl,
@@ -229,11 +273,15 @@ export class ScreenCaptureService {
         // Remove from attached tabs
         this.attachedTabs.delete(tabId);
         console.log(
-            `[${timestamp}] Removed tab ${tabId} from attached tabs tracking`
+            `[${timestamp}] 📊 DEBUGGER DETACH: Removed tab ${tabId} from attached tabs tracking. Remaining tabs:`,
+            Array.from(this.attachedTabs.keys())
         );
 
         // Clear currentTabId if the detached tab was the current one
         if (this.currentTabId === tabId) {
+            console.log(
+                `[${timestamp}] 🔌 DEBUGGER DETACH: Clearing currentTabId (was ${tabId})`
+            );
             this.currentTabId = null;
         }
 
@@ -276,9 +324,18 @@ export class ScreenCaptureService {
                                 activeTab.id
                             );
                         } else {
-                            console.warn(
-                                "Failed to attach to active tab - entering fallback state (listening mode continues)"
-                            );
+                            try {
+                                const tab = await chrome.tabs.get(activeTab.id);
+                                const tabName = tab.title || "Unknown";
+                                const tabUrl = tab.url || "Unknown";
+                                console.warn(
+                                    `[${timestamp}] ⚠️ FALLBACK: Debugger attachment failed - Tab ID: ${activeTab.id}, Name: "${tabName}", URL: "${tabUrl}", Reason: "Unable to attach debugger to active tab - ${result.error}. Continuing in listening mode until user switches to attachable tab."`
+                                );
+                            } catch (tabError) {
+                                console.warn(
+                                    `[${timestamp}] ⚠️ FALLBACK: Debugger attachment failed - Tab ID: ${activeTab.id}, Name: "Unknown", URL: "Unknown", Reason: "Unable to attach debugger to active tab - ${result.error}. Continuing in listening mode until user switches to attachable tab. (Tab info unavailable: ${tabError.message})"`
+                                );
+                            }
                             // Don't try to attach to arbitrary tabs - only the active tab matters
                             // But keep listening mode active in case user switches to an attachable tab
                         }
@@ -308,8 +365,16 @@ export class ScreenCaptureService {
 
     async switchToTab(tabId) {
         try {
+            const timestamp = new Date().toISOString();
+            console.log(
+                `[${timestamp}] 🔄 TAB SWITCH: Attempting to switch to tab ${tabId}`
+            );
+
             // If we're already on this tab, no need to switch
             if (this.currentTabId === tabId && this.attachedTabs.has(tabId)) {
+                console.log(
+                    `[${timestamp}] ✅ TAB SWITCH: Already on tab ${tabId}, no switch needed`
+                );
                 return { success: true };
             }
 
@@ -319,6 +384,10 @@ export class ScreenCaptureService {
                 currentWindow: true,
             });
             const isCurrentActiveTab = activeTab && activeTab.id === tabId;
+
+            console.log(
+                `[${timestamp}] 📊 TAB SWITCH: Current tab: ${this.currentTabId}, Target tab: ${tabId}, Is active: ${isCurrentActiveTab}`
+            );
 
             // For non-active tabs (hot-switching), query all attachable tabs first
             if (!isCurrentActiveTab) {
@@ -400,9 +469,18 @@ export class ScreenCaptureService {
                     const result = await this.setup(tabId);
                     if (!result.success) {
                         // Failsafe mechanism: if attachment fails, show warning and return failure
-                        console.warn(
-                            "Falling back to failsafe mode - skipping attachment"
-                        );
+                        try {
+                            const tab = await chrome.tabs.get(tabId);
+                            const tabName = tab.title || "Unknown";
+                            const tabUrl = tab.url || "Unknown";
+                            console.warn(
+                                `[${timestamp}] ⚠️ FALLBACK: Tab switch attachment failed - Tab ID: ${tabId}, Name: "${tabName}", URL: "${tabUrl}", Reason: "Debugger setup failed during tab switch - ${result.error}. Skipping attachment to prevent system instability."`
+                            );
+                        } catch (tabError) {
+                            console.warn(
+                                `[${timestamp}] ⚠️ FALLBACK: Tab switch attachment failed - Tab ID: ${tabId}, Name: "Unknown", URL: "Unknown", Reason: "Debugger setup failed during tab switch - ${result.error}. Skipping attachment to prevent system instability. (Tab info unavailable: ${tabError.message})"`
+                            );
+                        }
                         return { success: false, error: result.error };
                     }
                 }
@@ -411,6 +489,13 @@ export class ScreenCaptureService {
             // Switch the current tab ID - no need to detach from previous tab
             this.currentTabId = tabId;
             this.markTabAccessed(tabId);
+
+            console.log(
+                `[${timestamp}] ✅ TAB SWITCH: Successfully switched to tab ${tabId}`
+            );
+            console.log(
+                `[${timestamp}] 📊 TAB SWITCH: Attached tabs count: ${this.attachedTabs.size}`
+            );
 
             return { success: true };
         } catch (error) {
@@ -558,7 +643,8 @@ export class ScreenCaptureService {
 
         try {
             this.isRecording = false;
-            console.log("Screen recording stopped");
+            const timestamp = new Date().toISOString();
+            console.log(`[${timestamp}] 🎬 SCREEN RECORDING: Stopped`);
             return { success: true };
         } catch (error) {
             console.error("Failed to stop recording:", error);
