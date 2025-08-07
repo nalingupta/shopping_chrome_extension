@@ -4,8 +4,6 @@ export class ScreenCaptureService {
         this.tabUsageHistory = new Map(); // Map of tabId -> last accessed timestamp
         this.isRecording = false;
         this.currentTabId = null;
-        this.frameCallback = null;
-        this.errorCallback = null;
         this.isInitialized = false;
         this.isTabSwitchInProgress = false; // Flag to prevent duplicate switches
     }
@@ -152,15 +150,12 @@ export class ScreenCaptureService {
         }
     }
 
-    async startRecording(frameCallback, errorCallback) {
+    async startRecording() {
         if (!this.currentTabId || !this.attachedTabs.has(this.currentTabId)) {
             throw new Error("Debugger not attached to current tab");
         }
 
         try {
-            this.frameCallback = frameCallback;
-            this.errorCallback = errorCallback;
-
             this.isRecording = true;
             const tabUrl = await this.getTabUrl(this.currentTabId);
             const timestamp = new Date().toISOString();
@@ -246,9 +241,13 @@ export class ScreenCaptureService {
         }
 
         if (method === "Runtime.exceptionThrown") {
-            if (this.errorCallback) {
-                this.errorCallback(params.exceptionDetails);
-            }
+            // The errorCallback is no longer used, so we'll just log the exception
+            console.error(
+                `[${new Date().toISOString()}] 💥 DEBUGGER EVENT: Exception thrown in tab ${
+                    this.currentTabId
+                }`,
+                params.exceptionDetails
+            );
         }
     }
 
@@ -349,13 +348,10 @@ export class ScreenCaptureService {
         }
 
         // Notify about the detach if we have an error callback
-        if (this.errorCallback) {
-            this.errorCallback({
-                type: "debugger_detached",
-                tabId: tabId,
-                reason: reason,
-            });
-        }
+        // The errorCallback is no longer used, so we'll just log the detach
+        console.log(
+            `[${timestamp}] 🔌 DEBUGGER DETACH: Debugger detached for reason: ${reason} - notifying (errorCallback removed)`
+        );
     }
 
     async switchToTab(tabId) {
@@ -609,41 +605,6 @@ export class ScreenCaptureService {
             return results;
         } catch (error) {
             console.error("Failed to pre-attach to visible tabs:", error);
-            return [];
-        }
-    }
-
-    async attachToAllTabs() {
-        try {
-            const tabs = await chrome.tabs.query({});
-            const results = [];
-
-            for (const tab of tabs) {
-                // Skip restricted URLs
-                if (this.isRestrictedUrl(tab.url)) {
-                    continue;
-                }
-
-                try {
-                    const result = await this.setup(tab.id);
-                    results.push({
-                        tabId: tab.id,
-                        success: result.success,
-                        error: result.error,
-                    });
-                } catch (error) {
-                    results.push({
-                        tabId: tab.id,
-                        success: false,
-                        error: error.message,
-                    });
-                }
-            }
-
-            console.log("Attached to tabs:", results);
-            return results;
-        } catch (error) {
-            console.error("Failed to attach to all tabs:", error);
             return [];
         }
     }
@@ -986,98 +947,5 @@ export class ScreenCaptureService {
             url.startsWith("edge://") ||
             url.startsWith("about:")
         );
-    }
-
-    async findAndAttachToNewTab() {
-        try {
-            // Get all tabs in the current window
-            const allTabs = await chrome.tabs.query({ currentWindow: true });
-
-            // Filter out restricted URLs and tabs with existing debuggers
-            const attachableTabs = [];
-            for (const tab of allTabs) {
-                // Skip restricted URLs
-                if (this.isRestrictedUrl(tab.url)) {
-                    continue;
-                }
-
-                // Check if debugger is already attached
-                const isAttached = await this.isDebuggerAttached(tab.id);
-                if (isAttached) {
-                    continue;
-                }
-
-                // Skip tabs that are already being tracked
-                if (this.attachedTabs.has(tab.id)) {
-                    continue;
-                }
-
-                attachableTabs.push(tab);
-            }
-
-            // Find the best tab to attach to (prioritize active tab, then recent tabs)
-            let bestTab = null;
-
-            console.log("Attachable tabs found:", attachableTabs.length);
-            attachableTabs.forEach((tab) => {
-                console.log(
-                    "  - Tab",
-                    tab.id,
-                    "URL:",
-                    tab.url,
-                    "Active:",
-                    tab.active
-                );
-            });
-
-            // First, try to find the active tab
-            const activeTab = attachableTabs.find((tab) => tab.active);
-            if (activeTab) {
-                bestTab = activeTab;
-                console.log("Selected active tab:", activeTab.id);
-            } else if (attachableTabs.length > 0) {
-                // If no active tab, pick the most recently accessed tab
-                bestTab = attachableTabs.sort(
-                    (a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0)
-                )[0];
-                console.log("Selected most recent tab:", bestTab.id);
-            }
-
-            if (bestTab) {
-                console.log(
-                    "Found new tab to attach to:",
-                    bestTab.id,
-                    "URL:",
-                    bestTab.url
-                );
-                const result = await this.setup(bestTab.id);
-                if (result.success) {
-                    console.log(
-                        "Successfully attached to new tab:",
-                        bestTab.id,
-                        "URL:",
-                        bestTab.url
-                    );
-                    return { success: true, tabId: bestTab.id };
-                } else {
-                    console.log(
-                        "Failed to attach to new tab:",
-                        bestTab.id,
-                        "Error:",
-                        result.error
-                    );
-                    return { success: false, error: result.error };
-                }
-            } else {
-                // No new tabs available - this means we can't attach to the active tab
-                console.log(
-                    "No new tabs available to attach to - cannot attach to active tab"
-                );
-                return { success: false, error: "Cannot attach to active tab" };
-            }
-        } catch (error) {
-            console.error("Error finding and attaching to new tab:", error);
-            return { success: false, error: error.message };
-        }
     }
 }

@@ -7,7 +7,6 @@ export class AudioHandler {
     constructor() {
         this.state = {
             isListening: false,
-            isProcessingResponse: false,
         };
 
         this.callbacks = {
@@ -579,28 +578,7 @@ export class AudioHandler {
         this.previewManager.startPreview();
 
         // Start recording (just sets up the debugger connection)
-        this.screenCapture.startRecording(
-            (frameData) => {
-                // This callback won't be used since we're using interval-based capture
-            },
-            (error) => {
-                console.error(
-                    "Debugger screen capture error:",
-                    error?.message || error || "Unknown error"
-                );
-
-                // Handle debugger detach events
-                if (error && error.type === "debugger_detached") {
-                    // Log the detach but don't stop listening - let the recovery mechanisms handle tab switches
-                    console.log(
-                        `[${new Date().toISOString()}] 🔌 DEBUGGER DETACH: Debugger detached during streaming, allowing recovery mechanisms to handle tab switch`
-                    );
-
-                    // Don't call stopListening() - let the existing handleDebuggerDetach and onActivated
-                    // recovery logic handle the tab switch automatically
-                }
-            }
-        );
+        this.screenCapture.startRecording();
 
         streamingLogger.logInfo("📹 Video stream started (10 FPS)");
 
@@ -867,11 +845,6 @@ export class AudioHandler {
             this.audioWorkletNode = null;
         }
 
-        if (this.audioProcessor) {
-            this.audioProcessor.disconnect();
-            this.audioProcessor = null;
-        }
-
         if (this.audioSource) {
             this.audioSource.disconnect();
             this.audioSource = null;
@@ -946,13 +919,10 @@ export class AudioHandler {
         this.audioSource = this.geminiAPI.audioContext.createMediaStreamSource(
             this.audioStream
         );
-        this.audioProcessor = this.geminiAPI.audioContext.createScriptProcessor(
-            4096,
-            1,
-            1
-        );
+        const audioProcessor =
+            this.geminiAPI.audioContext.createScriptProcessor(4096, 1, 1);
 
-        this.audioProcessor.onaudioprocess = (event) => {
+        audioProcessor.onaudioprocess = (event) => {
             if (!this.geminiAPI.getConnectionStatus().isConnected) return;
 
             const inputData = event.inputBuffer.getChannelData(0);
@@ -985,7 +955,7 @@ export class AudioHandler {
             this.geminiAPI.sendAudioChunk(base64);
         };
 
-        this.audioSource.connect(this.audioProcessor);
+        this.audioSource.connect(audioProcessor);
         // DO NOT connect to destination to avoid feedback loop
     }
 
@@ -1326,12 +1296,6 @@ export class AudioHandler {
         }
     }
 
-    // Manual method to force response generation (for debugging/testing)
-    forceResponseGeneration() {
-        console.log("🔧 Manually forcing response generation");
-        this.triggerResponseGeneration("manual_trigger");
-    }
-
     // Callback setters
     setTranscriptionCallback(callback) {
         this.callbacks.transcription = callback;
@@ -1356,10 +1320,6 @@ export class AudioHandler {
     // Getters
     isListening() {
         return this.state.isListening;
-    }
-
-    isProcessingResponse() {
-        return this.state.isProcessingResponse;
     }
 
     startPeriodicCleanup() {
