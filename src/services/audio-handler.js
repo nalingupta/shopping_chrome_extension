@@ -625,7 +625,7 @@ export class AudioHandler {
                 console.log(
                     `[${timestamp}] ⏹️ SCREENSHOT INTERVAL: No stream available, attempting recovery`
                 );
-                
+
                 // Try to recover stream before giving up
                 const recoverySuccess = await this.recoverFromInvalidTab();
                 if (!recoverySuccess) {
@@ -670,7 +670,7 @@ export class AudioHandler {
                     return;
                 }
 
-                                                // Retry logic for temporary debugger attachment issues
+                // Retry logic for temporary debugger attachment issues
                 if (error.message.includes("Debugger not attached")) {
                     console.log(
                         `[${timestamp}] 🔄 SCREENSHOT INTERVAL: Debugger not attached, skipping this cycle`
@@ -682,8 +682,8 @@ export class AudioHandler {
                 if (
                     error.message &&
                     (error.message.includes("no longer exists") ||
-                         error.message.includes("not valid for capture") ||
-                         error.message.includes("not accessible"))
+                        error.message.includes("not valid for capture") ||
+                        error.message.includes("not accessible"))
                 ) {
                     console.log(
                         `[${timestamp}] 🔄 SCREENSHOT INTERVAL: Tab validation failed, attempting recovery`
@@ -741,14 +741,18 @@ export class AudioHandler {
     // Recovery method for invalid tab scenarios
     async recoverFromInvalidTab() {
         const timestamp = new Date().toISOString();
-        console.log(`[${timestamp}] 🔄 RECOVERY: Attempting to recover from invalid tab`);
-        
+        console.log(
+            `[${timestamp}] 🔄 RECOVERY: Attempting to recover from invalid tab`
+        );
+
         // Check if a switch is already in progress
         if (this.isTabSwitching) {
-            console.log(`[${timestamp}] ⏭️ RECOVERY: Switch already in progress, waiting for completion`);
+            console.log(
+                `[${timestamp}] ⏭️ RECOVERY: Switch already in progress, waiting for completion`
+            );
             return true; // Assume current switch will succeed
         }
-        
+
         try {
             // Find current active tab
             const [activeTab] = await chrome.tabs.query({
@@ -763,21 +767,30 @@ export class AudioHandler {
 
             // Check if active tab is capturable
             if (this.screenCapture.isRestrictedUrl(activeTab.url)) {
-                console.log(`[${timestamp}] ❌ RECOVERY: Active tab is restricted (${activeTab.url})`);
+                console.log(
+                    `[${timestamp}] ❌ RECOVERY: Active tab is restricted (${activeTab.url})`
+                );
                 return false;
             }
 
             // Switch to active tab
             const result = await this.screenCapture.switchToTab(activeTab.id);
             if (result.success) {
-                console.log(`[${timestamp}] ✅ RECOVERY: Successfully recovered - switched to tab ${activeTab.id} (${activeTab.title})`);
+                console.log(
+                    `[${timestamp}] ✅ RECOVERY: Successfully recovered - switched to tab ${activeTab.id} (${activeTab.title})`
+                );
                 return true;
             } else {
-                console.log(`[${timestamp}] ❌ RECOVERY: Failed to switch to active tab: ${result.error}`);
+                console.log(
+                    `[${timestamp}] ❌ RECOVERY: Failed to switch to active tab: ${result.error}`
+                );
                 return false;
             }
         } catch (error) {
-            console.error(`[${timestamp}] ❌ RECOVERY: Error during recovery:`, error);
+            console.error(
+                `[${timestamp}] ❌ RECOVERY: Error during recovery:`,
+                error
+            );
             return false;
         }
     }
