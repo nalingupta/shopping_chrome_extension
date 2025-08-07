@@ -224,20 +224,30 @@ export class ScreenCaptureService {
                 throw new Error("No screenshot data received");
             }
         } catch (error) {
-            // Failsafe mechanism: if debugger capture fails, show warning and skip
-            try {
-                const tab = await chrome.tabs.get(this.currentTabId);
-                const tabName = tab.title || "Unknown";
-                const tabUrl = tab.url || "Unknown";
-                console.warn(
-                    `[${timestamp}] ⚠️ FALLBACK: Screen capture failed - Tab ID: ${this.currentTabId}, Name: "${tabName}", URL: "${tabUrl}", Reason: "Debugger capture command failed - ${error.message}"`
+            // Check for specific fallback scenarios
+            if (this.isDebuggerConflictError(error)) {
+                return await this.tryStaticFallback("debugger conflict", error);
+            } else if (this.isScreenshotCommandFailure(error)) {
+                return await this.tryStaticFallback(
+                    "screenshot command failure",
+                    error
                 );
-            } catch (tabError) {
-                console.warn(
-                    `[${timestamp}] ⚠️ FALLBACK: Screen capture failed - Tab ID: ${this.currentTabId}, Name: "Unknown", URL: "Unknown", Reason: "Debugger capture command failed - ${error.message} (Tab info unavailable: ${tabError.message})"`
-                );
+            } else {
+                // Failsafe mechanism: if debugger capture fails, show warning and skip
+                try {
+                    const tab = await chrome.tabs.get(this.currentTabId);
+                    const tabName = tab.title || "Unknown";
+                    const tabUrl = tab.url || "Unknown";
+                    console.warn(
+                        `[${timestamp}] ⚠️ FALLBACK: Screen capture failed - Tab ID: ${this.currentTabId}, Name: "${tabName}", URL: "${tabUrl}", Reason: "Debugger capture command failed - ${error.message}"`
+                    );
+                } catch (tabError) {
+                    console.warn(
+                        `[${timestamp}] ⚠️ FALLBACK: Screen capture failed - Tab ID: ${this.currentTabId}, Name: "Unknown", URL: "Unknown", Reason: "Debugger capture command failed - ${error.message} (Tab info unavailable: ${tabError.message})"`
+                    );
+                }
+                throw new Error(error.message || "Frame capture failed");
             }
-            throw new Error(error.message || "Frame capture failed");
         }
     }
 
@@ -1019,6 +1029,53 @@ export class ScreenCaptureService {
             return "PERMISSION_DENIED";
         } else {
             return "UNKNOWN_ERROR";
+        }
+    }
+
+    isDebuggerConflictError(error) {
+        const errorMessage = error.message || error.toString().toLowerCase();
+        return (
+            errorMessage.includes("already attached") ||
+            errorMessage.includes("debugger is already attached") ||
+            errorMessage.includes("debugger conflict")
+        );
+    }
+
+    isScreenshotCommandFailure(error) {
+        const errorMessage = error.message || error.toString().toLowerCase();
+        return (
+            errorMessage.includes("page.capturescreenshot") ||
+            errorMessage.includes("screenshot command") ||
+            errorMessage.includes("capture command") ||
+            errorMessage.includes("protocol error") ||
+            errorMessage.includes("command failed")
+        );
+    }
+
+    async tryStaticFallback(failureType, originalError) {
+        const timestamp = new Date().toISOString();
+        console.log(
+            `[${timestamp}] 🔄 FALLBACK: ${failureType} detected, trying static capture`
+        );
+
+        try {
+            // Get current window ID dynamically
+            const currentWindow = await chrome.windows.getCurrent();
+
+            const staticCapture = await chrome.tabs.captureVisibleTab(
+                currentWindow.id,
+                { format: "jpeg", quality: 80 }
+            );
+
+            console.log(`[${timestamp}] ✅ STATIC FALLBACK: Success`);
+            return staticCapture;
+        } catch (staticError) {
+            console.error(
+                `[${timestamp}] ❌ STATIC FALLBACK: Failed - ${staticError.message}`
+            );
+            throw new Error(
+                `Both capture methods failed: ${failureType} + Static API error`
+            );
         }
     }
 
