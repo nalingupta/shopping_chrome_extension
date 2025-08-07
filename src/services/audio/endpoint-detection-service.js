@@ -163,12 +163,6 @@ export class EndpointDetectionService {
         this.speechBuffer.isGeminiProcessing = false;
         this.speechBuffer.interimText = "";
 
-        if (this.state.isListening && this.endpointDetection.isActive) {
-            if (this.callbacks.onEndpointDetectionStart) {
-                this.callbacks.onEndpointDetectionStart();
-            }
-        }
-
         if (this.callbacks.onStatus) {
             this.callbacks.onStatus("Ready for next input", "info");
         }
