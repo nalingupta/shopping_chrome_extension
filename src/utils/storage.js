@@ -1,8 +1,11 @@
 import { MESSAGE_TYPES } from "./constants.js";
 import { UnifiedConversationManager } from "./storage/conversation-storage.js";
+import { ChatStateManager } from "./storage/chat-state-storage.js";
 
 // Re-export UnifiedConversationManager for backward compatibility
 export { UnifiedConversationManager };
+// Re-export ChatStateManager for backward compatibility
+export { ChatStateManager };
 
 // Storage utility functions
 export class StorageManager {
@@ -35,51 +38,6 @@ export class StorageManager {
 }
 
 // Legacy classes for backward compatibility (will be removed in future)
-export class ChatStateManager {
-    static STATE_KEY = "shoppingAssistant_chatState";
-    static MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
-
-    static saveState(messages, isWelcomeVisible) {
-        try {
-            const state = {
-                messages: messages.map((msg) => ({
-                    content: msg.content,
-                    type: msg.type,
-                })),
-                isWelcomeVisible,
-                timestamp: Date.now(),
-            };
-
-            localStorage.setItem(this.STATE_KEY, JSON.stringify(state));
-        } catch (error) {}
-    }
-
-    static restoreState() {
-        try {
-            const savedState = localStorage.getItem(this.STATE_KEY);
-            if (!savedState) return null;
-
-            const state = JSON.parse(savedState);
-
-            // Don't restore if state is too old
-            if (Date.now() - state.timestamp > this.MAX_AGE_MS) {
-                this.clearState();
-                return null;
-            }
-
-            return state;
-        } catch (error) {
-            this.clearState();
-            return null;
-        }
-    }
-
-    static clearState() {
-        try {
-            localStorage.removeItem(this.STATE_KEY);
-        } catch (error) {}
-    }
-}
 
 export class ConversationHistoryManager {
     static HISTORY_KEY = "shoppingAssistant_conversationHistory";
