@@ -684,18 +684,24 @@ export class ScreenCaptureService {
 
         try {
             const tab = await chrome.tabs.get(this.currentTabId);
-            
+
             // Check if tab exists and is capturable
             if (!tab || this.isRestrictedUrl(tab.url)) {
-                console.log(`❌ TAB VALIDATION: Tab ${this.currentTabId} is not capturable (URL: ${tab?.url || 'unknown'})`);
+                console.log(
+                    `❌ TAB VALIDATION: Tab ${
+                        this.currentTabId
+                    } is not capturable (URL: ${tab?.url || "unknown"})`
+                );
                 this.cleanupInvalidTab(this.currentTabId);
                 return false;
             }
-            
+
             return true;
         } catch (error) {
             // Tab doesn't exist - clean up state
-            console.log(`❌ TAB VALIDATION: Tab ${this.currentTabId} no longer exists: ${error.message}`);
+            console.log(
+                `❌ TAB VALIDATION: Tab ${this.currentTabId} no longer exists: ${error.message}`
+            );
             this.cleanupInvalidTab(this.currentTabId);
             return false;
         }

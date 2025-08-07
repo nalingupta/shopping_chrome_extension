@@ -670,17 +670,25 @@ export class AudioHandler {
                     return;
                 }
 
+                                                // Retry logic for temporary debugger attachment issues
+                if (error.message.includes("Debugger not attached")) {
+                    console.log(
+                        `[${timestamp}] 🔄 SCREENSHOT INTERVAL: Debugger not attached, skipping this cycle`
+                    );
+                    return; // Skip this cycle, try again next time
+                }
+
                 // Enhanced error recovery for tab-related issues
                 if (
                     error.message &&
                     (error.message.includes("no longer exists") ||
-                     error.message.includes("not valid for capture") ||
-                     error.message.includes("not accessible"))
+                         error.message.includes("not valid for capture") ||
+                         error.message.includes("not accessible"))
                 ) {
                     console.log(
                         `[${timestamp}] 🔄 SCREENSHOT INTERVAL: Tab validation failed, attempting recovery`
                     );
-                    
+
                     // Try to recover from invalid tab
                     const recoverySuccess = await this.recoverFromInvalidTab();
                     if (recoverySuccess) {
@@ -734,6 +742,12 @@ export class AudioHandler {
     async recoverFromInvalidTab() {
         const timestamp = new Date().toISOString();
         console.log(`[${timestamp}] 🔄 RECOVERY: Attempting to recover from invalid tab`);
+        
+        // Check if a switch is already in progress
+        if (this.isTabSwitching) {
+            console.log(`[${timestamp}] ⏭️ RECOVERY: Switch already in progress, waiting for completion`);
+            return true; // Assume current switch will succeed
+        }
         
         try {
             // Find current active tab
