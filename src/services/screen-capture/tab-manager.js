@@ -1,16 +1,13 @@
+import { URLMonitor } from "./url-monitor.js";
+
 export class TabManager {
-    constructor() {
+    constructor(urlMonitor) {
+        this.urlMonitor = urlMonitor;
         this.attachedTabs = new Map(); // Map of tabId -> attachment status
         this.tabUsageHistory = new Map(); // Map of tabId -> last accessed timestamp
         this.currentTabId = null;
         this.isInitialized = false;
         this.isTabSwitchInProgress = false;
-
-        // State management for restricted URL handling
-        this.monitoredTabs = new Map(); // Map of tabId -> monitoring info
-        this.failureCounts = new Map(); // Map of tabId -> failure count by type
-        this.urlMonitoringIntervals = new Map(); // Map of tabId -> interval ID
-        this.maxMonitoredTabs = 5;
     }
 
     markTabAccessed(tabId) {
@@ -151,8 +148,11 @@ export class TabManager {
 
                 if (!eligibility.eligible) {
                     if (eligibility.reason === "RESTRICTED_URL") {
-                        if (this.monitoredTabs.size < this.maxMonitoredTabs) {
-                            this.startUrlMonitoring(
+                        if (
+                            this.urlMonitor.getMonitoredTabs().size <
+                            this.urlMonitor.getMaxMonitoredTabs()
+                        ) {
+                            this.urlMonitor.startUrlMonitoring(
                                 tabId,
                                 eligibility.title || "Unknown"
                             );
@@ -176,15 +176,18 @@ export class TabManager {
 
                 const result = await this.setup(tabId);
                 if (!result.success) {
-                    const failureType = this.categorizeFailure(
+                    const failureType = this.urlMonitor.categorizeFailure(
                         result.error,
                         tabId
                     );
-                    this.incrementFailureCount(tabId, failureType);
+                    this.urlMonitor.incrementFailureCount(tabId, failureType);
 
                     if (failureType === "RESTRICTED_URL") {
-                        if (this.monitoredTabs.size < this.maxMonitoredTabs) {
-                            this.startUrlMonitoring(
+                        if (
+                            this.urlMonitor.getMonitoredTabs().size <
+                            this.urlMonitor.getMaxMonitoredTabs()
+                        ) {
+                            this.urlMonitor.startUrlMonitoring(
                                 tabId,
                                 eligibility.title || "Unknown"
                             );
@@ -200,7 +203,7 @@ export class TabManager {
                             error: "Debugger conflict - skipping tab",
                         };
                     } else if (failureType === "NETWORK_ERROR") {
-                        const retryCount = this.getFailureCount(
+                        const retryCount = this.urlMonitor.getFailureCount(
                             tabId,
                             failureType
                         );
@@ -214,8 +217,8 @@ export class TabManager {
                     return { success: false, error: result.error };
                 }
 
-                this.resetFailureCount(tabId, "RESTRICTED_URL");
-                this.resetFailureCount(tabId, "NETWORK_ERROR");
+                this.urlMonitor.resetFailureCount(tabId, "RESTRICTED_URL");
+                this.urlMonitor.resetFailureCount(tabId, "NETWORK_ERROR");
             }
 
             this.currentTabId = tabId;
@@ -252,7 +255,7 @@ export class TabManager {
 
             const attachableTabs = [];
             for (const tab of allTabs) {
-                if (this.isRestrictedUrl(tab.url) || tab.active) {
+                if (this.urlMonitor.isRestrictedUrl(tab.url) || tab.active) {
                     continue;
                 }
 
@@ -310,7 +313,7 @@ export class TabManager {
         try {
             const tab = await chrome.tabs.get(this.currentTabId);
 
-            if (!tab || this.isRestrictedUrl(tab.url)) {
+            if (!tab || this.urlMonitor.isRestrictedUrl(tab.url)) {
                 this.cleanupInvalidTab(this.currentTabId);
                 return false;
             }
@@ -385,7 +388,7 @@ export class TabManager {
             }
 
             this.cleanupDebuggerListeners();
-            this.cleanupMonitoring();
+            this.urlMonitor.cleanupMonitoring();
 
             this.attachedTabs.clear();
             this.currentTabId = null;
@@ -476,7 +479,7 @@ export class TabManager {
             for (const [tabId] of this.attachedTabs) {
                 try {
                     const tab = await chrome.tabs.get(tabId);
-                    if (this.isRestrictedUrl(tab.url)) {
+                    if (this.urlMonitor.isRestrictedUrl(tab.url)) {
                         tabsToDetach.push(tabId);
                     }
                 } catch (error) {
@@ -520,51 +523,11 @@ export class TabManager {
         }
     }
 
-    isRestrictedUrl(url) {
-        return (
-            url.startsWith("chrome://") ||
-            url.startsWith("chrome-extension://") ||
-            url.startsWith("moz-extension://") ||
-            url.startsWith("edge://") ||
-            url.startsWith("about:")
-        );
-    }
-
-    categorizeFailure(error, tabId) {
-        const errorMessage = error.message || error.toString();
-
-        if (
-            errorMessage.includes("restricted") ||
-            errorMessage.includes("chrome://") ||
-            errorMessage.includes("chrome-extension://")
-        ) {
-            return "RESTRICTED_URL";
-        } else if (
-            errorMessage.includes("already attached") ||
-            errorMessage.includes("Debugger is already attached")
-        ) {
-            return "DEBUGGER_CONFLICT";
-        } else if (
-            errorMessage.includes("network") ||
-            errorMessage.includes("timeout") ||
-            errorMessage.includes("connection")
-        ) {
-            return "NETWORK_ERROR";
-        } else if (
-            errorMessage.includes("permission") ||
-            errorMessage.includes("denied")
-        ) {
-            return "PERMISSION_DENIED";
-        } else {
-            return "UNKNOWN_ERROR";
-        }
-    }
-
     async validateTabEligibility(tabId) {
         try {
             const tab = await chrome.tabs.get(tabId);
 
-            if (this.isRestrictedUrl(tab.url)) {
+            if (this.urlMonitor.isRestrictedUrl(tab.url)) {
                 return {
                     eligible: false,
                     reason: "RESTRICTED_URL",
@@ -594,87 +557,6 @@ export class TabManager {
                 reason: "TAB_NOT_FOUND",
                 error: error.message,
             };
-        }
-    }
-
-    startUrlMonitoring(tabId, title) {
-        this.stopUrlMonitoring(tabId);
-
-        this.monitoredTabs.set(tabId, {
-            startTime: Date.now(),
-            title: title,
-            lastCheck: Date.now(),
-        });
-
-        const intervalId = setInterval(async () => {
-            await this.checkTabUrl(tabId);
-        }, 1000);
-
-        this.urlMonitoringIntervals.set(tabId, intervalId);
-
-        setTimeout(() => {
-            this.stopUrlMonitoring(tabId);
-        }, 30000);
-    }
-
-    stopUrlMonitoring(tabId) {
-        const intervalId = this.urlMonitoringIntervals.get(tabId);
-        if (intervalId) {
-            clearInterval(intervalId);
-            this.urlMonitoringIntervals.delete(tabId);
-        }
-        this.monitoredTabs.delete(tabId);
-    }
-
-    async checkTabUrl(tabId) {
-        try {
-            const monitoringInfo = this.monitoredTabs.get(tabId);
-            if (!monitoringInfo) {
-                return;
-            }
-
-            const tab = await chrome.tabs.get(tabId);
-            monitoringInfo.lastCheck = Date.now();
-
-            if (!this.isRestrictedUrl(tab.url)) {
-                this.stopUrlMonitoring(tabId);
-
-                const result = await this.setup(tabId);
-                if (result.success) {
-                    this.resetFailureCount(tabId, "RESTRICTED_URL");
-                }
-            }
-        } catch (error) {
-            this.stopUrlMonitoring(tabId);
-        }
-    }
-
-    cleanupMonitoring() {
-        for (const [tabId, intervalId] of this.urlMonitoringIntervals) {
-            clearInterval(intervalId);
-        }
-        this.urlMonitoringIntervals.clear();
-        this.monitoredTabs.clear();
-        this.failureCounts.clear();
-    }
-
-    incrementFailureCount(tabId, failureType) {
-        if (!this.failureCounts.has(tabId)) {
-            this.failureCounts.set(tabId, new Map());
-        }
-        const tabFailures = this.failureCounts.get(tabId);
-        tabFailures.set(failureType, (tabFailures.get(failureType) || 0) + 1);
-    }
-
-    getFailureCount(tabId, failureType) {
-        const tabFailures = this.failureCounts.get(tabId);
-        return tabFailures ? tabFailures.get(failureType) || 0 : 0;
-    }
-
-    resetFailureCount(tabId, failureType) {
-        const tabFailures = this.failureCounts.get(tabId);
-        if (tabFailures) {
-            tabFailures.set(failureType, 0);
         }
     }
 }

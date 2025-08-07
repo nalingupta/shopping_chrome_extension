@@ -1,9 +1,12 @@
 import { TabManager } from "./screen-capture/tab-manager.js";
 import { ScreenshotService } from "./screen-capture/screenshot-service.js";
+import { URLMonitor } from "./screen-capture/url-monitor.js";
 
 export class ScreenCaptureService {
     constructor() {
-        this.tabManager = new TabManager();
+        this.urlMonitor = new URLMonitor();
+        this.tabManager = new TabManager(this.urlMonitor);
+        this.urlMonitor.setTabManager(this.tabManager);
         this.screenshotService = new ScreenshotService(this.tabManager);
     }
 
@@ -113,11 +116,11 @@ export class ScreenCaptureService {
     }
 
     isRestrictedUrl(url) {
-        return this.tabManager.isRestrictedUrl(url);
+        return this.urlMonitor.isRestrictedUrl(url);
     }
 
     categorizeFailure(error, tabId) {
-        return this.tabManager.categorizeFailure(error, tabId);
+        return this.urlMonitor.categorizeFailure(error, tabId);
     }
 
     isDebuggerConflictError(error) {
@@ -136,15 +139,15 @@ export class ScreenCaptureService {
     }
 
     incrementFailureCount(tabId, failureType) {
-        this.tabManager.incrementFailureCount(tabId, failureType);
+        this.urlMonitor.incrementFailureCount(tabId, failureType);
     }
 
     getFailureCount(tabId, failureType) {
-        return this.tabManager.getFailureCount(tabId, failureType);
+        return this.urlMonitor.getFailureCount(tabId, failureType);
     }
 
     resetFailureCount(tabId, failureType) {
-        this.tabManager.resetFailureCount(tabId, failureType);
+        this.urlMonitor.resetFailureCount(tabId, failureType);
     }
 
     async validateTabEligibility(tabId) {
@@ -152,18 +155,18 @@ export class ScreenCaptureService {
     }
 
     startUrlMonitoring(tabId, title) {
-        this.tabManager.startUrlMonitoring(tabId, title);
+        this.urlMonitor.startUrlMonitoring(tabId, title);
     }
 
     stopUrlMonitoring(tabId) {
-        this.tabManager.stopUrlMonitoring(tabId);
+        this.urlMonitor.stopUrlMonitoring(tabId);
     }
 
     async checkTabUrl(tabId) {
-        return this.tabManager.checkTabUrl(tabId);
+        return this.urlMonitor.checkTabUrl(tabId);
     }
 
     cleanupMonitoring() {
-        this.tabManager.cleanupMonitoring();
+        this.urlMonitor.cleanupMonitoring();
     }
 }
