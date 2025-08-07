@@ -1,41 +1,16 @@
 import { MESSAGE_TYPES } from "./constants.js";
 import { UnifiedConversationManager } from "./storage/conversation-storage.js";
 import { ChatStateManager } from "./storage/chat-state-storage.js";
+import { StorageManager, UnifiedStorage } from "./storage/unified-storage.js";
 
 // Re-export UnifiedConversationManager for backward compatibility
 export { UnifiedConversationManager };
 // Re-export ChatStateManager for backward compatibility
 export { ChatStateManager };
-
-// Storage utility functions
-export class StorageManager {
-    static async set(key, value) {
-        try {
-            await chrome.storage.local.set({ [key]: value });
-        } catch (error) {}
-    }
-
-    static async get(key) {
-        try {
-            const result = await chrome.storage.local.get([key]);
-            return result[key];
-        } catch (error) {
-            return null;
-        }
-    }
-
-    static async remove(key) {
-        try {
-            await chrome.storage.local.remove([key]);
-        } catch (error) {}
-    }
-
-    static async clear() {
-        try {
-            await chrome.storage.local.clear();
-        } catch (error) {}
-    }
-}
+// Re-export StorageManager for backward compatibility
+export { StorageManager };
+// Re-export UnifiedStorage for new unified interface
+export { UnifiedStorage };
 
 // Legacy classes for backward compatibility (will be removed in future)
 
