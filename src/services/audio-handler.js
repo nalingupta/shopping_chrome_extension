@@ -62,7 +62,12 @@ export class AudioHandler {
         // Set up endpoint detection callbacks
         this.endpointDetection.setCallbacks({
             onSilenceDetected: () => this.handleSilenceDetected(),
-            onResponseTimeout: () => this.handleResponseTimeout(),
+            onResponseTimeout: () => {
+                // Handle response timeout without calling handleResponseTimeout again
+                this.audioStreamingStarted = false;
+                this.videoStreamingStarted = false;
+                // Any other cleanup needed
+            },
             onResponseGeneration: (source) => {
                 this.audioStreamingStarted = false;
                 this.videoStreamingStarted = false;

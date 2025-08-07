@@ -3,7 +3,8 @@ import { UIState } from "../ui/ui-state.js";
 import { UnifiedConversationManager } from "../utils/storage.js";
 
 export class UIManager {
-    constructor() {
+    constructor(messageRenderer) {
+        this.messageRenderer = messageRenderer;
         this.elements = {};
         this.uiState = new UIState();
     }
@@ -23,7 +24,7 @@ export class UIManager {
     addMessage(content, type, isLoading = false) {
         this.hideWelcomeScreen();
 
-        const messageDiv = MessageRenderer.createMessage(
+        const messageDiv = this.messageRenderer.createMessage(
             content,
             type,
             isLoading
@@ -69,15 +70,15 @@ export class UIManager {
         this.hideWelcomeScreen();
 
         // Clear any existing streaming messages when showing new interim text
-        MessageRenderer.clearStreamingMessage();
+        this.messageRenderer.clearStreamingMessage();
 
         let interimMessage = document.getElementById("interim-message");
 
         if (!interimMessage) {
-            interimMessage = MessageRenderer.createInterimMessage(text);
+            interimMessage = this.messageRenderer.createInterimMessage(text);
             this.elements.messages.appendChild(interimMessage);
         } else {
-            MessageRenderer.updateInterimMessage(text);
+            this.messageRenderer.updateInterimMessage(text);
         }
 
         this.scrollToBottom();
@@ -90,11 +91,12 @@ export class UIManager {
 
         if (!streamingMessage) {
             // Create new streaming message
-            streamingMessage = MessageRenderer.createStreamingMessage(text);
+            streamingMessage =
+                this.messageRenderer.createStreamingMessage(text);
             this.elements.messages.appendChild(streamingMessage);
         } else {
             // Update existing streaming message
-            MessageRenderer.updateStreamingMessage(text);
+            this.messageRenderer.updateStreamingMessage(text);
         }
 
         this.scrollToBottom();

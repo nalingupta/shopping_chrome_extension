@@ -3,9 +3,10 @@ import { UnifiedConversationManager } from "../utils/storage.js";
 import { MessageRenderer } from "../ui/message-renderer.js";
 
 export class EventManager {
-    constructor(uiManager, audioHandler) {
+    constructor(uiManager, audioHandler, messageRenderer) {
         this.uiManager = uiManager;
         this.audioHandler = audioHandler;
+        this.messageRenderer = messageRenderer;
         this.currentPageInfo = null;
     }
 
@@ -89,7 +90,7 @@ export class EventManager {
             // Restore messages
             if (messages && messages.length > 0) {
                 messages.forEach((msg) => {
-                    const messageDiv = MessageRenderer.createMessage(
+                    const messageDiv = this.messageRenderer.createMessage(
                         msg.content,
                         msg.type
                     );
@@ -176,8 +177,8 @@ export class EventManager {
 
     async handleClearChat() {
         this.uiManager.elements.messages.innerHTML = "";
-        MessageRenderer.clearInterimMessage();
-        MessageRenderer.clearStreamingMessage();
+        this.messageRenderer.clearInterimMessage();
+        this.messageRenderer.clearStreamingMessage();
         this.uiManager.uiState.clearStatus();
 
         this.uiManager.elements.userInput.value = "";
@@ -236,7 +237,7 @@ export class EventManager {
         this.uiManager.elements.voiceButton.classList.remove("listening");
         this.uiManager.elements.voiceButton.title = "";
         await this.audioHandler.stopListening();
-        MessageRenderer.clearInterimMessage();
+        this.messageRenderer.clearInterimMessage();
 
         this.uiManager.uiState.setSpeechState("idle");
         this.uiManager.uiState.showStatus("Start a chat", "info");
@@ -246,7 +247,7 @@ export class EventManager {
         // Reset UI state when listening stops due to external factors
         this.uiManager.elements.voiceButton.classList.remove("listening");
         this.uiManager.elements.voiceButton.title = "";
-        MessageRenderer.clearInterimMessage();
+        this.messageRenderer.clearInterimMessage();
 
         this.uiManager.uiState.setSpeechState("idle");
 
@@ -291,8 +292,8 @@ export class EventManager {
 
     handleTranscriptionReceived(transcription) {
         if (transcription) {
-            MessageRenderer.clearInterimMessage();
-            MessageRenderer.clearStreamingMessage(); // Clear any existing streaming messages
+            this.messageRenderer.clearInterimMessage();
+            this.messageRenderer.clearStreamingMessage(); // Clear any existing streaming messages
 
             if (this.isErrorTranscription(transcription)) {
                 this.uiManager.uiState.showStatus(
@@ -333,7 +334,7 @@ export class EventManager {
             // The streaming message already contains the full text,
             // so we just need to finalize its appearance.
 
-            MessageRenderer.finalizeStreamingMessage();
+            this.messageRenderer.finalizeStreamingMessage();
 
             // Ensure final scroll to bottom
             this.scrollToBottom();

@@ -3,10 +3,11 @@ import { UnifiedConversationManager } from "../utils/storage.js";
 import { MessageRenderer } from "../ui/message-renderer.js";
 
 export class LifecycleManager {
-    constructor(uiManager, eventManager, audioHandler) {
+    constructor(uiManager, eventManager, audioHandler, messageRenderer) {
         this.uiManager = uiManager;
         this.eventManager = eventManager;
         this.audioHandler = audioHandler;
+        this.messageRenderer = messageRenderer;
     }
 
     trackSidePanelLifecycle() {
@@ -177,7 +178,7 @@ export class LifecycleManager {
 
             if (messages && messages.length > 0) {
                 messages.forEach((msg) => {
-                    const messageDiv = MessageRenderer.createMessage(
+                    const messageDiv = this.messageRenderer.createMessage(
                         msg.content,
                         msg.type
                     );

@@ -9,13 +9,19 @@ import { LifecycleManager } from "./lifecycle-manager.js";
 
 export class ShoppingAssistant {
     constructor() {
-        this.uiManager = new UIManager();
+        this.messageRenderer = new MessageRenderer();
+        this.uiManager = new UIManager(this.messageRenderer);
         this.audioHandler = new AudioHandler();
-        this.eventManager = new EventManager(this.uiManager, this.audioHandler);
+        this.eventManager = new EventManager(
+            this.uiManager,
+            this.audioHandler,
+            this.messageRenderer
+        );
         this.lifecycleManager = new LifecycleManager(
             this.uiManager,
             this.eventManager,
-            this.audioHandler
+            this.audioHandler,
+            this.messageRenderer
         );
 
         this.uiManager.initializeElements();
