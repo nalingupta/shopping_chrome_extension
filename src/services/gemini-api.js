@@ -272,6 +272,7 @@ Important: Only describe what you can actually see in the provided screen captur
                 if (this.callbacks.onStreamingUpdate) {
                     this.callbacks.onStreamingUpdate({
                         text: this.currentStreamingResponse,
+                        isStreaming: true,
                         isComplete: false,
                         timestamp: Date.now(),
                     });

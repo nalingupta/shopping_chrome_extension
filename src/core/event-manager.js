@@ -142,9 +142,7 @@ export class EventManager {
             this.removeMessage(loadingMessage);
 
             if (result.success) {
-                // The response will be handled by the callback system
-                // For now, we'll show a placeholder message
-                this.addMessage("Message sent successfully", "assistant");
+                // The response will be rendered by the callback system
             } else {
                 this.addMessage(
                     "Sorry, I encountered an error. Please try again.",
@@ -324,11 +322,16 @@ export class EventManager {
             // Handle streaming update (ChatGPT-style)
             this.updateStreamingMessage(response.text);
         } else {
-            // Handle final response - finalize streaming message
-            // The streaming message already contains the full text,
-            // so we just need to finalize its appearance.
-
-            this.messageRenderer.finalizeStreamingMessage();
+            // Handle final response
+            const existingStreaming =
+                document.getElementById("streaming-message");
+            if (!existingStreaming && response.text) {
+                // No streaming message existed; render a normal assistant message
+                this.addMessage(response.text, "assistant");
+            } else {
+                // Finalize existing streaming message
+                this.messageRenderer.finalizeStreamingMessage();
+            }
 
             // Ensure final scroll to bottom
             this.scrollToBottom();

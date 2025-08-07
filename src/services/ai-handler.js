@@ -1,4 +1,5 @@
 import { GeminiLiveAPI } from "./gemini-api.js";
+import { ShoppingAssistant as RestShoppingAssistant } from "./shopping-assistant.js";
 
 export class AIHandler {
     constructor() {
@@ -93,24 +94,28 @@ export class AIHandler {
 
     // REST API Methods (for text messages)
     async sendTextMessage(message) {
-        // This would be implemented to send text messages via REST API
-        // For now, we'll use Gemini as a fallback
+        // Use REST API flow for text input
         try {
-            if (this.isGeminiConnectionActive()) {
-                this.geminiAPI.sendMessage(message);
-                return { success: true };
-            } else {
-                // If Gemini is not connected, try to connect first
-                const connectResult = await this.connectToGemini();
-                if (connectResult.success) {
-                    this.geminiAPI.sendMessage(message);
-                    return { success: true };
-                } else {
-                    throw new Error("Failed to connect to AI service");
+            // Minimal request body: just pass the text; page context not available here
+            const responseText = await RestShoppingAssistant.callGeminiAPI([
+                { role: "user", content: message },
+            ]);
+
+            // Forward as if it were a final bot response
+            if (responseText && this.geminiAPI && this.geminiAPI.callbacks) {
+                const onBotResponse = this.geminiAPI.callbacks.onBotResponse;
+                if (onBotResponse) {
+                    onBotResponse({
+                        text: responseText,
+                        isStreaming: false,
+                        timestamp: Date.now(),
+                    });
                 }
             }
+
+            return { success: true };
         } catch (error) {
-            console.error("Failed to send text message:", error);
+            console.error("Failed to send text message via REST:", error);
             return { success: false, error: error.message };
         }
     }
