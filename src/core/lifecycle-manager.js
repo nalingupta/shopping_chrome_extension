@@ -3,10 +3,15 @@ import { UnifiedConversationManager } from "../utils/storage.js";
 import { MessageRenderer } from "../ui/message-renderer.js";
 
 export class LifecycleManager {
-    constructor(uiManager, eventManager, conversationHandler, messageRenderer) {
+    constructor(
+        uiManager,
+        eventManager,
+        multimediaOrchestrator,
+        messageRenderer
+    ) {
         this.uiManager = uiManager;
         this.eventManager = eventManager;
-        this.conversationHandler = conversationHandler;
+        this.multimediaOrchestrator = multimediaOrchestrator;
         this.messageRenderer = messageRenderer;
     }
 
@@ -24,7 +29,7 @@ export class LifecycleManager {
 
         const setSidePanelClosed = async () => {
             // Stop listening mode if active
-            if (this.conversationHandler.isConversationActive()) {
+            if (this.multimediaOrchestrator.isMultimediaSessionActive()) {
                 await this.eventManager.stopVoiceInput();
                 // Notify background script that listening has stopped
                 chrome.runtime
@@ -48,7 +53,7 @@ export class LifecycleManager {
             }
 
             // Don't set close timeout if listening mode is active
-            if (this.conversationHandler.isConversationActive()) {
+            if (this.multimediaOrchestrator.isMultimediaSessionActive()) {
                 return;
             }
 
@@ -69,10 +74,10 @@ export class LifecycleManager {
             }
 
             // Check if debugger is properly attached before resuming
-            if (this.conversationHandler.isConversationActive()) {
+            if (this.multimediaOrchestrator.isMultimediaSessionActive()) {
                 try {
                     // Give the debugger a moment to re-attach if needed
-                    await this.conversationHandler.checkAndSwitchToActiveTab();
+                    // This will be handled by VideoHandler in the new architecture
                 } catch (error) {
                     // Ignore debugger re-attachment errors
                 }
@@ -201,12 +206,8 @@ export class LifecycleManager {
     async cleanupDebuggerAttachments() {
         try {
             // Clean up any existing debugger attachments
-            if (
-                this.conversationHandler &&
-                this.conversationHandler.screenCapture
-            ) {
-                await this.conversationHandler.screenCapture.cleanup();
-            }
+            // This will be handled by VideoHandler in the new architecture
+            // For now, we'll skip this during the transition
         } catch (error) {
             console.error("Error cleaning up debugger attachments:", error);
         }

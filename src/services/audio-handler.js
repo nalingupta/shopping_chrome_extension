@@ -1,0 +1,235 @@
+import { AudioCaptureService } from "./audio/audio-capture-service.js";
+import { SpeechRecognitionService } from "./audio/speech-recognition-service.js";
+import { EndpointDetectionService } from "./audio/endpoint-detection-service.js";
+import { AudioStateManager } from "./audio/audio-state-manager.js";
+
+export class AudioHandler {
+    constructor(aiHandler) {
+        this.aiHandler = aiHandler;
+
+        // Audio services
+        this.audioCapture = new AudioCaptureService(this.aiHandler);
+        this.speechRecognition = new SpeechRecognitionService();
+        this.endpointDetection = new EndpointDetectionService();
+        this.stateManager = new AudioStateManager();
+
+        // Audio state
+        this.audioStreamingStarted = false;
+
+        this.setupAudioCallbacks();
+    }
+
+    setupAudioCallbacks() {
+        // Set up audio level callback
+        this.audioCapture.setAudioLevelCallback((level) => {
+            this.onAudioLevelDetected(level);
+        });
+
+        // Set up speech recognition callbacks
+        this.speechRecognition.setCallbacks({
+            onSpeechDetected: () => this.onSpeechDetected(),
+            onInterimResult: (text) => {
+                const callbacks = this.stateManager.getCallbacks();
+                if (callbacks.interim) {
+                    callbacks.interim(text);
+                }
+            },
+            onAudioStreamingStart: async () => {
+                await this.startAudioStreaming();
+                this.audioStreamingStarted = true;
+            },
+            onVideoStreamingStart: () => {
+                // This will be handled by VideoHandler
+            },
+            onEndpointDetectionStart: () => this.startEndpointDetection(),
+            onWebSpeechFinalResult: () => this.handleWebSpeechFinalResult(),
+            onCheckOrphanedSpeech: () => this.checkForOrphanedSpeech(),
+        });
+
+        // Set up endpoint detection callbacks
+        this.endpointDetection.setCallbacks({
+            onSilenceDetected: () => this.handleSilenceDetected(),
+            onResponseTimeout: () => {
+                this.audioStreamingStarted = false;
+            },
+            onResponseGeneration: (source) => {
+                this.audioStreamingStarted = false;
+            },
+            onStatus: (status, type, duration) => {
+                const callbacks = this.stateManager.getCallbacks();
+                if (callbacks.status) {
+                    callbacks.status(status, type, duration);
+                }
+            },
+            onEndpointDetectionStart: () => this.startEndpointDetection(),
+        });
+    }
+
+    async setupAudioCapture() {
+        return this.audioCapture.setupAudioCapture();
+    }
+
+    async startAudioStreaming() {
+        return this.audioCapture.startAudioStreaming();
+    }
+
+    stopAudioStreaming() {
+        this.audioCapture.stopAudioStreaming();
+    }
+
+    async startAudioWorkletProcessing() {
+        return this.audioCapture.startAudioWorkletProcessing();
+    }
+
+    startScriptProcessorFallback() {
+        this.audioCapture.startScriptProcessorFallback();
+    }
+
+    stopAudioProcessing() {
+        this.audioCapture.stopAudioProcessing();
+    }
+
+    startLocalSpeechRecognition() {
+        this.resetInactivityTimer();
+        this.speechRecognition.setState({
+            isListening: this.stateManager.isListening(),
+            audioStreamingStarted: this.audioStreamingStarted,
+            videoStreamingStarted: false, // This will be managed by VideoHandler
+        });
+        this.speechRecognition.setSpeechBuffer(this.speechBuffer);
+        this.speechRecognition.startLocalSpeechRecognition();
+    }
+
+    restartSpeechRecognition() {
+        this.speechRecognition.restartSpeechRecognition();
+    }
+
+    startSpeechKeepAlive() {
+        this.speechRecognition.startSpeechKeepAlive();
+    }
+
+    clearSpeechKeepAlive() {
+        this.speechRecognition.clearSpeechKeepAlive();
+    }
+
+    resetInactivityTimer() {
+        this.stateManager.resetInactivityTimer(() => {
+            // This will be handled by MultimediaOrchestrator
+            const callbacks = this.stateManager.getCallbacks();
+            if (callbacks.status) {
+                callbacks.status("Session timed out", "warning", 5000);
+            }
+        });
+    }
+
+    clearInactivityTimer() {
+        this.stateManager.clearInactivityTimer();
+    }
+
+    startEndpointDetection() {
+        this.endpointDetection.setState({
+            isListening: this.stateManager.isListening(),
+            audioStreamingStarted: this.audioStreamingStarted,
+        });
+        this.endpointDetection.setSpeechBuffer(this.speechBuffer);
+        this.endpointDetection.startEndpointDetection();
+    }
+
+    stopEndpointDetection() {
+        this.endpointDetection.stopEndpointDetection();
+    }
+
+    resetSilenceTimer() {
+        this.endpointDetection.resetSilenceTimer();
+    }
+
+    clearSilenceTimer() {
+        this.endpointDetection.clearSilenceTimer();
+    }
+
+    onSpeechDetected() {
+        this.endpointDetection.onSpeechDetected();
+    }
+
+    onAudioLevelDetected(level) {
+        this.endpointDetection.onAudioLevelDetected(level);
+    }
+
+    handleSilenceDetected() {
+        this.endpointDetection.handleSilenceDetected();
+    }
+
+    handleWebSpeechFinalResult() {
+        this.endpointDetection.handleWebSpeechFinalResult();
+    }
+
+    triggerResponseGeneration(source) {
+        this.audioStreamingStarted = false;
+        this.endpointDetection.triggerResponseGeneration(source);
+    }
+
+    setResponseTimeout() {
+        this.endpointDetection.setResponseTimeout();
+    }
+
+    clearResponseTimeout() {
+        this.endpointDetection.clearResponseTimeout();
+    }
+
+    handleResponseTimeout() {
+        this.audioStreamingStarted = false;
+        this.endpointDetection.handleResponseTimeout();
+    }
+
+    // Callback setters
+    setTranscriptionCallback(callback) {
+        this.stateManager.setTranscriptionCallback(callback);
+    }
+
+    setInterimCallback(callback) {
+        this.stateManager.setInterimCallback(callback);
+    }
+
+    setBotResponseCallback(callback) {
+        this.stateManager.setBotResponseCallback(callback);
+    }
+
+    setStatusCallback(callback) {
+        this.stateManager.setStatusCallback(callback);
+    }
+
+    setListeningStoppedCallback(callback) {
+        this.stateManager.setListeningStoppedCallback(callback);
+    }
+
+    // State management
+    isListening() {
+        return this.stateManager.isListening();
+    }
+
+    setListeningState(listening) {
+        this.stateManager.setListeningState(listening);
+    }
+
+    // Speech buffer management (needed for coordination with other handlers)
+    setSpeechBuffer(speechBuffer) {
+        this.speechBuffer = speechBuffer;
+    }
+
+    checkForOrphanedSpeech() {
+        const now = Date.now();
+        const timeSinceLastUpdate = now - this.speechBuffer.lastWebSpeechUpdate;
+
+        if (
+            this.speechBuffer.interimText.trim() &&
+            !this.speechBuffer.isGeminiProcessing &&
+            timeSinceLastUpdate > 3000
+        ) {
+            const callbacks = this.stateManager.getCallbacks();
+            if (callbacks.transcription) {
+                callbacks.transcription(this.speechBuffer.interimText.trim());
+            }
+            this.speechBuffer.interimText = "";
+        }
+    }
+}

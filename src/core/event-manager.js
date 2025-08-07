@@ -3,9 +3,9 @@ import { UnifiedConversationManager } from "../utils/storage.js";
 import { MessageRenderer } from "../ui/message-renderer.js";
 
 export class EventManager {
-    constructor(uiManager, conversationHandler, messageRenderer) {
+    constructor(uiManager, multimediaOrchestrator, messageRenderer) {
         this.uiManager = uiManager;
-        this.conversationHandler = conversationHandler;
+        this.multimediaOrchestrator = multimediaOrchestrator;
         this.messageRenderer = messageRenderer;
         this.currentPageInfo = null;
     }
@@ -54,9 +54,8 @@ export class EventManager {
 
         // Handle window resize for preview canvas
         window.addEventListener("resize", () => {
-            if (this.conversationHandler.previewManager) {
-                this.conversationHandler.previewManager.resize();
-            }
+            // Preview manager is now handled by VideoHandler
+            // This will be updated in Phase 3 when we fully integrate
         });
     }
 
@@ -135,15 +134,20 @@ export class EventManager {
         );
 
         try {
-            const response = await this.sendToBackground(message);
+            // Send text message directly to AIHandler
+            const result =
+                await this.multimediaOrchestrator.aiHandler.sendTextMessage(
+                    message
+                );
             this.removeMessage(loadingMessage);
 
-            if (response.success) {
-                this.addMessage(response.response, "assistant");
+            if (result.success) {
+                // The response will be handled by the callback system
+                // For now, we'll show a placeholder message
+                this.addMessage("Message sent successfully", "assistant");
             } else {
                 this.addMessage(
-                    response.response ||
-                        "Sorry, I encountered an error. Please try again.",
+                    "Sorry, I encountered an error. Please try again.",
                     "assistant"
                 );
             }
@@ -160,20 +164,7 @@ export class EventManager {
         }
     }
 
-    async sendToBackground(message) {
-        return new Promise((resolve) => {
-            chrome.runtime.sendMessage(
-                {
-                    type: MESSAGE_TYPES.PROCESS_USER_QUERY,
-                    data: {
-                        query: message,
-                        pageInfo: this.currentPageInfo,
-                    },
-                },
-                resolve
-            );
-        });
-    }
+    // sendToBackground method removed - now using AIHandler directly for text messages
 
     async handleClearChat() {
         this.uiManager.elements.messages.innerHTML = "";
@@ -184,10 +175,10 @@ export class EventManager {
         this.uiManager.elements.userInput.value = "";
         this.adjustTextareaHeight();
 
-        if (this.conversationHandler.isConversationActive()) {
+        if (this.multimediaOrchestrator.isMultimediaSessionActive()) {
             this.uiManager.elements.voiceButton.classList.remove("listening");
             this.uiManager.elements.voiceButton.title = "";
-            this.conversationHandler.stopConversation();
+            this.multimediaOrchestrator.stopMultimedia();
         }
 
         // Reset speech state
@@ -204,7 +195,7 @@ export class EventManager {
     }
 
     async handleVoiceInput() {
-        if (this.conversationHandler.isConversationActive()) {
+        if (this.multimediaOrchestrator.isMultimediaSessionActive()) {
             await this.stopVoiceInput();
         } else {
             await this.startVoiceInput();
@@ -213,7 +204,7 @@ export class EventManager {
 
     async startVoiceInput() {
         try {
-            const result = await this.conversationHandler.startConversation();
+            const result = await this.multimediaOrchestrator.startMultimedia();
             if (result.success) {
                 this.hideWelcomeScreen();
                 this.uiManager.elements.voiceButton.classList.add("listening");
@@ -236,7 +227,7 @@ export class EventManager {
     async stopVoiceInput() {
         this.uiManager.elements.voiceButton.classList.remove("listening");
         this.uiManager.elements.voiceButton.title = "";
-        await this.conversationHandler.stopConversation();
+        await this.multimediaOrchestrator.stopMultimedia();
         this.messageRenderer.clearInterimMessage();
 
         this.uiManager.uiState.setSpeechState("idle");
@@ -317,7 +308,10 @@ export class EventManager {
     }
 
     handleInterimTranscription(interimText) {
-        if (interimText && this.conversationHandler.isConversationActive()) {
+        if (
+            interimText &&
+            this.multimediaOrchestrator.isMultimediaSessionActive()
+        ) {
             this.showInterimText(interimText);
         }
     }
@@ -343,7 +337,7 @@ export class EventManager {
             this.saveState();
 
             // Return to listening state if still listening, otherwise idle
-            if (this.conversationHandler.isConversationActive()) {
+            if (this.multimediaOrchestrator.isMultimediaSessionActive()) {
                 this.uiManager.uiState.setSpeechState("listening");
                 this.uiManager.uiState.showStatus("Listening...", "info");
             } else {

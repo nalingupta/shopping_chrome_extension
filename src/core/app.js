@@ -2,7 +2,10 @@ import { MESSAGE_TYPES } from "../utils/constants.js";
 import { UnifiedConversationManager } from "../utils/storage.js";
 import { MessageRenderer } from "../ui/message-renderer.js";
 import { UIState } from "../ui/ui-state.js";
-import { ConversationHandler } from "../services/conversation-handler.js";
+import { MultimediaOrchestrator } from "../services/multimedia-orchestrator.js";
+import { AudioHandler } from "../services/audio-handler.js";
+import { VideoHandler } from "../services/video-handler.js";
+import { AIHandler } from "../services/ai-handler.js";
 import { UIManager } from "./ui-manager.js";
 import { EventManager } from "./event-manager.js";
 import { LifecycleManager } from "./lifecycle-manager.js";
@@ -11,16 +14,26 @@ export class ShoppingAssistant {
     constructor() {
         this.messageRenderer = new MessageRenderer();
         this.uiManager = new UIManager(this.messageRenderer);
-        this.conversationHandler = new ConversationHandler();
+
+        // Create new handlers
+        this.aiHandler = new AIHandler();
+        this.audioHandler = new AudioHandler(this.aiHandler);
+        this.videoHandler = new VideoHandler(this.aiHandler);
+        this.multimediaOrchestrator = new MultimediaOrchestrator(
+            this.audioHandler,
+            this.videoHandler,
+            this.aiHandler
+        );
+
         this.eventManager = new EventManager(
             this.uiManager,
-            this.conversationHandler,
+            this.multimediaOrchestrator,
             this.messageRenderer
         );
         this.lifecycleManager = new LifecycleManager(
             this.uiManager,
             this.eventManager,
-            this.conversationHandler,
+            this.multimediaOrchestrator,
             this.messageRenderer
         );
 
@@ -35,24 +48,63 @@ export class ShoppingAssistant {
     }
 
     initializeCallbacks() {
-        this.conversationHandler.setTranscriptionCallback((transcription) => {
-            this.handleTranscriptionReceived(transcription);
-        });
+        // Set up MultimediaOrchestrator callbacks for voice/multimedia
+        this.multimediaOrchestrator.setTranscriptionCallback(
+            (transcription) => {
+                this.handleTranscriptionReceived(transcription);
+            }
+        );
 
-        this.conversationHandler.setInterimCallback((interimText) => {
+        this.multimediaOrchestrator.setInterimCallback((interimText) => {
             this.handleInterimTranscription(interimText);
         });
 
-        this.conversationHandler.setBotResponseCallback((response) => {
+        this.multimediaOrchestrator.setBotResponseCallback((response) => {
             this.handleBotResponse(response);
         });
 
-        this.conversationHandler.setStatusCallback((status, type, duration) => {
-            this.uiManager.uiState.showStatus(status, type, duration);
+        this.multimediaOrchestrator.setStatusCallback(
+            (status, type, duration) => {
+                this.uiManager.uiState.showStatus(status, type, duration);
+            }
+        );
+
+        this.multimediaOrchestrator.setListeningStoppedCallback((reason) => {
+            this.handleListeningStopped(reason);
         });
 
-        this.conversationHandler.setListeningStoppedCallback((reason) => {
-            this.handleListeningStopped(reason);
+        // Set up AIHandler callbacks for text message responses
+        this.aiHandler.setBotResponseCallback((response) => {
+            this.handleBotResponse(response);
+        });
+
+        this.aiHandler.setStreamingUpdateCallback((update) => {
+            this.handleBotResponse(update);
+        });
+
+        this.aiHandler.setConnectionStateCallback((state) => {
+            if (state === "connected") {
+                this.uiManager.uiState.showStatus(
+                    "Connected to AI",
+                    "success",
+                    2000
+                );
+            } else if (state === "disconnected") {
+                this.uiManager.uiState.showStatus(
+                    "Disconnected from AI",
+                    "error",
+                    3000
+                );
+            }
+        });
+
+        this.aiHandler.setErrorCallback((error) => {
+            console.error("AI Handler error:", error);
+            this.uiManager.uiState.showStatus(
+                "AI connection error",
+                "error",
+                3000
+            );
         });
     }
 
