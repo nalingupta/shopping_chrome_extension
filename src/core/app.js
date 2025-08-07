@@ -2,7 +2,7 @@ import { MESSAGE_TYPES } from "../utils/constants.js";
 import { UnifiedConversationManager } from "../utils/storage.js";
 import { MessageRenderer } from "../ui/message-renderer.js";
 import { UIState } from "../ui/ui-state.js";
-import { AudioHandler } from "../services/audio-handler.js";
+import { ConversationHandler } from "../services/conversation-handler.js";
 import { UIManager } from "./ui-manager.js";
 import { EventManager } from "./event-manager.js";
 import { LifecycleManager } from "./lifecycle-manager.js";
@@ -11,16 +11,16 @@ export class ShoppingAssistant {
     constructor() {
         this.messageRenderer = new MessageRenderer();
         this.uiManager = new UIManager(this.messageRenderer);
-        this.audioHandler = new AudioHandler();
+        this.conversationHandler = new ConversationHandler();
         this.eventManager = new EventManager(
             this.uiManager,
-            this.audioHandler,
+            this.conversationHandler,
             this.messageRenderer
         );
         this.lifecycleManager = new LifecycleManager(
             this.uiManager,
             this.eventManager,
-            this.audioHandler,
+            this.conversationHandler,
             this.messageRenderer
         );
 
@@ -35,23 +35,23 @@ export class ShoppingAssistant {
     }
 
     initializeCallbacks() {
-        this.audioHandler.setTranscriptionCallback((transcription) => {
+        this.conversationHandler.setTranscriptionCallback((transcription) => {
             this.handleTranscriptionReceived(transcription);
         });
 
-        this.audioHandler.setInterimCallback((interimText) => {
+        this.conversationHandler.setInterimCallback((interimText) => {
             this.handleInterimTranscription(interimText);
         });
 
-        this.audioHandler.setBotResponseCallback((response) => {
+        this.conversationHandler.setBotResponseCallback((response) => {
             this.handleBotResponse(response);
         });
 
-        this.audioHandler.setStatusCallback((status, type, duration) => {
+        this.conversationHandler.setStatusCallback((status, type, duration) => {
             this.uiManager.uiState.showStatus(status, type, duration);
         });
 
-        this.audioHandler.setListeningStoppedCallback((reason) => {
+        this.conversationHandler.setListeningStoppedCallback((reason) => {
             this.handleListeningStopped(reason);
         });
     }

@@ -3,9 +3,9 @@ import { UnifiedConversationManager } from "../utils/storage.js";
 import { MessageRenderer } from "../ui/message-renderer.js";
 
 export class EventManager {
-    constructor(uiManager, audioHandler, messageRenderer) {
+    constructor(uiManager, conversationHandler, messageRenderer) {
         this.uiManager = uiManager;
-        this.audioHandler = audioHandler;
+        this.conversationHandler = conversationHandler;
         this.messageRenderer = messageRenderer;
         this.currentPageInfo = null;
     }
@@ -54,8 +54,8 @@ export class EventManager {
 
         // Handle window resize for preview canvas
         window.addEventListener("resize", () => {
-            if (this.audioHandler.previewManager) {
-                this.audioHandler.previewManager.resize();
+            if (this.conversationHandler.previewManager) {
+                this.conversationHandler.previewManager.resize();
             }
         });
     }
@@ -184,10 +184,10 @@ export class EventManager {
         this.uiManager.elements.userInput.value = "";
         this.adjustTextareaHeight();
 
-        if (this.audioHandler.isListening()) {
+        if (this.conversationHandler.isConversationActive()) {
             this.uiManager.elements.voiceButton.classList.remove("listening");
             this.uiManager.elements.voiceButton.title = "";
-            this.audioHandler.stopListening();
+            this.conversationHandler.stopConversation();
         }
 
         // Reset speech state
@@ -204,7 +204,7 @@ export class EventManager {
     }
 
     async handleVoiceInput() {
-        if (this.audioHandler.isListening()) {
+        if (this.conversationHandler.isConversationActive()) {
             await this.stopVoiceInput();
         } else {
             await this.startVoiceInput();
@@ -213,7 +213,7 @@ export class EventManager {
 
     async startVoiceInput() {
         try {
-            const result = await this.audioHandler.startListening();
+            const result = await this.conversationHandler.startConversation();
             if (result.success) {
                 this.hideWelcomeScreen();
                 this.uiManager.elements.voiceButton.classList.add("listening");
@@ -236,7 +236,7 @@ export class EventManager {
     async stopVoiceInput() {
         this.uiManager.elements.voiceButton.classList.remove("listening");
         this.uiManager.elements.voiceButton.title = "";
-        await this.audioHandler.stopListening();
+        await this.conversationHandler.stopConversation();
         this.messageRenderer.clearInterimMessage();
 
         this.uiManager.uiState.setSpeechState("idle");
@@ -317,7 +317,7 @@ export class EventManager {
     }
 
     handleInterimTranscription(interimText) {
-        if (interimText && this.audioHandler.isListening()) {
+        if (interimText && this.conversationHandler.isConversationActive()) {
             this.showInterimText(interimText);
         }
     }
@@ -343,7 +343,7 @@ export class EventManager {
             this.saveState();
 
             // Return to listening state if still listening, otherwise idle
-            if (this.audioHandler.isListening()) {
+            if (this.conversationHandler.isConversationActive()) {
                 this.uiManager.uiState.setSpeechState("listening");
                 this.uiManager.uiState.showStatus("Listening...", "info");
             } else {

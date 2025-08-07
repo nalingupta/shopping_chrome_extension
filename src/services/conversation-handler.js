@@ -7,7 +7,7 @@ import { EndpointDetectionService } from "./audio/endpoint-detection-service.js"
 import { AudioStateManager } from "./audio/audio-state-manager.js";
 import { streamingLogger } from "../utils/streaming-logger.js";
 
-export class AudioHandler {
+export class ConversationHandler {
     constructor() {
         // Gemini-first speech segmentation
         this.speechBuffer = {
@@ -183,7 +183,7 @@ export class AudioHandler {
         }
     }
 
-    async startListening() {
+    async startConversation() {
         if (this.stateManager.isListening()) {
             return { success: false, error: "Already listening" };
         }
@@ -386,7 +386,7 @@ export class AudioHandler {
                 );
             }
 
-            await this.stopListening();
+            await this.stopConversation();
 
             if (callbacks.listeningStopped) {
                 callbacks.listeningStopped("screen_capture_failed");
@@ -418,7 +418,7 @@ export class AudioHandler {
                     );
                 }
 
-                await this.stopListening();
+                await this.stopConversation();
 
                 if (callbacks.listeningStopped) {
                     callbacks.listeningStopped("critical_failures");
@@ -427,7 +427,7 @@ export class AudioHandler {
         }
     }
 
-    async stopListening() {
+    async stopConversation() {
         if (!this.stateManager.isListening()) {
             return { success: false, error: "Not currently listening" };
         }
@@ -680,7 +680,7 @@ export class AudioHandler {
 
     resetInactivityTimer() {
         this.stateManager.resetInactivityTimer(() => {
-            this.stopListening();
+            this.stopConversation();
             const callbacks = this.stateManager.getCallbacks();
             if (callbacks.status) {
                 callbacks.status("Session timed out", "warning", 5000);
@@ -769,7 +769,7 @@ export class AudioHandler {
         this.stateManager.setListeningStoppedCallback(callback);
     }
 
-    isListening() {
+    isConversationActive() {
         return this.stateManager.isListening();
     }
 
