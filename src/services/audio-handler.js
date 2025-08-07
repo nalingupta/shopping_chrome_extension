@@ -2,6 +2,8 @@ import { GeminiLiveAPI } from "./gemini-api.js";
 import { ScreenCaptureService } from "./screen-capture-service.js";
 import { LivePreviewManager } from "./live-preview-manager.js";
 import { AudioCaptureService } from "./audio/audio-capture-service.js";
+import { SpeechRecognitionService } from "./audio/speech-recognition-service.js";
+import { EndpointDetectionService } from "./audio/endpoint-detection-service.js";
 import { streamingLogger } from "../utils/streaming-logger.js";
 
 export class AudioHandler {
@@ -25,27 +27,13 @@ export class AudioHandler {
             isGeminiProcessing: false,
         };
 
-        // Hybrid endpoint detection system
-        this.endpointDetection = {
-            isActive: false,
-            lastSpeechTime: null,
-            silenceThreshold: 2000, // 2 seconds of silence as fallback
-            audioLevelThreshold: 0.01, // Minimum audio level to consider as speech
-            silenceTimer: null,
-            audioLevelHistory: [], // Track recent audio levels
-            audioLevelWindow: 10, // Number of samples to average
-            responseTimeout: null, // Timeout for Gemini response
-            responseTimeoutDuration: 10000, // 10 seconds timeout
-        };
-
         this.geminiAPI = new GeminiLiveAPI();
         this.screenCapture = new ScreenCaptureService();
         this.previewManager = new LivePreviewManager();
         this.audioCapture = new AudioCaptureService(this.geminiAPI);
-        this.speechRecognition = null;
+        this.speechRecognition = new SpeechRecognitionService();
+        this.endpointDetection = new EndpointDetectionService();
         this.inactivityTimer = null;
-        this.speechKeepAliveTimer = null;
-        this.lastSpeechActivity = null;
         this.videoStreamingStarted = false;
         this.screenshotInterval = null;
         this.screenCaptureFailureCount = 0;
@@ -59,6 +47,42 @@ export class AudioHandler {
         // Set up audio level callback
         this.audioCapture.setAudioLevelCallback((level) => {
             this.onAudioLevelDetected(level);
+        });
+
+        // Set up speech recognition callbacks
+        this.speechRecognition.setCallbacks({
+            onSpeechDetected: () => this.onSpeechDetected(),
+            onInterimResult: (text) => {
+                if (this.callbacks.interim) {
+                    this.callbacks.interim(text);
+                }
+            },
+            onAudioStreamingStart: async () => {
+                await this.startAudioStreaming();
+                this.audioStreamingStarted = true;
+            },
+            onVideoStreamingStart: () => {
+                this.videoStreamingStarted = true;
+            },
+            onEndpointDetectionStart: () => this.startEndpointDetection(),
+            onWebSpeechFinalResult: () => this.handleWebSpeechFinalResult(),
+            onCheckOrphanedSpeech: () => this.checkForOrphanedSpeech(),
+        });
+
+        // Set up endpoint detection callbacks
+        this.endpointDetection.setCallbacks({
+            onSilenceDetected: () => this.handleSilenceDetected(),
+            onResponseTimeout: () => this.handleResponseTimeout(),
+            onResponseGeneration: (source) => {
+                this.audioStreamingStarted = false;
+                this.videoStreamingStarted = false;
+            },
+            onStatus: (status, type, duration) => {
+                if (this.callbacks.status) {
+                    this.callbacks.status(status, type, duration);
+                }
+            },
+            onEndpointDetectionStart: () => this.startEndpointDetection(),
         });
     }
 
@@ -429,12 +453,7 @@ export class AudioHandler {
             this.stopEndpointDetection();
 
             if (this.speechRecognition) {
-                try {
-                    this.speechRecognition.stop();
-                } catch (err) {
-                    console.warn("Error stopping speech recognition:", err);
-                }
-                this.speechRecognition = null;
+                this.speechRecognition.stopSpeechRecognition();
             }
 
             this.stopAudioProcessing();
@@ -637,142 +656,26 @@ export class AudioHandler {
     }
 
     startLocalSpeechRecognition() {
-        const SpeechRecognition =
-            window.SpeechRecognition || window.webkitSpeechRecognition;
-        if (!SpeechRecognition) {
-            console.warn("Speech recognition not supported");
-            return;
-        }
-
-        this.speechRecognition = new SpeechRecognition();
-        this.speechRecognition.continuous = true;
-        this.speechRecognition.interimResults = true;
-        this.speechRecognition.lang = "en-US";
-
-        this.speechRecognition.onresult = async (event) => {
-            this.resetInactivityTimer();
-            this.lastSpeechActivity = Date.now();
-
-            if (!this.audioStreamingStarted) {
-                streamingLogger.logInfo(
-                    "🎤 Speech detected - starting AUDIO & VIDEO streams"
-                );
-                this.audioStreamingStarted = true;
-                this.videoStreamingStarted = true;
-                await this.startAudioStreaming();
-                this.startEndpointDetection();
-            }
-
-            this.onSpeechDetected();
-
-            let latestTranscript = "";
-            let hasInterimResults = false;
-            let hasFinalResults = false;
-
-            for (let i = event.resultIndex; i < event.results.length; i++) {
-                const transcript = event.results[i][0].transcript;
-                const isFinal = event.results[i].isFinal;
-
-                latestTranscript += transcript;
-
-                if (!isFinal) {
-                    hasInterimResults = true;
-                } else {
-                    hasFinalResults = true;
-                }
-            }
-
-            this.speechBuffer.interimText = latestTranscript;
-            this.speechBuffer.lastWebSpeechUpdate = Date.now();
-
-            if (hasInterimResults && this.callbacks.interim) {
-                this.callbacks.interim(latestTranscript);
-            }
-
-            if (hasFinalResults) {
-                this.handleWebSpeechFinalResult();
-            }
-        };
-
-        this.speechRecognition.onerror = (event) => {
-            console.warn("Speech recognition error:", event.error);
-
-            const timeoutErrors = ["no-speech", "network"];
-            if (this.state.isListening && timeoutErrors.includes(event.error)) {
-                setTimeout(() => {
-                    if (this.state.isListening) {
-                        this.restartSpeechRecognition();
-                    }
-                }, 1000);
-            }
-        };
-
-        this.speechRecognition.onend = () => {
-            if (this.state.isListening) {
-                const now = Date.now();
-                const timeSinceLastActivity =
-                    now - (this.lastSpeechActivity || now);
-
-                if (timeSinceLastActivity < 30000) {
-                    setTimeout(() => {
-                        if (this.state.isListening) {
-                            this.restartSpeechRecognition();
-                        }
-                    }, 100);
-                }
-            }
-        };
-
-        try {
-            this.speechRecognition.start();
-        } catch (error) {
-            console.error("Failed to start speech recognition:", error);
-        }
+        this.resetInactivityTimer();
+        this.speechRecognition.setState({
+            isListening: this.state.isListening,
+            audioStreamingStarted: this.audioStreamingStarted,
+            videoStreamingStarted: this.videoStreamingStarted,
+        });
+        this.speechRecognition.setSpeechBuffer(this.speechBuffer);
+        this.speechRecognition.startLocalSpeechRecognition();
     }
 
     restartSpeechRecognition() {
-        try {
-            if (this.speechRecognition) {
-                this.speechRecognition.stop();
-            }
-
-            setTimeout(() => {
-                if (this.state.isListening) {
-                    this.startLocalSpeechRecognition();
-                }
-            }, 200);
-        } catch (error) {
-            console.error("Error restarting speech recognition:", error);
-        }
+        this.speechRecognition.restartSpeechRecognition();
     }
 
     startSpeechKeepAlive() {
-        this.clearSpeechKeepAlive();
-        this.lastSpeechActivity = Date.now();
-
-        this.speechKeepAliveTimer = setInterval(() => {
-            if (!this.state.isListening) {
-                this.clearSpeechKeepAlive();
-                return;
-            }
-
-            this.checkForOrphanedSpeech();
-
-            const now = Date.now();
-            const timeSinceLastActivity =
-                now - (this.lastSpeechActivity || now);
-
-            if (timeSinceLastActivity > 30000) {
-                this.restartSpeechRecognition();
-            }
-        }, 5000);
+        this.speechRecognition.startSpeechKeepAlive();
     }
 
     clearSpeechKeepAlive() {
-        if (this.speechKeepAliveTimer) {
-            clearInterval(this.speechKeepAliveTimer);
-            this.speechKeepAliveTimer = null;
-        }
+        this.speechRecognition.clearSpeechKeepAlive();
     }
 
     resetInactivityTimer() {
@@ -794,125 +697,60 @@ export class AudioHandler {
     }
 
     startEndpointDetection() {
-        this.endpointDetection.isActive = true;
-        this.endpointDetection.lastSpeechTime = Date.now();
-        this.resetSilenceTimer();
+        this.endpointDetection.setState({
+            isListening: this.state.isListening,
+            audioStreamingStarted: this.audioStreamingStarted,
+        });
+        this.endpointDetection.setSpeechBuffer(this.speechBuffer);
+        this.endpointDetection.startEndpointDetection();
     }
 
     stopEndpointDetection() {
-        this.endpointDetection.isActive = false;
-        this.clearSilenceTimer();
-        this.clearResponseTimeout();
-        this.endpointDetection.audioLevelHistory = [];
-        streamingLogger.logInfo("Endpoint detection stopped");
+        this.endpointDetection.stopEndpointDetection();
     }
 
     resetSilenceTimer() {
-        this.clearSilenceTimer();
-
-        this.endpointDetection.silenceTimer = setTimeout(() => {
-            this.handleSilenceDetected();
-        }, this.endpointDetection.silenceThreshold);
+        this.endpointDetection.resetSilenceTimer();
     }
 
     clearSilenceTimer() {
-        if (this.endpointDetection.silenceTimer) {
-            clearTimeout(this.endpointDetection.silenceTimer);
-            this.endpointDetection.silenceTimer = null;
-        }
+        this.endpointDetection.clearSilenceTimer();
     }
 
     onSpeechDetected() {
-        this.endpointDetection.lastSpeechTime = Date.now();
-        this.resetSilenceTimer();
+        this.endpointDetection.onSpeechDetected();
     }
 
     onAudioLevelDetected(level) {
-        if (!this.endpointDetection.isActive) return;
-
-        this.endpointDetection.audioLevelHistory.push(level);
-        if (
-            this.endpointDetection.audioLevelHistory.length >
-            this.endpointDetection.audioLevelWindow
-        ) {
-            this.endpointDetection.audioLevelHistory.shift();
-        }
-
-        const averageLevel =
-            this.endpointDetection.audioLevelHistory.reduce(
-                (a, b) => a + b,
-                0
-            ) / this.endpointDetection.audioLevelHistory.length;
-
-        if (averageLevel > this.endpointDetection.audioLevelThreshold) {
-            this.onSpeechDetected();
-        }
+        this.endpointDetection.onAudioLevelDetected(level);
     }
 
     handleSilenceDetected() {
-        if (!this.endpointDetection.isActive || !this.audioStreamingStarted) {
-            return;
-        }
-
-        streamingLogger.logInfo("Silence detection triggered");
-        this.triggerResponseGeneration("silence_detection");
+        this.endpointDetection.handleSilenceDetected();
     }
 
     handleWebSpeechFinalResult() {
-        if (!this.endpointDetection.isActive || !this.audioStreamingStarted) {
-            return;
-        }
-
-        streamingLogger.logInfo("Web Speech API final result");
-        this.triggerResponseGeneration("web_speech_final");
+        this.endpointDetection.handleWebSpeechFinalResult();
     }
 
     triggerResponseGeneration(source) {
-        if (this.speechBuffer.isGeminiProcessing) {
-            return;
-        }
-
-        streamingLogger.logInfo(`Response generation triggered (${source})`);
-
-        this.speechBuffer.isGeminiProcessing = true;
-        this.setResponseTimeout();
-
-        if (this.callbacks.status) {
-            this.callbacks.status("Processing speech...", "info");
-        }
-
         this.audioStreamingStarted = false;
         this.videoStreamingStarted = false;
+        this.endpointDetection.triggerResponseGeneration(source);
     }
 
     setResponseTimeout() {
-        this.clearResponseTimeout();
-
-        this.endpointDetection.responseTimeout = setTimeout(() => {
-            this.handleResponseTimeout();
-        }, this.endpointDetection.responseTimeoutDuration);
+        this.endpointDetection.setResponseTimeout();
     }
 
     clearResponseTimeout() {
-        if (this.endpointDetection.responseTimeout) {
-            clearTimeout(this.endpointDetection.responseTimeout);
-            this.endpointDetection.responseTimeout = null;
-        }
+        this.endpointDetection.clearResponseTimeout();
     }
 
     handleResponseTimeout() {
-        this.speechBuffer.isGeminiProcessing = false;
-        this.speechBuffer.interimText = "";
         this.audioStreamingStarted = false;
         this.videoStreamingStarted = false;
-
-        if (this.state.isListening && this.endpointDetection.isActive) {
-            this.startEndpointDetection();
-        }
-
-        if (this.callbacks.status) {
-            this.callbacks.status("Ready for next input", "info");
-        }
+        this.endpointDetection.handleResponseTimeout();
     }
 
     setTranscriptionCallback(callback) {
