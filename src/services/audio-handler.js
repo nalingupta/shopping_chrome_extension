@@ -102,29 +102,16 @@ export class AudioHandler {
 
     handleGeminiResponse(data) {
         if (data.text) {
-            console.log(
-                "✅ Gemini response received - resetting for next speech input"
-            );
-
-            // Clear response timeout since we got a response
             this.clearResponseTimeout();
-
-            // Gemini has processed a complete utterance
             this.speechBuffer.isGeminiProcessing = false;
-
-            // Clear interim text since Gemini has processed it
             this.speechBuffer.interimText = "";
-
-            // Reset streaming flags for next speech detection
             this.audioStreamingStarted = false;
             this.videoStreamingStarted = false;
 
-            // Restart endpoint detection for next speech input
             if (this.state.isListening && this.endpointDetection.isActive) {
                 this.startEndpointDetection();
             }
 
-            // Send bot response
             if (this.callbacks.botResponse) {
                 this.callbacks.botResponse(data);
             }
@@ -133,7 +120,6 @@ export class AudioHandler {
 
     handleStreamingUpdate(update) {
         if (update.text) {
-            // Finalize user message on first streaming update
             if (
                 this.speechBuffer.interimText.trim() &&
                 this.callbacks.transcription
@@ -143,7 +129,6 @@ export class AudioHandler {
                 this.speechBuffer.interimText = "";
             }
 
-            // Send streaming update to UI
             if (this.callbacks.botResponse) {
                 this.callbacks.botResponse({
                     text: update.text,
@@ -154,28 +139,20 @@ export class AudioHandler {
         }
     }
 
-    // Fallback method to handle orphaned interim text
     checkForOrphanedSpeech() {
         const now = Date.now();
         const timeSinceLastUpdate = now - this.speechBuffer.lastWebSpeechUpdate;
 
-        // If we have interim text that hasn't been processed by Gemini for 3 seconds, create a message
         if (
             this.speechBuffer.interimText.trim() &&
             !this.speechBuffer.isGeminiProcessing &&
             timeSinceLastUpdate > 3000
         ) {
-            console.log(
-                "Processing orphaned speech:",
-                this.speechBuffer.interimText
-            );
-
             if (this.callbacks.transcription) {
                 this.callbacks.transcription(
                     this.speechBuffer.interimText.trim()
                 );
             }
-
             this.speechBuffer.interimText = "";
         }
     }
@@ -188,15 +165,12 @@ export class AudioHandler {
         try {
             this.resetInactivityTimer();
 
-            // Connect to Gemini
             const result = await this.geminiAPI.connect();
             if (!result.success) {
                 throw new Error(result.error || "Failed to connect to Gemini");
             }
 
-            // Setup screen capture
             try {
-                console.log("Setting up screen capture...");
                 const tabs = await chrome.tabs.query({
                     active: true,
                     currentWindow: true,
@@ -215,39 +189,22 @@ export class AudioHandler {
                     throw new Error("No active tab found");
                 }
 
-                // Set up tab switching listener
                 this.setupTabSwitching();
-
-                // Start continuous screen capture immediately
                 this.startScreenshotStreaming();
             } catch (error) {
                 console.error("Screen capture setup failed:", error);
                 throw error;
             }
 
-            // Setup audio capture
             await this.setupAudioCapture();
-
-            // Start media streaming
             await this.startMediaStreaming();
-
-            // Start speech recognition
             this.startLocalSpeechRecognition();
-
-            // Start endpoint detection
             this.startEndpointDetection();
-
-            // Start speech keep-alive
             this.startSpeechKeepAlive();
-
-            // Start periodic cleanup of debugger attachments
             this.startPeriodicCleanup();
 
             this.state.isListening = true;
 
-            console.log("Listening mode started successfully");
-
-            // Pre-attach to other visible tabs in the background (non-blocking)
             this.screenCapture.preAttachToVisibleTabs().catch((error) => {
                 console.warn("Background pre-attachment failed:", error);
             });
@@ -261,63 +218,19 @@ export class AudioHandler {
     }
 
     setupTabSwitching() {
-        // Store listener references for cleanup
         this.tabListeners = {
             onActivated: async (activeInfo) => {
-                const timestamp = new Date().toISOString();
-                console.log(
-                    `[${timestamp}] 🔄 TAB ACTIVATED: Tab ${activeInfo.tabId} became active`
-                );
-                console.log(
-                    `[${timestamp}] 📊 TAB ACTIVATED: isListening=${
-                        this.state.isListening
-                    }, hasStream=${this.screenCapture.hasStream()}, isTabSwitching=${
-                        this.isTabSwitching
-                    }`
-                );
-
-                // Enhanced conditions for tab switching
                 const shouldSwitch =
                     this.state.isListening && !this.isTabSwitching;
 
                 if (shouldSwitch) {
                     try {
-                        console.log(
-                            `[${timestamp}] 🔄 TAB ACTIVATED: Starting tab switch to ${activeInfo.tabId} (Event-driven switch)`
-                        );
                         this.isTabSwitching = true;
-
-                        // Get tab info for better logging
-                        let tabInfo = { title: "Unknown", url: "Unknown" };
-                        try {
-                            const tab = await chrome.tabs.get(activeInfo.tabId);
-                            tabInfo = {
-                                title: tab.title || "Unknown",
-                                url: tab.url || "Unknown",
-                            };
-                        } catch (tabError) {
-                            console.log(
-                                `[${timestamp}] ⚠️ TAB ACTIVATED: Could not get tab info: ${tabError.message}`
-                            );
-                        }
-
-                        // Check if this is a new tab (not already attached)
-                        const isNewTab = !this.screenCapture.attachedTabs.has(
-                            activeInfo.tabId
-                        );
-
-                        if (isNewTab) {
-                            console.log(
-                                `[${timestamp}] 🆕 TAB ACTIVATED: New tab detected - attempting to attach to ${activeInfo.tabId} (${tabInfo.title})`
-                            );
-                        }
-
                         const result = await this.screenCapture.switchToTab(
                             activeInfo.tabId
                         );
 
                         if (!result.success) {
-                            // Handle failure based on type
                             const failureType =
                                 this.screenCapture.categorizeFailure(
                                     result.error,
@@ -328,43 +241,12 @@ export class AudioHandler {
                                 failureType,
                                 result.error
                             );
-
-                            console.warn(
-                                `[${timestamp}] ⚠️ FALLBACK: Tab activation switch failed - Tab ID: ${activeInfo.tabId}, Name: "${tabInfo.title}", URL: "${tabInfo.url}", Reason: "Screen capture service rejected tab switch request - ${result.error}. Continuing to capture from current tab."`
-                            );
-                        } else {
-                            console.log(
-                                `[${timestamp}] ✅ TAB ACTIVATED: Successfully switched to tab ${
-                                    activeInfo.tabId
-                                } (${tabInfo.title})${
-                                    isNewTab ? " (new tab attached)" : ""
-                                }${
-                                    result.message ? ` - ${result.message}` : ""
-                                }`
-                            );
                         }
                     } catch (error) {
-                        // Failsafe mechanism: if switching fails, do nothing and continue listening
-                        console.warn(
-                            `[${timestamp}] ⚠️ FALLBACK: Tab activation switch failed - Tab ID: ${activeInfo.tabId}, Name: "Unknown", URL: "Unknown", Reason: "Screen capture service rejected tab switch request - ${error.message}. Continuing to capture from current tab."`
-                        );
+                        console.warn("Tab activation switch failed:", error);
                     } finally {
                         this.isTabSwitching = false;
-                        console.log(
-                            `[${timestamp}] 🔄 TAB ACTIVATED: Tab switching completed`
-                        );
                     }
-                } else {
-                    // Log specific reason for skipping
-                    const reasons = [];
-                    if (!this.state.isListening) reasons.push("not listening");
-                    if (this.isTabSwitching) reasons.push("already switching");
-
-                    console.log(
-                        `[${timestamp}] ⏭️ TAB ACTIVATED: Skipping tab switch (${reasons.join(
-                            ", "
-                        )})`
-                    );
                 }
             },
             onUpdated: async (tabId, changeInfo, tab) => {
@@ -373,46 +255,24 @@ export class AudioHandler {
                     changeInfo.status === "complete"
                 ) {
                     try {
-                        // Check if this tab is currently being captured
                         const isCurrentTab =
                             this.screenCapture.getCurrentTabId() === tabId;
-
-                        // Check if this tab is being monitored
                         const isMonitored =
                             this.screenCapture.monitoredTabs.has(tabId);
 
                         if (isCurrentTab) {
-                            // Handle URL changes for the current capture tab
                             if (
                                 tab.url.startsWith("chrome://") ||
                                 tab.url.startsWith("chrome-extension://")
                             ) {
-                                console.log(
-                                    `[${new Date().toISOString()}] 🔄 TAB UPDATED: Current tab ${tabId} became restricted (${
-                                        tab.url
-                                    }), detaching`
-                                );
                                 await this.screenCapture.detachFromTab(tabId);
                             } else {
-                                // Re-attach if needed
                                 if (
                                     !this.screenCapture.attachedTabs.has(tabId)
                                 ) {
-                                    console.log(
-                                        `[${new Date().toISOString()}] 🔄 TAB UPDATED: Current tab ${tabId} is now eligible (${
-                                            tab.url
-                                        }), re-attaching`
-                                    );
                                     await this.screenCapture.setup(tabId);
                                 }
                             }
-                        } else if (isMonitored) {
-                            // The URL monitoring system will handle this automatically
-                            console.log(
-                                `[${new Date().toISOString()}] 🔄 TAB UPDATED: Monitored tab ${tabId} URL changed to ${
-                                    tab.url
-                                }`
-                            );
                         }
                     } catch (error) {
                         console.error(
@@ -424,7 +284,6 @@ export class AudioHandler {
                 }
             },
             onRemoved: async (tabId, removeInfo) => {
-                // Clean up debugger attachment for the removed tab
                 if (this.screenCapture.attachedTabs.has(tabId)) {
                     try {
                         await this.screenCapture.detachFromTab(tabId);
@@ -437,32 +296,18 @@ export class AudioHandler {
                     }
                 }
 
-                // Clean up monitoring for the removed tab
                 if (this.screenCapture.monitoredTabs.has(tabId)) {
-                    console.log(
-                        `[${new Date().toISOString()}] 🗑️ TAB REMOVED: Cleaning up monitoring for tab ${tabId}`
-                    );
                     this.screenCapture.stopUrlMonitoring(tabId);
                 }
             },
             onCreated: async (tab) => {
-                const timestamp = new Date().toISOString();
-                console.log(
-                    `[${timestamp}] 🆕 TAB CREATED: New tab created - ID: ${tab.id}, Title: "${tab.title}", URL: "${tab.url}"`
-                );
-
-                // If this new tab becomes active and we're listening, we'll handle it in onActivated
-                // But we can log it here for debugging purposes
                 if (tab.active && this.state.isListening) {
-                    console.log(
-                        `[${timestamp}] 🆕 TAB CREATED: New tab is active - will be handled by onActivated listener`
-                    );
+                    // Will be handled by onActivated listener
                 }
             },
             onFocusChanged: async (windowId) => {
                 if (this.state.isListening) {
                     try {
-                        // Validate all attached tabs when window focus changes
                         await this.screenCapture.validateAttachedTabs();
                     } catch (error) {
                         console.error(
@@ -474,7 +319,6 @@ export class AudioHandler {
             },
         };
 
-        // Add listeners
         chrome.tabs.onActivated.addListener(this.tabListeners.onActivated);
         chrome.tabs.onUpdated.addListener(this.tabListeners.onUpdated);
         chrome.tabs.onRemoved.addListener(this.tabListeners.onRemoved);
@@ -502,7 +346,6 @@ export class AudioHandler {
     async handleScreenCaptureFailure() {
         this.screenCaptureFailureCount++;
 
-        // If we have multiple consecutive failures, stop listening mode
         if (this.screenCaptureFailureCount >= 3) {
             console.error(
                 "Multiple screen capture failures detected, stopping listening mode"
@@ -518,21 +361,13 @@ export class AudioHandler {
 
             await this.stopListening();
 
-            // Notify UI that listening stopped due to screen capture failure
             if (this.callbacks.listeningStopped) {
                 this.callbacks.listeningStopped("screen_capture_failed");
             }
         }
     }
 
-    // New method to handle failures based on type
     async handleTabSwitchFailure(tabId, failureType, error) {
-        const timestamp = new Date().toISOString();
-        console.log(
-            `[${timestamp}] ⚠️ TAB SWITCH FAILURE: Tab ${tabId}, Type: ${failureType}, Error: ${error}`
-        );
-
-        // Only count certain failure types toward the failure limit
         const criticalFailureTypes = [
             "NETWORK_ERROR",
             "PERMISSION_DENIED",
@@ -541,9 +376,6 @@ export class AudioHandler {
 
         if (criticalFailureTypes.includes(failureType)) {
             this.screenCaptureFailureCount++;
-            console.log(
-                `[${timestamp}] 📊 FAILURE COUNT: Critical failure (${failureType}) - count: ${this.screenCaptureFailureCount}`
-            );
 
             if (this.screenCaptureFailureCount >= 3) {
                 console.error(
@@ -564,11 +396,6 @@ export class AudioHandler {
                     this.callbacks.listeningStopped("critical_failures");
                 }
             }
-        } else {
-            // For non-critical failures (like RESTRICTED_URL), don't count toward failure limit
-            console.log(
-                `[${timestamp}] 📊 FAILURE COUNT: Non-critical failure (${failureType}) - not counting toward limit`
-            );
         }
     }
 
@@ -580,31 +407,23 @@ export class AudioHandler {
         try {
             this.state.isListening = false;
 
-            // Process any remaining interim text before stopping
             if (
                 this.speechBuffer.interimText.trim() &&
                 this.callbacks.transcription
             ) {
-                console.log(
-                    "Processing final interim text on stop:",
-                    this.speechBuffer.interimText
-                );
                 this.callbacks.transcription(
                     this.speechBuffer.interimText.trim()
                 );
             }
 
-            // Clear speech buffer
             this.speechBuffer = {
                 interimText: "",
                 lastWebSpeechUpdate: 0,
                 isGeminiProcessing: false,
             };
 
-            // Stop endpoint detection
             this.stopEndpointDetection();
 
-            // Stop local speech recognition
             if (this.speechRecognition) {
                 try {
                     this.speechRecognition.stop();
@@ -614,25 +433,17 @@ export class AudioHandler {
                 this.speechRecognition = null;
             }
 
-            // Stop audio processing
             this.stopAudioProcessing();
-
-            // Stop Gemini streaming
             await this.geminiAPI.disconnect();
 
-            // Clear timers and stop all streaming FIRST
             this.clearInactivityTimer();
             this.clearSpeechKeepAlive();
             this.stopScreenshotStreaming();
-            this.stopPeriodicCleanup(); // Stop periodic cleanup on stop
+            this.stopPeriodicCleanup();
 
-            // Stop screen capture AFTER stopping streaming
             await this.screenCapture.cleanup();
-
-            // Clean up Chrome extension event listeners
             this.cleanupTabListeners();
 
-            // Reset streaming flags for next session
             this.videoStreamingStarted = false;
             this.audioStreamingStarted = false;
 
@@ -646,14 +457,12 @@ export class AudioHandler {
 
     async setupAudioCapture() {
         try {
-            // Get microphone audio
             this.audioStream = await navigator.mediaDevices.getUserMedia({
                 audio: {
                     echoCancellation: true,
                     noiseSuppression: true,
                     autoGainControl: true,
                     sampleRate: 16000,
-                    // More aggressive echo cancellation
                     googEchoCancellation: true,
                     googAutoGainControl: true,
                     googNoiseSuppression: true,
@@ -670,7 +479,6 @@ export class AudioHandler {
     }
 
     async startMediaStreaming() {
-        // Wait for Gemini setup to complete
         let waitCount = 0;
         while (
             !this.geminiAPI.getConnectionStatus().isSetupComplete &&
@@ -684,7 +492,6 @@ export class AudioHandler {
             throw new Error("Gemini setup did not complete in time");
         }
 
-        // Don't start video or audio streaming yet - wait for first speech detection
         this.videoStreamingStarted = false;
         this.audioStreamingStarted = false;
     }
@@ -697,47 +504,25 @@ export class AudioHandler {
             return;
         }
 
-        // Start live preview
         this.previewManager.startPreview();
-
-        // Start recording (just sets up the debugger connection)
         this.screenCapture.startRecording();
-
         streamingLogger.logInfo("📹 Video stream started (10 FPS)");
 
-        // Capture frames at regular intervals
         this.screenshotInterval = setInterval(async () => {
-            const timestamp = new Date().toISOString();
-
             if (!this.screenCapture.hasStream()) {
-                console.log(
-                    `[${timestamp}] ⏹️ SCREENSHOT INTERVAL: No stream available, attempting recovery`
-                );
-
-                // Try to recover stream before giving up
                 const recoverySuccess = await this.recoverFromInvalidTab();
                 if (!recoverySuccess) {
-                    console.log(
-                        `[${timestamp}] ⏹️ SCREENSHOT INTERVAL: Recovery failed, stopping gracefully`
-                    );
                     this.stopScreenshotStreaming();
                     return;
                 }
             }
 
             try {
-                // Check if we're capturing from the correct active tab
                 await this.checkAndSwitchToActiveTab();
-
                 const frameData = await this.screenCapture.captureFrame();
-
-                // Reset failure counter on successful capture
                 this.screenCaptureFailureCount = 0;
-
-                // Always update live preview
                 this.previewManager.updatePreview(frameData);
 
-                // Only send to Gemini if we're streaming and connected
                 if (
                     this.videoStreamingStarted &&
                     this.geminiAPI.getConnectionStatus().isConnected
@@ -745,217 +530,90 @@ export class AudioHandler {
                     this.geminiAPI.sendVideoFrame(frameData);
                 }
             } catch (error) {
-                // Check if this is a debugger detachment error (which is expected during tab switches)
                 if (
                     error.message &&
                     error.message.includes("Detached while handling command")
                 ) {
-                    console.log(
-                        `[${timestamp}] 🔄 SCREENSHOT INTERVAL: Debugger detached during capture, attempting recovery`
-                    );
-
-                    // Try to recover from the detachment instead of stopping
                     const recoverySuccess = await this.recoverFromInvalidTab();
                     if (recoverySuccess) {
-                        console.log(
-                            `[${timestamp}] ✅ SCREENSHOT INTERVAL: Recovery successful after debugger detach, continuing capture`
-                        );
-                        return; // Skip this capture cycle, continue with next
+                        return;
                     } else {
-                        console.log(
-                            `[${timestamp}] ❌ SCREENSHOT INTERVAL: Recovery failed after debugger detach, stopping capture`
-                        );
                         this.stopScreenshotStreaming();
                         return;
                     }
                 }
 
-                // Retry logic for temporary debugger attachment issues
                 if (error.message.includes("Debugger not attached")) {
-                    console.log(
-                        `[${timestamp}] 🔄 SCREENSHOT INTERVAL: Debugger not attached, skipping this cycle`
-                    );
-                    return; // Skip this cycle, try again next time
+                    return;
                 }
 
-                // Enhanced error recovery for tab-related issues
                 if (
                     error.message &&
                     (error.message.includes("no longer exists") ||
                         error.message.includes("not valid for capture") ||
                         error.message.includes("not accessible"))
                 ) {
-                    console.log(
-                        `[${timestamp}] 🔄 SCREENSHOT INTERVAL: Tab validation failed, attempting recovery`
-                    );
-
-                    // Try to recover from invalid tab
                     const recoverySuccess = await this.recoverFromInvalidTab();
                     if (recoverySuccess) {
-                        console.log(
-                            `[${timestamp}] ✅ SCREENSHOT INTERVAL: Recovery successful, continuing capture`
-                        );
-                        return; // Skip this capture cycle, continue with next
+                        return;
                     } else {
-                        console.log(
-                            `[${timestamp}] ❌ SCREENSHOT INTERVAL: Recovery failed, stopping capture`
-                        );
                         this.stopScreenshotStreaming();
                         return;
                     }
                 }
 
-                // For other errors, log details and handle normally
-                try {
-                    const currentTabId = this.screenCapture.getCurrentTabId();
-                    if (currentTabId) {
-                        const tab = await chrome.tabs.get(currentTabId);
-                        const tabName = tab.title || "Unknown";
-                        const tabUrl = tab.url || "Unknown";
-                        console.error(
-                            `[${timestamp}] ⚠️ FALLBACK: Screenshot interval capture failed - Tab ID: ${currentTabId}, Name: "${tabName}", URL: "${tabUrl}", Reason: "Frame capture failed during periodic screenshot - ${
-                                error?.message || error || "Unknown error"
-                            }. Stopping screenshot interval to prevent continuous failures."`
-                        );
-                    } else {
-                        console.error(
-                            `[${timestamp}] ⚠️ FALLBACK: Screenshot interval capture failed - Tab ID: "None", Name: "Unknown", URL: "Unknown", Reason: "Frame capture failed during periodic screenshot - ${
-                                error?.message || error || "Unknown error"
-                            }. No current tab available."`
-                        );
-                    }
-                } catch (tabError) {
-                    console.error(
-                        `[${timestamp}] ⚠️ FALLBACK: Screenshot interval capture failed - Tab ID: "Unknown", Name: "Unknown", URL: "Unknown", Reason: "Frame capture failed during periodic screenshot - ${
-                            error?.message || error || "Unknown error"
-                        }. Tab info unavailable: ${tabError.message}"`
-                    );
-                }
-
-                // If frame capture fails consistently, stop listening mode
                 this.handleScreenCaptureFailure();
             }
-        }, 100); // 10 FPS
+        }, 100);
     }
 
-    // Recovery method for invalid tab scenarios
     async recoverFromInvalidTab() {
-        const timestamp = new Date().toISOString();
-        console.log(
-            `[${timestamp}] 🔄 RECOVERY: Attempting to recover from invalid tab`
-        );
-
-        // Check if a switch is already in progress
         if (this.isTabSwitching) {
-            console.log(
-                `[${timestamp}] ⏭️ RECOVERY: Switch already in progress, waiting for completion`
-            );
-            return true; // Assume current switch will succeed
+            return true;
         }
 
         try {
-            // Find current active tab
             const [activeTab] = await chrome.tabs.query({
                 active: true,
                 currentWindow: true,
             });
 
             if (!activeTab) {
-                console.log(`[${timestamp}] ❌ RECOVERY: No active tab found`);
                 return false;
             }
 
-            // Check if this is a new tab that we need to attach to
             const isNewTab = !this.screenCapture.attachedTabs.has(activeTab.id);
-            if (isNewTab) {
-                console.log(
-                    `[${timestamp}] 🆕 RECOVERY: New active tab detected - will attempt to attach to ${activeTab.id} (${activeTab.title})`
-                );
-            }
-
-            // Switch to active tab (this will handle attachment for new tabs and restricted URLs)
             const result = await this.screenCapture.switchToTab(activeTab.id);
-            if (result.success) {
-                console.log(
-                    `[${timestamp}] ✅ RECOVERY: Successfully recovered - switched to tab ${
-                        activeTab.id
-                    } (${activeTab.title})${
-                        isNewTab ? " (new tab attached)" : ""
-                    }${result.message ? ` - ${result.message}` : ""}`
-                );
-                return true;
-            } else {
-                console.log(
-                    `[${timestamp}] ❌ RECOVERY: Failed to switch to active tab: ${result.error}`
-                );
-                return false;
-            }
+            return result.success;
         } catch (error) {
-            console.error(
-                `[${timestamp}] ❌ RECOVERY: Error during recovery:`,
-                error
-            );
+            console.error("Error during recovery:", error);
             return false;
         }
     }
 
-    // Fallback method to check and switch to the active tab
     async checkAndSwitchToActiveTab() {
         try {
-            const timestamp = new Date().toISOString();
-
-            // Get the currently active tab
             const [activeTab] = await chrome.tabs.query({
                 active: true,
                 currentWindow: true,
             });
 
             if (!activeTab) {
-                console.log(
-                    `[${timestamp}] ⚠️ CHECK ACTIVE TAB: No active tab found`
-                );
                 return;
             }
 
             const currentTabId = this.screenCapture.getCurrentTabId();
-            console.log(
-                `[${timestamp}] 📊 CHECK ACTIVE TAB: Current tab: ${currentTabId}, Active tab: ${activeTab.id}`
-            );
-
-            // Check if the active tab is a new tab that we need to attach to
             const isNewTab = !this.screenCapture.attachedTabs.has(activeTab.id);
-            if (isNewTab) {
-                console.log(
-                    `[${timestamp}] 🆕 CHECK ACTIVE TAB: New active tab detected - will be handled by onActivated event`
-                );
-            }
 
-            // If we're not capturing from the active tab, or if we don't have a stream, log the mismatch
-            // but don't switch - let the onActivated event handle tab switching
             if (
                 currentTabId !== activeTab.id ||
                 !this.screenCapture.hasStream()
             ) {
-                console.log(
-                    `[${timestamp}] 📊 CHECK ACTIVE TAB: Mismatch detected - Current: ${currentTabId}, Active: ${
-                        activeTab.id
-                    }${isNewTab ? " (new tab)" : ""}`
-                );
-                console.log(
-                    `[${timestamp}] ⏭️ CHECK ACTIVE TAB: Skipping switch (handled by onActivated event)`
-                );
-                // Don't call switchToTab() - let onActivated handle it
-            } else {
-                console.log(
-                    `[${timestamp}] ✅ CHECK ACTIVE TAB: Already capturing from active tab ${activeTab.id}`
-                );
+                // Let onActivated handle the switch
             }
         } catch (error) {
-            console.error(
-                `[${timestamp}] ❌ CHECK ACTIVE TAB: Error in fallback tab check:`,
-                error
-            );
-            throw error; // Re-throw so caller can handle it
+            console.error("Error in fallback tab check:", error);
+            throw error;
         }
     }
 
@@ -965,14 +623,11 @@ export class AudioHandler {
             this.screenshotInterval = null;
         }
 
-        // Stop debugger recording
         if (this.screenCapture.isActive()) {
             this.screenCapture.stopRecording();
         }
 
-        // Stop live preview
         this.previewManager.stopPreview();
-
         streamingLogger.logInfo("📹 Video stream stopped");
     }
 
@@ -996,7 +651,6 @@ export class AudioHandler {
         }
 
         try {
-            // Use AudioWorklet for real-time PCM conversion
             if (this.geminiAPI.audioContext.audioWorklet) {
                 await this.startAudioWorkletProcessing();
                 streamingLogger.logInfo(
@@ -1038,7 +692,6 @@ export class AudioHandler {
                 const base64 = btoa(String.fromCharCode(...uint8Array));
                 this.geminiAPI.sendAudioChunk(base64);
 
-                // Send audio level for endpoint detection (tertiary fallback)
                 if (maxAmplitude !== undefined) {
                     this.onAudioLevelDetected(maxAmplitude);
                 }
@@ -1049,7 +702,6 @@ export class AudioHandler {
             this.audioStream
         );
         this.audioSource.connect(this.audioWorkletNode);
-        // DO NOT connect to destination to avoid feedback loop
     }
 
     startScriptProcessorFallback() {
@@ -1065,22 +717,18 @@ export class AudioHandler {
             const inputData = event.inputBuffer.getChannelData(0);
             const outputData = event.outputBuffer.getChannelData(0);
 
-            // Copy input to output
             for (let i = 0; i < inputData.length; i++) {
                 outputData[i] = inputData[i];
             }
 
-            // Calculate max amplitude for audio level detection
             let maxAmplitude = 0;
             for (let i = 0; i < inputData.length; i++) {
                 const amplitude = Math.abs(inputData[i]);
                 maxAmplitude = Math.max(maxAmplitude, amplitude);
             }
 
-            // Send audio level for endpoint detection (tertiary fallback)
             this.onAudioLevelDetected(maxAmplitude);
 
-            // Convert to PCM and send to Gemini
             const pcmData = new Int16Array(inputData.length);
             for (let i = 0; i < inputData.length; i++) {
                 const sample = Math.max(-1, Math.min(1, inputData[i]));
@@ -1093,14 +741,11 @@ export class AudioHandler {
         };
 
         this.audioSource.connect(audioProcessor);
-        // DO NOT connect to destination to avoid feedback loop
     }
 
     stopAudioProcessing() {
-        // Stop streaming to Gemini
         this.stopAudioStreaming();
 
-        // Stop the actual microphone stream
         if (this.audioStream) {
             this.audioStream.getTracks().forEach((track) => track.stop());
             this.audioStream = null;
@@ -1108,7 +753,6 @@ export class AudioHandler {
     }
 
     startLocalSpeechRecognition() {
-        console.log("🎤 startLocalSpeechRecognition() called");
         const SpeechRecognition =
             window.SpeechRecognition || window.webkitSpeechRecognition;
         if (!SpeechRecognition) {
@@ -1125,32 +769,22 @@ export class AudioHandler {
             this.resetInactivityTimer();
             this.lastSpeechActivity = Date.now();
 
-            // Start audio streaming on first speech detection
             if (!this.audioStreamingStarted) {
                 streamingLogger.logInfo(
                     "🎤 Speech detected - starting AUDIO & VIDEO streams"
                 );
-
-                // Set flags immediately to prevent race conditions from rapid speech events
                 this.audioStreamingStarted = true;
                 this.videoStreamingStarted = true;
-
-                // Start audio streaming to Gemini
                 await this.startAudioStreaming();
-
-                // Start endpoint detection
                 this.startEndpointDetection();
             }
 
-            // Signal that speech is detected for endpoint detection
             this.onSpeechDetected();
 
-            // Only process the latest result to avoid accumulating old speech
             let latestTranscript = "";
             let hasInterimResults = false;
             let hasFinalResults = false;
 
-            // Get only the most recent result (not all accumulated results)
             for (let i = event.resultIndex; i < event.results.length; i++) {
                 const transcript = event.results[i][0].transcript;
                 const isFinal = event.results[i].isFinal;
@@ -1164,26 +798,16 @@ export class AudioHandler {
                 }
             }
 
-            // Update speech buffer with only the latest transcript segment
             this.speechBuffer.interimText = latestTranscript;
             this.speechBuffer.lastWebSpeechUpdate = Date.now();
 
-            // Show only the latest interim text in UI
             if (hasInterimResults && this.callbacks.interim) {
                 this.callbacks.interim(latestTranscript);
             }
 
-            // Handle final results from Web Speech API (primary endpoint detection)
             if (hasFinalResults) {
-                console.log(
-                    "🎯 Web Speech API detected final result:",
-                    latestTranscript
-                );
                 this.handleWebSpeechFinalResult();
             }
-
-            // NOTE: Final transcriptions are now handled by Gemini responses only
-            // We don't create message bubbles from Web Speech API anymore
         };
 
         this.speechRecognition.onerror = (event) => {
@@ -1216,9 +840,7 @@ export class AudioHandler {
         };
 
         try {
-            console.log("🎤 Starting speech recognition...");
             this.speechRecognition.start();
-            console.log("🎤 Speech recognition started successfully");
         } catch (error) {
             console.error("Failed to start speech recognition:", error);
         }
@@ -1250,7 +872,6 @@ export class AudioHandler {
                 return;
             }
 
-            // Check for orphaned speech every cycle
             this.checkForOrphanedSpeech();
 
             const now = Date.now();
@@ -1260,7 +881,7 @@ export class AudioHandler {
             if (timeSinceLastActivity > 30000) {
                 this.restartSpeechRecognition();
             }
-        }, 5000); // Check more frequently (every 5 seconds)
+        }, 5000);
     }
 
     clearSpeechKeepAlive() {
@@ -1273,14 +894,12 @@ export class AudioHandler {
     resetInactivityTimer() {
         this.clearInactivityTimer();
 
-        console.log("🔍 Setting inactivity timer for 20 minutes");
         this.inactivityTimer = setTimeout(() => {
-            console.log("⏰ Inactivity timer triggered - stopping listening");
             this.stopListening();
             if (this.callbacks.status) {
                 this.callbacks.status("Session timed out", "warning", 5000);
             }
-        }, 20 * 60 * 1000); // 20 minutes
+        }, 20 * 60 * 1000);
     }
 
     clearInactivityTimer() {
@@ -1290,12 +909,10 @@ export class AudioHandler {
         }
     }
 
-    // Hybrid endpoint detection methods
     startEndpointDetection() {
         this.endpointDetection.isActive = true;
         this.endpointDetection.lastSpeechTime = Date.now();
         this.resetSilenceTimer();
-        console.log("Endpoint detection started");
     }
 
     stopEndpointDetection() {
@@ -1329,7 +946,6 @@ export class AudioHandler {
     onAudioLevelDetected(level) {
         if (!this.endpointDetection.isActive) return;
 
-        // Add to history and maintain window size
         this.endpointDetection.audioLevelHistory.push(level);
         if (
             this.endpointDetection.audioLevelHistory.length >
@@ -1338,7 +954,6 @@ export class AudioHandler {
             this.endpointDetection.audioLevelHistory.shift();
         }
 
-        // Check if audio level indicates speech activity
         const averageLevel =
             this.endpointDetection.audioLevelHistory.reduce(
                 (a, b) => a + b,
@@ -1375,22 +990,13 @@ export class AudioHandler {
 
         streamingLogger.logInfo(`Response generation triggered (${source})`);
 
-        // Mark that we're waiting for Gemini to process
         this.speechBuffer.isGeminiProcessing = true;
-
-        // DON'T stop audio streaming or send signals - let Gemini handle speech endpoint detection
-        // The audio should continue flowing to Gemini so it can properly detect when speech ends
-        console.log("🔄 Waiting for Gemini to process speech naturally...");
-
-        // Set a timeout in case Gemini doesn't respond
         this.setResponseTimeout();
 
-        // Update UI to show processing state
         if (this.callbacks.status) {
             this.callbacks.status("Processing speech...", "info");
         }
 
-        // Reset streaming flags for next speech detection
         this.audioStreamingStarted = false;
         this.videoStreamingStarted = false;
     }
@@ -1399,7 +1005,6 @@ export class AudioHandler {
         this.clearResponseTimeout();
 
         this.endpointDetection.responseTimeout = setTimeout(() => {
-            console.log("⏰ Response timeout - resetting system");
             this.handleResponseTimeout();
         }, this.endpointDetection.responseTimeoutDuration);
     }
@@ -1412,28 +1017,20 @@ export class AudioHandler {
     }
 
     handleResponseTimeout() {
-        console.log("🔄 Response timeout - resetting for next speech input");
-
-        // Reset processing state
         this.speechBuffer.isGeminiProcessing = false;
         this.speechBuffer.interimText = "";
-
-        // Reset streaming flags
         this.audioStreamingStarted = false;
         this.videoStreamingStarted = false;
 
-        // Restart endpoint detection
         if (this.state.isListening && this.endpointDetection.isActive) {
             this.startEndpointDetection();
         }
 
-        // Update UI
         if (this.callbacks.status) {
             this.callbacks.status("Ready for next input", "info");
         }
     }
 
-    // Callback setters
     setTranscriptionCallback(callback) {
         this.callbacks.transcription = callback;
     }
@@ -1454,26 +1051,21 @@ export class AudioHandler {
         this.callbacks.listeningStopped = callback;
     }
 
-    // Getters
     isListening() {
         return this.state.isListening;
     }
 
     startPeriodicCleanup() {
-        // Clean up unused debugger attachments every 30 seconds
         this.cleanupTimer = setInterval(async () => {
             if (this.state.isListening) {
                 try {
-                    // First validate all attached tabs
                     await this.screenCapture.validateAttachedTabs();
-
-                    // Then do regular cleanup
                     await this.screenCapture.cleanupUnusedAttachments();
                 } catch (error) {
                     console.error("Error during periodic cleanup:", error);
                 }
             }
-        }, 30000); // 30 seconds
+        }, 30000);
     }
 
     stopPeriodicCleanup() {
