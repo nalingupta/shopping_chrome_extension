@@ -75,6 +75,8 @@ class BackgroundService {
                 this.handleSidePanelClosed.bind(this),
             [MESSAGE_TYPES.LISTENING_STOPPED]:
                 this.handleListeningStopped.bind(this),
+            [MESSAGE_TYPES.CONVERSATION_UPDATED]:
+                this.handleConversationUpdated.bind(this),
         };
 
         return handlers[type] || null;
@@ -165,6 +167,23 @@ class BackgroundService {
             console.log("Listening stopped due to sidepanel closure");
 
             // Any additional cleanup can be added here if needed
+            sendResponse({ success: true });
+        } catch (error) {
+            sendResponse({ success: false });
+        }
+    }
+
+    async handleConversationUpdated(request, sender, sendResponse) {
+        try {
+            // Broadcast conversation update to all extension contexts
+            chrome.runtime
+                .sendMessage({
+                    type: MESSAGE_TYPES.CONVERSATION_UPDATED,
+                })
+                .catch(() => {
+                    // Ignore errors - not all contexts may be listening
+                });
+
             sendResponse({ success: true });
         } catch (error) {
             sendResponse({ success: false });

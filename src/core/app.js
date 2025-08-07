@@ -1,8 +1,5 @@
 import { MESSAGE_TYPES } from "../utils/constants.js";
-import {
-    ChatStateManager,
-    ConversationHistoryManager,
-} from "../utils/storage.js";
+import { UnifiedConversationManager } from "../utils/storage.js";
 import { MessageRenderer } from "../ui/message-renderer.js";
 import { UIState } from "../ui/ui-state.js";
 import { AudioHandler } from "../services/audio-handler.js";
@@ -19,6 +16,7 @@ export class ShoppingAssistant {
         this.initializeCallbacks();
         this.trackSidePanelLifecycle();
         this.checkAndClearChatHistoryOnReload();
+        this.initializeCrossWindowSync();
         this.restoreState();
         this.getCurrentPageInfo();
     }
@@ -61,6 +59,11 @@ export class ShoppingAssistant {
             (request, sender, sendResponse) => {
                 if (request.type === MESSAGE_TYPES.PAGE_INFO_BROADCAST) {
                     this.updatePageInfo(request.data);
+                } else if (
+                    request.type === MESSAGE_TYPES.CONVERSATION_UPDATED
+                ) {
+                    // Handle cross-window conversation updates
+                    this.handleConversationUpdate();
                 }
             }
         );
@@ -78,6 +81,63 @@ export class ShoppingAssistant {
                 this.audioHandler.previewManager.resize();
             }
         });
+    }
+
+    initializeCrossWindowSync() {
+        // Set up conversation change listener for cross-window synchronization
+        UnifiedConversationManager.addConversationListener((conversation) => {
+            this.handleConversationUpdate();
+        });
+    }
+
+    async handleConversationUpdate() {
+        try {
+            console.log("🔄 App: Received conversation update - refreshing UI");
+            // Refresh the UI with latest conversation data
+            await this.refreshConversationUI();
+        } catch (error) {
+            console.error("Error handling conversation update:", error);
+        }
+    }
+
+    async refreshConversationUI() {
+        try {
+            console.log(
+                "🔄 App: Refreshing conversation UI from unified storage"
+            );
+            // Get latest messages from unified storage
+            const messages =
+                await UnifiedConversationManager.getMessagesForUI();
+            const isWelcomeVisible =
+                await UnifiedConversationManager.getWelcomeScreenState();
+
+            console.log(
+                `🔄 App: Retrieved ${messages.length} messages from unified storage`
+            );
+
+            // Clear current UI
+            this.elements.messages.innerHTML = "";
+
+            // Restore messages
+            if (messages && messages.length > 0) {
+                messages.forEach((msg) => {
+                    const messageDiv = MessageRenderer.createMessage(
+                        msg.content,
+                        msg.type
+                    );
+                    this.elements.messages.appendChild(messageDiv);
+                });
+
+                this.hideWelcomeScreen();
+                this.scrollToBottom();
+            } else if (!isWelcomeVisible) {
+                this.hideWelcomeScreen();
+            } else {
+                this.uiState.showStatus("Start a chat", "info");
+            }
+        } catch (error) {
+            console.error("Error refreshing conversation UI:", error);
+        }
     }
 
     initializeCallbacks() {
@@ -347,7 +407,7 @@ export class ShoppingAssistant {
         this.uiState.showStatus("Start a chat", "info");
     }
 
-    handleClearChat() {
+    async handleClearChat() {
         this.elements.messages.innerHTML = "";
         MessageRenderer.clearInterimMessage();
         MessageRenderer.clearStreamingMessage();
@@ -368,8 +428,10 @@ export class ShoppingAssistant {
         this.showWelcomeScreen();
         this.uiState.setProcessing(false);
         this.elements.sendButton.disabled = false;
-        ChatStateManager.clearState();
-        ConversationHistoryManager.clearHistory();
+
+        // Clear conversation using unified manager
+        await UnifiedConversationManager.clearConversation();
+
         this.elements.userInput.focus();
     }
 
@@ -571,7 +633,7 @@ export class ShoppingAssistant {
         }
     }
 
-    saveState() {
+    async saveState() {
         const messages = Array.from(
             this.elements.messages.querySelectorAll(
                 ".message:not(.interim-message):not(.status-message):not(.streaming-message)"
@@ -585,7 +647,11 @@ export class ShoppingAssistant {
             !this.elements.welcomeScreen ||
             !this.elements.welcomeScreen.classList.contains("hidden");
 
-        ChatStateManager.saveState(messages, isWelcomeVisible);
+        // Save using unified manager
+        await UnifiedConversationManager.saveMessages(
+            messages,
+            isWelcomeVisible
+        );
     }
 
     async checkAndClearChatHistoryOnReload() {
@@ -598,8 +664,7 @@ export class ShoppingAssistant {
                 lastChatSaved &&
                 extensionReloaded > lastChatSaved
             ) {
-                ChatStateManager.clearState();
-                ConversationHistoryManager.clearHistory();
+                await UnifiedConversationManager.clearConversation();
                 await this.clearExtensionReloadedMarker();
             }
         } catch (error) {
@@ -628,23 +693,19 @@ export class ShoppingAssistant {
         }
     }
 
-    getLastChatSavedTime() {
+    async getLastChatSavedTime() {
         try {
-            const savedState = localStorage.getItem(ChatStateManager.STATE_KEY);
-            if (savedState) {
-                const state = JSON.parse(savedState);
-                return state.timestamp;
-            }
+            const conversation =
+                await UnifiedConversationManager.getConversation();
+            return conversation.lastUpdated;
         } catch (error) {
-            // Ignore errors
+            return null;
         }
-        return null;
     }
 
-    handleExtensionReloaded() {
+    async handleExtensionReloaded() {
         try {
-            ChatStateManager.clearState();
-            ConversationHistoryManager.clearHistory();
+            await UnifiedConversationManager.clearConversation();
             this.elements.messages.innerHTML = "";
             this.showWelcomeScreen();
         } catch (error) {
@@ -652,27 +713,35 @@ export class ShoppingAssistant {
         }
     }
 
-    restoreState() {
-        const state = ChatStateManager.restoreState();
-        if (!state) {
-            this.uiState.showStatus("Start a chat", "info");
-            return;
-        }
+    async restoreState() {
+        try {
+            // Migrate from old localStorage if needed
+            await UnifiedConversationManager.migrateFromLocalStorage();
 
-        if (state.messages && state.messages.length > 0) {
-            state.messages.forEach((msg) => {
-                const messageDiv = MessageRenderer.createMessage(
-                    msg.content,
-                    msg.type
-                );
-                this.elements.messages.appendChild(messageDiv);
-            });
+            // Get messages and welcome screen state from unified manager
+            const messages =
+                await UnifiedConversationManager.getMessagesForUI();
+            const isWelcomeVisible =
+                await UnifiedConversationManager.getWelcomeScreenState();
 
-            this.hideWelcomeScreen();
-            this.scrollToBottom();
-        } else if (!state.isWelcomeVisible) {
-            this.hideWelcomeScreen();
-        } else {
+            if (messages && messages.length > 0) {
+                messages.forEach((msg) => {
+                    const messageDiv = MessageRenderer.createMessage(
+                        msg.content,
+                        msg.type
+                    );
+                    this.elements.messages.appendChild(messageDiv);
+                });
+
+                this.hideWelcomeScreen();
+                this.scrollToBottom();
+            } else if (!isWelcomeVisible) {
+                this.hideWelcomeScreen();
+            } else {
+                this.uiState.showStatus("Start a chat", "info");
+            }
+        } catch (error) {
+            console.error("Error restoring state:", error);
             this.uiState.showStatus("Start a chat", "info");
         }
     }

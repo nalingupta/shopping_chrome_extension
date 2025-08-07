@@ -1,162 +1,80 @@
-# Shopping Assistant Chrome Extension
+# Shopping Chrome Extension
 
-An AI-powered shopping assistant with **real-time voice and visual input** using Gemini Live API that helps users with product recommendations, price comparisons, and shopping insights.
+An AI-powered shopping assistant Chrome extension with voice and visual input capabilities.
 
-## ✨ Features
+## Features
 
-- 🤖 **AI Shopping Assistant** - Powered by Google Gemini 2.0 Flash with real-time multimodal input
-- 🎤 **Voice Input** - Continuous conversation with live transcription feedback
-- 👁️ **Screen Sharing** - AI can see your screen for visual product analysis
-- 💰 **Smart Analysis** - Real-time price comparisons and product insights
-- 🔍 **Product Discovery** - Find alternatives and make informed decisions
-- 📱 **Modern Interface** - Clean, modular design with proper architecture
-- 🌐 **Cross-Platform** - Works on all major shopping sites
+-   **Voice Input**: Speak to the assistant using your microphone
+-   **Visual Context**: The assistant can see what's on your screen to provide relevant shopping advice
+-   **AI-Powered**: Powered by Google's Gemini AI for intelligent responses
+-   **Cross-Window Synchronization**: Conversation history and state are synchronized across all Chrome windows
+-   **Real-time Updates**: Changes in one window are immediately reflected in all other windows
 
-## 🚀 Quick Start
+## Cross-Window Synchronization
 
-### Installation
-1. **Download/Clone** this repository
-2. **Configure API Key** in `src/config/api-keys.js`
-3. **Open Chrome** and navigate to `chrome://extensions/`
-4. **Enable Developer Mode** (toggle in top right)
-5. **Click "Load unpacked"** and select this extension folder
-6. **Extension ready!** Click the icon in your toolbar
+The extension now features seamless cross-window conversation synchronization:
 
-### First Use
-1. **Open side panel** by clicking the extension icon
-2. **Start voice chat** with the microphone button
-3. **Grant permissions** for microphone and screen sharing
-4. **Ask questions** about products - AI can see your screen and hear you!
+### What's Synchronized
 
-## 🎤 Multimodal AI System
-
-### Architecture Overview
-- **Voice Input**: Web Speech API for live transcription + Gemini Live API for processing
-- **Visual Input**: Screen capture sent to Gemini for real-time analysis
-- **Dual Processing**: Local transcription for UI feedback, Gemini for actual responses
-- **Real-time Streaming**: Continuous audio/video streaming to Gemini 2.0 Flash
+-   **Conversation History**: All chat messages are shared across windows
+-   **AI Context**: The assistant maintains context across all windows
+-   **Welcome Screen State**: UI state is consistent across windows
 
 ### How It Works
-1. **User speaks** → Web Speech API shows live transcription in UI
-2. **Simultaneously** → Audio + screen capture streams to Gemini Live API
-3. **Gemini processes** → Audio and visual context for comprehensive understanding
-4. **Response delivered** → Text response displayed and optionally spoken
 
-## 🛠️ Refactored Architecture
+-   Uses `chrome.storage.sync` for cross-window data sharing
+-   Real-time updates via Chrome's storage change events
+-   Automatic migration from old localStorage data
+-   Broadcast messaging for immediate UI updates
 
-### Clean Modular Structure
-```
-src/
-├── core/
-│   ├── app.js              # Main ShoppingAssistant class
-│   └── background.js       # Background service worker
-├── services/
-│   ├── gemini-api.js       # Gemini Live API service
-│   ├── audio-handler.js    # Audio processing & Web Speech
-│   ├── screen-capture.js   # Screen sharing functionality
-│   └── shopping-assistant.js # Text-based assistant (fallback)
-├── ui/
-│   ├── message-renderer.js # Message display utilities
-│   └── ui-state.js         # UI state management
-├── utils/
-│   ├── constants.js        # Application constants
-│   ├── storage.js          # Storage utilities
-│   └── dom-utils.js        # DOM helpers
-└── config/
-    └── api-keys.js         # API configuration
-```
+### Benefits
 
-### Key Components
+-   Start a conversation in one window, continue in another
+-   AI remembers context from previous windows
+-   Consistent experience across all Chrome windows
+-   No lost conversations when switching windows
 
-#### Core (`core/`)
-- **`app.js`**: Main application orchestrator, manages UI and coordinates services
-- **`background.js`**: Clean service worker with proper message routing
+## Installation
 
-#### Services (`services/`)
-- **`gemini-api.js`**: Streamlined Gemini Live API integration with WebSocket handling
-- **`audio-handler.js`**: Combines Web Speech API (UI feedback) + Gemini Live (processing)
-- **`screen-capture.js`**: Simple screen sharing with proper cleanup
-- **`shopping-assistant.js`**: Fallback text-based responses
+1. Clone this repository
+2. Open Chrome and go to `chrome://extensions/`
+3. Enable "Developer mode"
+4. Click "Load unpacked" and select the extension directory
+5. The extension icon should appear in your toolbar
 
-#### UI (`ui/`)
-- **`message-renderer.js`**: Message display and formatting
-- **`ui-state.js`**: Centralized UI state management (debug mode, status, etc.)
+## Usage
 
-### Optimization Results
-- **🧹 Removed 70% redundant code** - Eliminated verbose debugging and fallback systems
-- **🚀 Improved modularity** - Clear separation of concerns and single responsibility
-- **📁 Better organization** - Logical file structure with proper naming
-- **🔧 Cleaner APIs** - Simplified interfaces and reduced complexity
-- **⚡ Enhanced performance** - Removed unnecessary processing and logs
+1. Click the extension icon to open the side panel
+2. Use voice input by clicking the microphone button
+3. Type messages in the text input
+4. The assistant will analyze your screen and provide shopping advice
 
-## 🎯 User Flow
+## Development
 
-### Voice + Visual Input Flow
-1. **User clicks voice button** → Starts listening
-2. **Permissions granted** → Screen sharing + microphone access
-3. **User speaks** → Live transcription appears immediately
-4. **Background processing** → Audio + screen sent to Gemini Live API
-5. **Gemini responds** → Text response based on audio + visual context
-6. **Continuous conversation** → Session stays active for natural interaction
+The extension uses a unified conversation management system:
 
-### Text Input Flow (Fallback)
-1. **User types message** → Text input processing
-2. **Background processing** → Text + optional screen capture sent to Gemini
-3. **Gemini responds** → Standard text-based response
+-   `UnifiedConversationManager`: Single source of truth for all conversation data
+-   Cross-window synchronization via Chrome storage APIs
+-   Real-time UI updates across all windows
+-   Automatic data migration from legacy systems
 
-## 🐛 Troubleshooting
+## Technical Details
 
-### Voice Input Issues
-**"Microphone access denied"**
-- Click microphone icon in browser address bar
-- Select "Allow" for microphone access
+### Architecture
 
-**"Screen sharing failed"**
-- Grant screen sharing permission when prompted
-- Extension works audio-only if screen sharing is declined
+-   **Background Script**: Handles cross-window messaging and state management
+-   **Side Panel**: Main UI for user interaction
+-   **Content Script**: Captures page information and screen data
+-   **Services**: Modular services for audio, screen capture, and AI integration
 
-**"Connection error"**
-- Check your internet connection
-- Verify Gemini API key is configured correctly
+### Storage
 
-### Common Issues
-**Extension not working**
-- Ensure API key is set in `src/config/api-keys.js`
-- Check Chrome extensions page for any errors
-- Try refreshing the page and restarting the extension
+-   `chrome.storage.sync`: Cross-window conversation data
+-   `chrome.storage.local`: Extension-specific settings
+-   Automatic cleanup and migration utilities
 
-## 🔧 Development
+### Cross-Window Communication
 
-### File Structure
-```
-shopping_chrome_extension/
-├── manifest.json           # Extension configuration
-├── sidepanel.html         # Main UI
-├── sidepanel.css          # Styles
-├── src/main.js            # Entry point
-├── src/core/              # Core application logic
-├── src/services/          # Business logic services
-├── src/ui/                # UI components
-├── src/utils/             # Utilities
-├── src/config/            # Configuration
-├── src/content/           # Content scripts
-├── src/audio/             # Audio processing workers
-├── docs/                  # Documentation
-└── icons/                 # Extension icons
-```
-
-### Key Features
-- **Modular Design**: Each file has a single, clear responsibility
-- **Clean APIs**: Simple, well-defined interfaces between components
-- **Error Handling**: Proper error management throughout the system
-- **Performance**: Optimized for real-time multimodal processing
-- **Maintainability**: Easy to understand, modify, and extend
-
-## 📝 License
-
-MIT License - feel free to use and modify as needed.
-
----
-
-**Built with Google Gemini 2.0 Flash for cutting-edge multimodal AI capabilities.** 🚀
-
+-   Chrome runtime messaging for real-time updates
+-   Storage change listeners for automatic synchronization
+-   Broadcast messaging for immediate UI refresh
