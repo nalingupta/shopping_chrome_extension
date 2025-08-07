@@ -64,7 +64,6 @@ export class GeminiLiveAPI {
                     this.reconnectAttempts = 0;
 
                     await new Promise((resolve) => setTimeout(resolve, 100));
-                    console.log("Sending Gemini configuration...");
                     this.sendConfiguration();
                     this.startKeepAlive();
 
@@ -218,26 +217,7 @@ Important: Only describe what you can actually see in the provided screen captur
             try {
                 const messageStr = JSON.stringify(message);
 
-                // Debug: Log all messages being sent to Gemini
-                if (
-                    message.realtimeInput?.audio ||
-                    message.realtimeInput?.mediaChunks
-                ) {
-                    console.log("📤 Sending to Gemini:", {
-                        type: message.realtimeInput?.audio ? "audio" : "video",
-                        dataLength:
-                            message.realtimeInput?.audio?.data?.length ||
-                            message.realtimeInput?.mediaChunks?.[0]?.data
-                                ?.length ||
-                            0,
-                    });
-                } else {
-                    console.log(
-                        "📤 Sending to Gemini:",
-                        messageStr.substring(0, 200) +
-                            (messageStr.length > 200 ? "..." : "")
-                    );
-                }
+                // Send message to Gemini
 
                 this.ws.send(messageStr);
             } catch (error) {
@@ -255,26 +235,16 @@ Important: Only describe what you can actually see in the provided screen captur
         try {
             const message = JSON.parse(data);
 
-            // Temporary debug: Log all incoming messages
-            console.log(
-                "📨 Gemini message received:",
-                JSON.stringify(message, null, 2)
-            );
-
             if (
                 message.setupComplete !== undefined ||
                 message.setup_complete !== undefined
             ) {
-                console.log("Gemini setup complete");
                 this.isSetupComplete = true;
                 this.processBufferedChunks();
                 return;
             }
 
-            // Only log important messages to reduce console noise
-            if (message.serverContent?.turnComplete === true) {
-                console.log("Turn complete flag found");
-            }
+            // Check for turn completion flag
 
             this.responseQueue.push(message);
             this.processResponseQueue();
@@ -316,9 +286,6 @@ Important: Only describe what you can actually see in the provided screen captur
                 message.turn_complete === true;
 
             if (isTurnComplete) {
-                console.log(
-                    "Turn complete detected, processing final response"
-                );
                 this.isProcessingTurn = true;
                 await this.handleCompleteTurn(this.currentStreamingResponse);
                 this.currentTurn = [];

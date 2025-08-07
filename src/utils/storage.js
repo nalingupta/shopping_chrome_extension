@@ -95,10 +95,6 @@ export class UnifiedConversationManager {
                 [this.CONVERSATION_KEY]: conversation,
             });
 
-            console.log(
-                `🔄 UnifiedConversationManager: Saved message (${role}) - broadcasting to all windows`
-            );
-
             // Broadcast change to all windows
             this.broadcastConversationUpdate();
 
@@ -126,10 +122,6 @@ export class UnifiedConversationManager {
             await chrome.storage.sync.set({
                 [this.CONVERSATION_KEY]: conversation,
             });
-
-            console.log(
-                `🔄 UnifiedConversationManager: Saved ${messages.length} messages - broadcasting to all windows`
-            );
 
             // Broadcast change to all windows
             this.broadcastConversationUpdate();

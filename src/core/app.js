@@ -92,7 +92,6 @@ export class ShoppingAssistant {
 
     async handleConversationUpdate() {
         try {
-            console.log("🔄 App: Received conversation update - refreshing UI");
             // Refresh the UI with latest conversation data
             await this.refreshConversationUI();
         } catch (error) {
@@ -102,18 +101,11 @@ export class ShoppingAssistant {
 
     async refreshConversationUI() {
         try {
-            console.log(
-                "🔄 App: Refreshing conversation UI from unified storage"
-            );
             // Get latest messages from unified storage
             const messages =
                 await UnifiedConversationManager.getMessagesForUI();
             const isWelcomeVisible =
                 await UnifiedConversationManager.getWelcomeScreenState();
-
-            console.log(
-                `🔄 App: Retrieved ${messages.length} messages from unified storage`
-            );
 
             // Clear current UI
             this.elements.messages.innerHTML = "";
@@ -194,41 +186,21 @@ export class ShoppingAssistant {
         };
 
         const handleSidePanelHidden = () => {
-            console.log(
-                "🔍 Side panel hidden detected - document.hidden:",
-                document.hidden
-            );
-
             // Clear any existing timeout
             if (sidepanelCloseTimeout) {
                 clearTimeout(sidepanelCloseTimeout);
-                console.log("🔍 Cleared existing close timeout");
             }
 
             // Don't set close timeout if listening mode is active
             if (this.audioHandler.isListening()) {
-                console.log(
-                    "🔍 Listening mode active - not setting close timeout"
-                );
                 return;
             }
 
             // Set a delayed timeout for closure
             sidepanelCloseTimeout = setTimeout(async () => {
-                console.log(
-                    "🔍 Close timeout triggered - document.hidden:",
-                    document.hidden
-                );
                 // Only close if the document is still hidden after the delay
                 if (document.hidden) {
-                    console.log(
-                        "🔍 Side panel still hidden after delay, closing..."
-                    );
                     await setSidePanelClosed();
-                } else {
-                    console.log(
-                        "🔍 Side panel became visible again, not closing"
-                    );
                 }
             }, CLOSE_DELAY);
         };
@@ -246,10 +218,7 @@ export class ShoppingAssistant {
                     // Give the debugger a moment to re-attach if needed
                     await this.audioHandler.checkAndSwitchToActiveTab();
                 } catch (error) {
-                    console.log(
-                        "Debugger re-attachment check during visibility change:",
-                        error
-                    );
+                    // Ignore debugger re-attachment errors
                 }
             }
 
@@ -265,15 +234,9 @@ export class ShoppingAssistant {
 
         // Handle visibility changes with delay
         document.addEventListener("visibilitychange", () => {
-            console.log(
-                "🔍 Visibility change event - document.hidden:",
-                document.hidden
-            );
             if (document.hidden) {
-                console.log("🔍 Calling handleSidePanelHidden()");
                 handleSidePanelHidden();
             } else {
-                console.log("🔍 Calling handleSidePanelVisible()");
                 handleSidePanelVisible();
             }
         });
@@ -748,12 +711,9 @@ export class ShoppingAssistant {
 
     async cleanupDebuggerAttachments() {
         try {
-            console.log("Cleaning up debugger attachments...");
-
             // Clean up any existing debugger attachments
             if (this.audioHandler && this.audioHandler.screenCapture) {
                 await this.audioHandler.screenCapture.cleanup();
-                console.log("Debugger attachments cleaned up successfully");
             }
         } catch (error) {
             console.error("Error cleaning up debugger attachments:", error);

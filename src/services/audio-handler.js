@@ -1,6 +1,7 @@
 import { GeminiLiveAPI } from "./gemini-api.js";
 import { ScreenCaptureService } from "./screen-capture-service.js";
 import { LivePreviewManager } from "./live-preview-manager.js";
+import { AudioCaptureService } from "./audio/audio-capture-service.js";
 import { streamingLogger } from "../utils/streaming-logger.js";
 
 export class AudioHandler {
@@ -40,10 +41,8 @@ export class AudioHandler {
         this.geminiAPI = new GeminiLiveAPI();
         this.screenCapture = new ScreenCaptureService();
         this.previewManager = new LivePreviewManager();
+        this.audioCapture = new AudioCaptureService(this.geminiAPI);
         this.speechRecognition = null;
-        this.audioStream = null;
-        this.audioWorkletNode = null;
-        this.audioSource = null;
         this.inactivityTimer = null;
         this.speechKeepAliveTimer = null;
         this.lastSpeechActivity = null;
@@ -56,6 +55,11 @@ export class AudioHandler {
 
         this.setupGeminiCallbacks();
         this.initializeGemini();
+
+        // Set up audio level callback
+        this.audioCapture.setAudioLevelCallback((level) => {
+            this.onAudioLevelDetected(level);
+        });
     }
 
     async initializeGemini() {
@@ -456,26 +460,7 @@ export class AudioHandler {
     }
 
     async setupAudioCapture() {
-        try {
-            this.audioStream = await navigator.mediaDevices.getUserMedia({
-                audio: {
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    autoGainControl: true,
-                    sampleRate: 16000,
-                    googEchoCancellation: true,
-                    googAutoGainControl: true,
-                    googNoiseSuppression: true,
-                    googHighpassFilter: true,
-                    googTypingNoiseDetection: true,
-                },
-            });
-
-            return true;
-        } catch (error) {
-            console.error("Audio capture setup failed:", error);
-            throw error;
-        }
+        return this.audioCapture.setupAudioCapture();
     }
 
     async startMediaStreaming() {
@@ -632,124 +617,23 @@ export class AudioHandler {
     }
 
     stopAudioStreaming() {
-        if (this.audioWorkletNode) {
-            this.audioWorkletNode.disconnect();
-            this.audioWorkletNode = null;
-        }
-
-        if (this.audioSource) {
-            this.audioSource.disconnect();
-            this.audioSource = null;
-        }
-
-        streamingLogger.logInfo("🎤 Audio stream stopped");
+        this.audioCapture.stopAudioStreaming();
     }
 
     async startAudioStreaming() {
-        if (!this.geminiAPI.getConnectionStatus().isConnected) {
-            return;
-        }
-
-        try {
-            if (this.geminiAPI.audioContext.audioWorklet) {
-                await this.startAudioWorkletProcessing();
-                streamingLogger.logInfo(
-                    "🎤 Audio stream started (AudioWorklet)"
-                );
-            } else {
-                console.warn("AudioWorklet not supported, using fallback");
-                this.startScriptProcessorFallback();
-                streamingLogger.logInfo(
-                    "🎤 Audio stream started (ScriptProcessor)"
-                );
-            }
-        } catch (error) {
-            console.error("Audio streaming failed:", error);
-            this.startScriptProcessorFallback();
-            streamingLogger.logInfo("🎤 Audio stream started (fallback)");
-        }
+        return this.audioCapture.startAudioStreaming();
     }
 
     async startAudioWorkletProcessing() {
-        const processorUrl = chrome.runtime.getURL(
-            "src/audio/pcm-processor.js"
-        );
-        await this.geminiAPI.audioContext.audioWorklet.addModule(processorUrl);
-
-        this.audioWorkletNode = new AudioWorkletNode(
-            this.geminiAPI.audioContext,
-            "pcm-processor"
-        );
-
-        this.audioWorkletNode.port.onmessage = (event) => {
-            const { type, pcmData, maxAmplitude } = event.data;
-
-            if (
-                type === "audioData" &&
-                this.geminiAPI.getConnectionStatus().isConnected
-            ) {
-                const uint8Array = new Uint8Array(pcmData.buffer);
-                const base64 = btoa(String.fromCharCode(...uint8Array));
-                this.geminiAPI.sendAudioChunk(base64);
-
-                if (maxAmplitude !== undefined) {
-                    this.onAudioLevelDetected(maxAmplitude);
-                }
-            }
-        };
-
-        this.audioSource = this.geminiAPI.audioContext.createMediaStreamSource(
-            this.audioStream
-        );
-        this.audioSource.connect(this.audioWorkletNode);
+        return this.audioCapture.startAudioWorkletProcessing();
     }
 
     startScriptProcessorFallback() {
-        this.audioSource = this.geminiAPI.audioContext.createMediaStreamSource(
-            this.audioStream
-        );
-        const audioProcessor =
-            this.geminiAPI.audioContext.createScriptProcessor(4096, 1, 1);
-
-        audioProcessor.onaudioprocess = (event) => {
-            if (!this.geminiAPI.getConnectionStatus().isConnected) return;
-
-            const inputData = event.inputBuffer.getChannelData(0);
-            const outputData = event.outputBuffer.getChannelData(0);
-
-            for (let i = 0; i < inputData.length; i++) {
-                outputData[i] = inputData[i];
-            }
-
-            let maxAmplitude = 0;
-            for (let i = 0; i < inputData.length; i++) {
-                const amplitude = Math.abs(inputData[i]);
-                maxAmplitude = Math.max(maxAmplitude, amplitude);
-            }
-
-            this.onAudioLevelDetected(maxAmplitude);
-
-            const pcmData = new Int16Array(inputData.length);
-            for (let i = 0; i < inputData.length; i++) {
-                const sample = Math.max(-1, Math.min(1, inputData[i]));
-                pcmData[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
-            }
-
-            const uint8Array = new Uint8Array(pcmData.buffer);
-            const base64 = btoa(String.fromCharCode(...uint8Array));
-            this.geminiAPI.sendAudioChunk(base64);
-        };
-
-        this.audioSource.connect(audioProcessor);
+        this.audioCapture.startScriptProcessorFallback();
     }
 
     stopAudioProcessing() {
-        this.stopAudioStreaming();
-
-        if (this.audioStream) {
-            this.audioStream.getTracks().forEach((track) => track.stop());
-            this.audioStream = null;
-        }
+        this.audioCapture.stopAudioProcessing();
     }
 
     startLocalSpeechRecognition() {
