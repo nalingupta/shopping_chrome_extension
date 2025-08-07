@@ -6,6 +6,12 @@ export class ScreenCaptureService {
         this.currentTabId = null;
         this.isInitialized = false;
         this.isTabSwitchInProgress = false; // Flag to prevent duplicate switches
+
+        // New state management for restricted URL handling
+        this.monitoredTabs = new Map(); // Map of tabId -> monitoring info
+        this.failureCounts = new Map(); // Map of tabId -> failure count by type
+        this.urlMonitoringIntervals = new Map(); // Map of tabId -> interval ID
+        this.maxMonitoredTabs = 5; // Maximum tabs to monitor simultaneously
     }
 
     // Track when a tab is accessed for better cleanup prioritization
@@ -327,7 +333,7 @@ export class ScreenCaptureService {
                                 );
                             } catch (tabError) {
                                 console.warn(
-                                    `[${timestamp}] ⚠️ FALLBACK: Debugger attachment failed - Tab ID: ${activeTab.id}, Name: "Unknown", URL: "Unknown", Reason: "Unable to attach debugger to active tab - ${result.error}. Continuing in listening mode until user switches to attachable tab. (Tab info unavailable: ${tabError.message})"`
+                                    `[${timestamp}] ⚠️ FALLBACK: Debugger attachment failed - Tab ID: ${activeTab.id}, Name: "Unknown", URL: "Unknown", Reason: "Unable to attach debugger to active tab - ${result.error}. Continuing in listening mode until user switches to an attachable tab. (Tab info unavailable: ${tabError.message})"`
                                 );
                             }
                             // Don't try to attach to arbitrary tabs - only the active tab matters
@@ -380,6 +386,14 @@ export class ScreenCaptureService {
                 return { success: true };
             }
 
+            // Check if this is a new tab that we need to attach to
+            const isNewTab = !this.attachedTabs.has(tabId);
+            if (isNewTab) {
+                console.log(
+                    `[${timestamp}] 🆕 TAB SWITCH: New tab detected - will attempt to attach to ${tabId}`
+                );
+            }
+
             // Set flag to prevent duplicate switches
             this.isTabSwitchInProgress = true;
 
@@ -394,101 +408,126 @@ export class ScreenCaptureService {
                 `[${timestamp}] 📊 TAB SWITCH: Current tab: ${this.currentTabId}, Target tab: ${tabId}, Is active: ${isCurrentActiveTab}`
             );
 
-            // For non-active tabs (hot-switching), query all attachable tabs first
-            if (!isCurrentActiveTab) {
-                // Get all tabs in the current window
-                const allTabs = await chrome.tabs.query({
-                    currentWindow: true,
-                });
-
-                // Filter out restricted URLs and tabs with existing debuggers
-                const attachableTabs = [];
-                for (const tab of allTabs) {
-                    // Skip restricted URLs
-                    if (this.isRestrictedUrl(tab.url)) {
-                        continue;
-                    }
-
-                    // Check if debugger is already attached
-                    const isAttached = await this.isDebuggerAttached(tab.id);
-                    if (isAttached) {
-                        continue;
-                    }
-
-                    attachableTabs.push(tab);
-                }
-
-                // Check if the target tab is in the attachable list
-                const targetTabAttachable = attachableTabs.find(
-                    (tab) => tab.id === tabId
-                );
-                if (!targetTabAttachable) {
-                    // Silently skip if target tab is not attachable
-                    return {
-                        success: false,
-                        error: "Target tab is not attachable",
-                    };
-                }
-
-                // Try to attach to top 10 attachable tabs (including the target)
+            // Handle attachment for the target tab
+            if (!this.attachedTabs.has(tabId)) {
+                // Check if we're at the attachment limit
                 const maxAttachments = 10;
-                const tabsToAttach = attachableTabs.slice(0, maxAttachments);
+                if (this.attachedTabs.size >= maxAttachments) {
+                    // Try to clean up some old attachments first
+                    await this.cleanupUnusedAttachments();
 
-                for (const tab of tabsToAttach) {
-                    if (!this.attachedTabs.has(tab.id)) {
-                        try {
-                            const result = await this.setup(tab.id);
-                            if (!result.success) {
-                                // Silently skip failed attachments for hot-switching
-                                continue;
-                            }
-                        } catch (error) {
-                            // Silently skip failed attachments for hot-switching
-                            continue;
-                        }
+                    // If still at limit, force cleanup by removing least recently used tab
+                    if (this.attachedTabs.size >= maxAttachments) {
+                        await this.forceCleanupForNewTab(tabId);
                     }
                 }
 
-                // Check if we successfully attached to the target tab
-                if (!this.attachedTabs.has(tabId)) {
+                // Validate tab eligibility BEFORE attempting attachment
+                const eligibility = await this.validateTabEligibility(tabId);
+
+                if (!eligibility.eligible) {
+                    console.log(
+                        `[${timestamp}] ⏭️ TAB SWITCH: Tab ${tabId} is not eligible - ${eligibility.reason}`
+                    );
+
+                    // Handle restricted URLs by starting monitoring
+                    if (eligibility.reason === "RESTRICTED_URL") {
+                        // Check if we can monitor this tab
+                        if (this.monitoredTabs.size < this.maxMonitoredTabs) {
+                            this.startUrlMonitoring(
+                                tabId,
+                                eligibility.title || "Unknown"
+                            );
+                            return {
+                                success: true,
+                                message:
+                                    "Tab is restricted, monitoring for URL change",
+                            };
+                        } else {
+                            console.log(
+                                `[${timestamp}] ⚠️ TAB SWITCH: Cannot monitor tab ${tabId} - at monitoring limit`
+                            );
+                            return {
+                                success: false,
+                                error: "Cannot monitor restricted tab - at limit",
+                            };
+                        }
+                    }
+
+                    // For other ineligible reasons, return failure
                     return {
                         success: false,
-                        error: "Failed to attach to target tab",
+                        error: `Tab is not eligible: ${eligibility.reason}`,
                     };
                 }
-            } else {
-                // For current active tab, try to attach directly
-                if (!this.attachedTabs.has(tabId)) {
-                    // Check if we're at the attachment limit
-                    const maxAttachments = 10;
-                    if (this.attachedTabs.size >= maxAttachments) {
-                        // Try to clean up some old attachments first
-                        await this.cleanupUnusedAttachments();
 
-                        // If still at limit, force cleanup by removing least recently used tab
-                        if (this.attachedTabs.size >= maxAttachments) {
-                            await this.forceCleanupForNewTab(tabId);
+                // Attempt to attach to the tab
+                const result = await this.setup(tabId);
+                if (!result.success) {
+                    // Categorize the failure
+                    const failureType = this.categorizeFailure(
+                        result.error,
+                        tabId
+                    );
+                    this.incrementFailureCount(tabId, failureType);
+
+                    console.log(
+                        `[${timestamp}] ❌ TAB SWITCH: Attachment failed for tab ${tabId} - ${failureType} (count: ${this.getFailureCount(
+                            tabId,
+                            failureType
+                        )})`
+                    );
+
+                    // Handle different failure types
+                    if (failureType === "RESTRICTED_URL") {
+                        // Start monitoring for URL change
+                        if (this.monitoredTabs.size < this.maxMonitoredTabs) {
+                            this.startUrlMonitoring(
+                                tabId,
+                                eligibility.title || "Unknown"
+                            );
+                            return {
+                                success: true,
+                                message:
+                                    "Tab is restricted, monitoring for URL change",
+                            };
+                        }
+                    } else if (failureType === "DEBUGGER_CONFLICT") {
+                        // Skip this tab permanently
+                        return {
+                            success: false,
+                            error: "Debugger conflict - skipping tab",
+                        };
+                    } else if (failureType === "NETWORK_ERROR") {
+                        // Retry with backoff for network errors
+                        const retryCount = this.getFailureCount(
+                            tabId,
+                            failureType
+                        );
+                        if (retryCount <= 3) {
+                            console.log(
+                                `[${timestamp}] 🔄 TAB SWITCH: Will retry network error for tab ${tabId} (attempt ${retryCount})`
+                            );
+                            return {
+                                success: false,
+                                error: "Network error - will retry",
+                            };
                         }
                     }
 
-                    const result = await this.setup(tabId);
-                    if (!result.success) {
-                        // Failsafe mechanism: if attachment fails, show warning and return failure
-                        try {
-                            const tab = await chrome.tabs.get(tabId);
-                            const tabName = tab.title || "Unknown";
-                            const tabUrl = tab.url || "Unknown";
-                            console.warn(
-                                `[${timestamp}] ⚠️ FALLBACK: Tab switch attachment failed - Tab ID: ${tabId}, Name: "${tabName}", URL: "${tabUrl}", Reason: "Debugger setup failed during tab switch - ${result.error}. Skipping attachment to prevent system instability."`
-                            );
-                        } catch (tabError) {
-                            console.warn(
-                                `[${timestamp}] ⚠️ FALLBACK: Tab switch attachment failed - Tab ID: ${tabId}, Name: "Unknown", URL: "Unknown", Reason: "Debugger setup failed during tab switch - ${result.error}. Skipping attachment to prevent system instability. (Tab info unavailable: ${tabError.message})"`
-                            );
-                        }
-                        return { success: false, error: result.error };
-                    }
+                    // For other failures, return the error
+                    return { success: false, error: result.error };
                 }
+
+                // Success - reset failure counts for this tab
+                this.resetFailureCount(tabId, "RESTRICTED_URL");
+                this.resetFailureCount(tabId, "NETWORK_ERROR");
+
+                console.log(
+                    `[${timestamp}] ✅ TAB SWITCH: Successfully attached to tab ${tabId}${
+                        isNewTab ? " (new tab)" : ""
+                    }`
+                );
             }
 
             // Switch the current tab ID - no need to detach from previous tab
@@ -787,6 +826,9 @@ export class ScreenCaptureService {
             // Clean up debugger event listeners
             this.cleanupDebuggerListeners();
 
+            // Clean up monitoring
+            this.cleanupMonitoring();
+
             // Clear all state
             this.attachedTabs.clear();
             this.currentTabId = null;
@@ -947,5 +989,190 @@ export class ScreenCaptureService {
             url.startsWith("edge://") ||
             url.startsWith("about:")
         );
+    }
+
+    // New methods for failure categorization and handling
+    categorizeFailure(error, tabId) {
+        const errorMessage = error.message || error.toString();
+
+        if (
+            errorMessage.includes("restricted") ||
+            errorMessage.includes("chrome://") ||
+            errorMessage.includes("chrome-extension://")
+        ) {
+            return "RESTRICTED_URL";
+        } else if (
+            errorMessage.includes("already attached") ||
+            errorMessage.includes("Debugger is already attached")
+        ) {
+            return "DEBUGGER_CONFLICT";
+        } else if (
+            errorMessage.includes("network") ||
+            errorMessage.includes("timeout") ||
+            errorMessage.includes("connection")
+        ) {
+            return "NETWORK_ERROR";
+        } else if (
+            errorMessage.includes("permission") ||
+            errorMessage.includes("denied")
+        ) {
+            return "PERMISSION_DENIED";
+        } else {
+            return "UNKNOWN_ERROR";
+        }
+    }
+
+    incrementFailureCount(tabId, failureType) {
+        if (!this.failureCounts.has(tabId)) {
+            this.failureCounts.set(tabId, new Map());
+        }
+        const tabFailures = this.failureCounts.get(tabId);
+        tabFailures.set(failureType, (tabFailures.get(failureType) || 0) + 1);
+    }
+
+    getFailureCount(tabId, failureType) {
+        const tabFailures = this.failureCounts.get(tabId);
+        return tabFailures ? tabFailures.get(failureType) || 0 : 0;
+    }
+
+    resetFailureCount(tabId, failureType) {
+        const tabFailures = this.failureCounts.get(tabId);
+        if (tabFailures) {
+            tabFailures.set(failureType, 0);
+        }
+    }
+
+    async validateTabEligibility(tabId) {
+        try {
+            const tab = await chrome.tabs.get(tabId);
+
+            if (this.isRestrictedUrl(tab.url)) {
+                return {
+                    eligible: false,
+                    reason: "RESTRICTED_URL",
+                    url: tab.url,
+                    title: tab.title,
+                };
+            }
+
+            // Check if debugger is already attached by another process
+            const isAttached = await this.isDebuggerAttached(tabId);
+            if (isAttached) {
+                return {
+                    eligible: false,
+                    reason: "DEBUGGER_CONFLICT",
+                    url: tab.url,
+                    title: tab.title,
+                };
+            }
+
+            return {
+                eligible: true,
+                url: tab.url,
+                title: tab.title,
+            };
+        } catch (error) {
+            return {
+                eligible: false,
+                reason: "TAB_NOT_FOUND",
+                error: error.message,
+            };
+        }
+    }
+
+    startUrlMonitoring(tabId, title) {
+        const timestamp = new Date().toISOString();
+        console.log(
+            `[${timestamp}] 🔍 URL MONITORING: Starting monitoring for tab ${tabId} (${title})`
+        );
+
+        // Clean up existing monitoring if any
+        this.stopUrlMonitoring(tabId);
+
+        // Add to monitored tabs
+        this.monitoredTabs.set(tabId, {
+            startTime: Date.now(),
+            title: title,
+            lastCheck: Date.now(),
+        });
+
+        // Start monitoring interval
+        const intervalId = setInterval(async () => {
+            await this.checkTabUrl(tabId);
+        }, 1000); // Check every second
+
+        this.urlMonitoringIntervals.set(tabId, intervalId);
+
+        // Set timeout to stop monitoring after 30 seconds
+        setTimeout(() => {
+            this.stopUrlMonitoring(tabId);
+            console.log(
+                `[${timestamp}] ⏰ URL MONITORING: Timeout reached for tab ${tabId}, stopping monitoring`
+            );
+        }, 30000);
+    }
+
+    stopUrlMonitoring(tabId) {
+        const intervalId = this.urlMonitoringIntervals.get(tabId);
+        if (intervalId) {
+            clearInterval(intervalId);
+            this.urlMonitoringIntervals.delete(tabId);
+        }
+        this.monitoredTabs.delete(tabId);
+    }
+
+    async checkTabUrl(tabId) {
+        try {
+            const monitoringInfo = this.monitoredTabs.get(tabId);
+            if (!monitoringInfo) {
+                return; // Already stopped monitoring
+            }
+
+            const tab = await chrome.tabs.get(tabId);
+            monitoringInfo.lastCheck = Date.now();
+
+            // Check if URL is now eligible
+            if (!this.isRestrictedUrl(tab.url)) {
+                console.log(
+                    `[${new Date().toISOString()}] ✅ URL MONITORING: Tab ${tabId} URL is now eligible (${
+                        tab.url
+                    }), attempting attachment`
+                );
+                this.stopUrlMonitoring(tabId);
+
+                // Attempt to attach to the tab
+                const result = await this.setup(tabId);
+                if (result.success) {
+                    console.log(
+                        `[${new Date().toISOString()}] ✅ URL MONITORING: Successfully attached to tab ${tabId} after URL change`
+                    );
+                    this.resetFailureCount(tabId, "RESTRICTED_URL");
+                } else {
+                    console.log(
+                        `[${new Date().toISOString()}] ❌ URL MONITORING: Failed to attach to tab ${tabId} after URL change: ${
+                            result.error
+                        }`
+                    );
+                }
+            }
+        } catch (error) {
+            // Tab might have been closed
+            console.log(
+                `[${new Date().toISOString()}] ⚠️ URL MONITORING: Error checking tab ${tabId}: ${
+                    error.message
+                }`
+            );
+            this.stopUrlMonitoring(tabId);
+        }
+    }
+
+    cleanupMonitoring() {
+        // Stop all monitoring intervals
+        for (const [tabId, intervalId] of this.urlMonitoringIntervals) {
+            clearInterval(intervalId);
+        }
+        this.urlMonitoringIntervals.clear();
+        this.monitoredTabs.clear();
+        this.failureCounts.clear();
     }
 }

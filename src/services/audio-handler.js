@@ -278,9 +278,7 @@ export class AudioHandler {
 
                 // Enhanced conditions for tab switching
                 const shouldSwitch =
-                    this.state.isListening &&
-                    this.screenCapture.hasStream() &&
-                    !this.isTabSwitching;
+                    this.state.isListening && !this.isTabSwitching;
 
                 if (shouldSwitch) {
                     try {
@@ -303,18 +301,46 @@ export class AudioHandler {
                             );
                         }
 
+                        // Check if this is a new tab (not already attached)
+                        const isNewTab = !this.screenCapture.attachedTabs.has(
+                            activeInfo.tabId
+                        );
+
+                        if (isNewTab) {
+                            console.log(
+                                `[${timestamp}] 🆕 TAB ACTIVATED: New tab detected - attempting to attach to ${activeInfo.tabId} (${tabInfo.title})`
+                            );
+                        }
+
                         const result = await this.screenCapture.switchToTab(
                             activeInfo.tabId
                         );
 
                         if (!result.success) {
-                            // Failsafe mechanism: if switching fails, do nothing and continue listening
+                            // Handle failure based on type
+                            const failureType =
+                                this.screenCapture.categorizeFailure(
+                                    result.error,
+                                    activeInfo.tabId
+                                );
+                            await this.handleTabSwitchFailure(
+                                activeInfo.tabId,
+                                failureType,
+                                result.error
+                            );
+
                             console.warn(
                                 `[${timestamp}] ⚠️ FALLBACK: Tab activation switch failed - Tab ID: ${activeInfo.tabId}, Name: "${tabInfo.title}", URL: "${tabInfo.url}", Reason: "Screen capture service rejected tab switch request - ${result.error}. Continuing to capture from current tab."`
                             );
                         } else {
                             console.log(
-                                `[${timestamp}] ✅ TAB ACTIVATED: Successfully switched to tab ${activeInfo.tabId} (${tabInfo.title})`
+                                `[${timestamp}] ✅ TAB ACTIVATED: Successfully switched to tab ${
+                                    activeInfo.tabId
+                                } (${tabInfo.title})${
+                                    isNewTab ? " (new tab attached)" : ""
+                                }${
+                                    result.message ? ` - ${result.message}` : ""
+                                }`
                             );
                         }
                     } catch (error) {
@@ -332,8 +358,6 @@ export class AudioHandler {
                     // Log specific reason for skipping
                     const reasons = [];
                     if (!this.state.isListening) reasons.push("not listening");
-                    if (!this.screenCapture.hasStream())
-                        reasons.push("no stream");
                     if (this.isTabSwitching) reasons.push("already switching");
 
                     console.log(
@@ -346,21 +370,49 @@ export class AudioHandler {
             onUpdated: async (tabId, changeInfo, tab) => {
                 if (
                     this.state.isListening &&
-                    this.screenCapture.getCurrentTabId() === tabId &&
                     changeInfo.status === "complete"
                 ) {
                     try {
-                        // Check if the new URL is valid for debugger attachment
-                        if (
-                            tab.url.startsWith("chrome://") ||
-                            tab.url.startsWith("chrome-extension://")
-                        ) {
-                            await this.screenCapture.detachFromTab(tabId);
-                        } else {
-                            // Re-attach if needed
-                            if (!this.screenCapture.attachedTabs.has(tabId)) {
-                                await this.screenCapture.setup(tabId);
+                        // Check if this tab is currently being captured
+                        const isCurrentTab =
+                            this.screenCapture.getCurrentTabId() === tabId;
+
+                        // Check if this tab is being monitored
+                        const isMonitored =
+                            this.screenCapture.monitoredTabs.has(tabId);
+
+                        if (isCurrentTab) {
+                            // Handle URL changes for the current capture tab
+                            if (
+                                tab.url.startsWith("chrome://") ||
+                                tab.url.startsWith("chrome-extension://")
+                            ) {
+                                console.log(
+                                    `[${new Date().toISOString()}] 🔄 TAB UPDATED: Current tab ${tabId} became restricted (${
+                                        tab.url
+                                    }), detaching`
+                                );
+                                await this.screenCapture.detachFromTab(tabId);
+                            } else {
+                                // Re-attach if needed
+                                if (
+                                    !this.screenCapture.attachedTabs.has(tabId)
+                                ) {
+                                    console.log(
+                                        `[${new Date().toISOString()}] 🔄 TAB UPDATED: Current tab ${tabId} is now eligible (${
+                                            tab.url
+                                        }), re-attaching`
+                                    );
+                                    await this.screenCapture.setup(tabId);
+                                }
                             }
+                        } else if (isMonitored) {
+                            // The URL monitoring system will handle this automatically
+                            console.log(
+                                `[${new Date().toISOString()}] 🔄 TAB UPDATED: Monitored tab ${tabId} URL changed to ${
+                                    tab.url
+                                }`
+                            );
                         }
                     } catch (error) {
                         console.error(
@@ -384,6 +436,28 @@ export class AudioHandler {
                         );
                     }
                 }
+
+                // Clean up monitoring for the removed tab
+                if (this.screenCapture.monitoredTabs.has(tabId)) {
+                    console.log(
+                        `[${new Date().toISOString()}] 🗑️ TAB REMOVED: Cleaning up monitoring for tab ${tabId}`
+                    );
+                    this.screenCapture.stopUrlMonitoring(tabId);
+                }
+            },
+            onCreated: async (tab) => {
+                const timestamp = new Date().toISOString();
+                console.log(
+                    `[${timestamp}] 🆕 TAB CREATED: New tab created - ID: ${tab.id}, Title: "${tab.title}", URL: "${tab.url}"`
+                );
+
+                // If this new tab becomes active and we're listening, we'll handle it in onActivated
+                // But we can log it here for debugging purposes
+                if (tab.active && this.state.isListening) {
+                    console.log(
+                        `[${timestamp}] 🆕 TAB CREATED: New tab is active - will be handled by onActivated listener`
+                    );
+                }
             },
             onFocusChanged: async (windowId) => {
                 if (this.state.isListening) {
@@ -404,6 +478,7 @@ export class AudioHandler {
         chrome.tabs.onActivated.addListener(this.tabListeners.onActivated);
         chrome.tabs.onUpdated.addListener(this.tabListeners.onUpdated);
         chrome.tabs.onRemoved.addListener(this.tabListeners.onRemoved);
+        chrome.tabs.onCreated.addListener(this.tabListeners.onCreated);
         chrome.windows.onFocusChanged.addListener(
             this.tabListeners.onFocusChanged
         );
@@ -416,6 +491,7 @@ export class AudioHandler {
             );
             chrome.tabs.onUpdated.removeListener(this.tabListeners.onUpdated);
             chrome.tabs.onRemoved.removeListener(this.tabListeners.onRemoved);
+            chrome.tabs.onCreated.removeListener(this.tabListeners.onCreated);
             chrome.windows.onFocusChanged.removeListener(
                 this.tabListeners.onFocusChanged
             );
@@ -446,6 +522,53 @@ export class AudioHandler {
             if (this.callbacks.listeningStopped) {
                 this.callbacks.listeningStopped("screen_capture_failed");
             }
+        }
+    }
+
+    // New method to handle failures based on type
+    async handleTabSwitchFailure(tabId, failureType, error) {
+        const timestamp = new Date().toISOString();
+        console.log(
+            `[${timestamp}] ⚠️ TAB SWITCH FAILURE: Tab ${tabId}, Type: ${failureType}, Error: ${error}`
+        );
+
+        // Only count certain failure types toward the failure limit
+        const criticalFailureTypes = [
+            "NETWORK_ERROR",
+            "PERMISSION_DENIED",
+            "UNKNOWN_ERROR",
+        ];
+
+        if (criticalFailureTypes.includes(failureType)) {
+            this.screenCaptureFailureCount++;
+            console.log(
+                `[${timestamp}] 📊 FAILURE COUNT: Critical failure (${failureType}) - count: ${this.screenCaptureFailureCount}`
+            );
+
+            if (this.screenCaptureFailureCount >= 3) {
+                console.error(
+                    "Multiple critical failures detected, stopping listening mode"
+                );
+
+                if (this.callbacks.status) {
+                    this.callbacks.status(
+                        "Critical failures detected - stopping listening mode",
+                        "error",
+                        5000
+                    );
+                }
+
+                await this.stopListening();
+
+                if (this.callbacks.listeningStopped) {
+                    this.callbacks.listeningStopped("critical_failures");
+                }
+            }
+        } else {
+            // For non-critical failures (like RESTRICTED_URL), don't count toward failure limit
+            console.log(
+                `[${timestamp}] 📊 FAILURE COUNT: Non-critical failure (${failureType}) - not counting toward limit`
+            );
         }
     }
 
@@ -742,19 +865,23 @@ export class AudioHandler {
                 return false;
             }
 
-            // Check if active tab is capturable
-            if (this.screenCapture.isRestrictedUrl(activeTab.url)) {
+            // Check if this is a new tab that we need to attach to
+            const isNewTab = !this.screenCapture.attachedTabs.has(activeTab.id);
+            if (isNewTab) {
                 console.log(
-                    `[${timestamp}] ❌ RECOVERY: Active tab is restricted (${activeTab.url})`
+                    `[${timestamp}] 🆕 RECOVERY: New active tab detected - will attempt to attach to ${activeTab.id} (${activeTab.title})`
                 );
-                return false;
             }
 
-            // Switch to active tab
+            // Switch to active tab (this will handle attachment for new tabs and restricted URLs)
             const result = await this.screenCapture.switchToTab(activeTab.id);
             if (result.success) {
                 console.log(
-                    `[${timestamp}] ✅ RECOVERY: Successfully recovered - switched to tab ${activeTab.id} (${activeTab.title})`
+                    `[${timestamp}] ✅ RECOVERY: Successfully recovered - switched to tab ${
+                        activeTab.id
+                    } (${activeTab.title})${
+                        isNewTab ? " (new tab attached)" : ""
+                    }${result.message ? ` - ${result.message}` : ""}`
                 );
                 return true;
             } else {
@@ -795,6 +922,14 @@ export class AudioHandler {
                 `[${timestamp}] 📊 CHECK ACTIVE TAB: Current tab: ${currentTabId}, Active tab: ${activeTab.id}`
             );
 
+            // Check if the active tab is a new tab that we need to attach to
+            const isNewTab = !this.screenCapture.attachedTabs.has(activeTab.id);
+            if (isNewTab) {
+                console.log(
+                    `[${timestamp}] 🆕 CHECK ACTIVE TAB: New active tab detected - will be handled by onActivated event`
+                );
+            }
+
             // If we're not capturing from the active tab, or if we don't have a stream, log the mismatch
             // but don't switch - let the onActivated event handle tab switching
             if (
@@ -802,7 +937,9 @@ export class AudioHandler {
                 !this.screenCapture.hasStream()
             ) {
                 console.log(
-                    `[${timestamp}] 📊 CHECK ACTIVE TAB: Mismatch detected - Current: ${currentTabId}, Active: ${activeTab.id}`
+                    `[${timestamp}] 📊 CHECK ACTIVE TAB: Mismatch detected - Current: ${currentTabId}, Active: ${
+                        activeTab.id
+                    }${isNewTab ? " (new tab)" : ""}`
                 );
                 console.log(
                     `[${timestamp}] ⏭️ CHECK ACTIVE TAB: Skipping switch (handled by onActivated event)`
