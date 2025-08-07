@@ -38,6 +38,18 @@ export class AudioCaptureService {
         }
 
         try {
+            // Ensure AudioContext is active before starting processing
+            if (
+                this.geminiAPI.geminiAPI.audioContext &&
+                this.geminiAPI.geminiAPI.audioContext.state === "suspended"
+            ) {
+                try {
+                    await this.geminiAPI.geminiAPI.audioContext.resume();
+                } catch (e) {
+                    console.warn("AudioContext resume failed:", e);
+                }
+            }
+
             if (this.geminiAPI.geminiAPI.audioContext.audioWorklet) {
                 await this.startAudioWorkletProcessing();
                 streamingLogger.logInfo(

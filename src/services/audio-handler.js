@@ -70,6 +70,19 @@ export class AudioHandler {
     }
 
     async startAudioStreaming() {
+        // Defensive: attempt to resume audio context before starting
+        try {
+            if (
+                this.aiHandler &&
+                this.aiHandler.geminiAPI &&
+                this.aiHandler.geminiAPI.audioContext &&
+                this.aiHandler.geminiAPI.audioContext.state === "suspended"
+            ) {
+                await this.aiHandler.geminiAPI.audioContext.resume();
+            }
+        } catch (e) {
+            // Non-fatal; fallback to starting anyway
+        }
         return this.audioCapture.startAudioStreaming();
     }
 

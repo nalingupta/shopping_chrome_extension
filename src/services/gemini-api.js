@@ -63,6 +63,15 @@ export class GeminiLiveAPI {
                     this.isConnected = true;
                     this.reconnectAttempts = 0;
 
+                    // Ensure AudioContext is running after previous suspend on disconnect
+                    try {
+                        if (this.audioContext && this.audioContext.state === "suspended") {
+                            await this.audioContext.resume();
+                        }
+                    } catch (resumeError) {
+                        console.warn("AudioContext resume failed:", resumeError);
+                    }
+
                     await new Promise((resolve) => setTimeout(resolve, 100));
                     this.sendConfiguration();
                     this.startKeepAlive();
