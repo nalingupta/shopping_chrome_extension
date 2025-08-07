@@ -201,7 +201,8 @@ Important: Only describe what you can actually see in the provided screen captur
             !this.ws ||
             this.ws.readyState !== WebSocket.OPEN
         ) {
-            this.pendingVideoFrames.push(base64Data);
+            // Bound the buffer to the most recent frame only (avoid stale flush)
+            this.pendingVideoFrames = [base64Data];
             return;
         }
 
@@ -362,11 +363,9 @@ Important: Only describe what you can actually see in the provided screen captur
             this.sendAudioChunk(base64Data);
         });
 
-        const videoFrames = [...this.pendingVideoFrames];
+        // Optional safety: do NOT flush stale video frames on setup complete
+        // Clear any queued frames to ensure only current-tab frames are sent
         this.pendingVideoFrames = [];
-        videoFrames.forEach((base64Data) => {
-            this.sendVideoFrame(base64Data);
-        });
     }
 
     startKeepAlive() {
@@ -430,6 +429,10 @@ Important: Only describe what you can actually see in the provided screen captur
         this.isProcessingTurn = false;
         this.currentStreamingResponse = "";
         this.isStreaming = false;
+    }
+
+    clearPendingVideoFrames() {
+        this.pendingVideoFrames = [];
     }
 
     async disconnect() {

@@ -56,6 +56,11 @@ export class VideoHandler {
                 if (shouldSwitch) {
                     try {
                         this.isTabSwitching = true;
+                        // Pause sending and clear pending frames before switch
+                        this.videoStreamingStarted = false;
+                        try {
+                            this.aiHandler?.geminiAPI?.clearPendingVideoFrames?.();
+                        } catch (_) {}
                         const result = await this.screenCapture.switchToTab(
                             activeInfo.tabId
                         );
@@ -75,6 +80,9 @@ export class VideoHandler {
                     } catch (error) {
                         console.warn("Tab activation switch failed:", error);
                     } finally {
+                        // Brief stabilization delay before resuming sends
+                        await new Promise((r) => setTimeout(r, 150));
+                        this.videoStreamingStarted = true;
                         this.isTabSwitching = false;
                     }
                 }
@@ -236,7 +244,11 @@ export class VideoHandler {
                     this.videoStreamingStarted &&
                     this.aiHandler.isGeminiConnectionActive()
                 ) {
-                    this.aiHandler.sendVideoData(frameData);
+                    // Only send when Gemini is fully setup to avoid buffering stale frames
+                    const status = this.aiHandler.geminiAPI?.getConnectionStatus?.();
+                    if (status?.isSetupComplete) {
+                        this.aiHandler.sendVideoData(frameData);
+                    }
                 }
             } catch (error) {
                 if (
