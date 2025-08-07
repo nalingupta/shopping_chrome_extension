@@ -278,9 +278,10 @@ export class AudioHandler {
                 );
 
                 // Enhanced conditions for tab switching
-                const shouldSwitch = this.state.isListening && 
-                                   this.screenCapture.hasStream() && 
-                                   !this.isTabSwitching;
+                const shouldSwitch =
+                    this.state.isListening &&
+                    this.screenCapture.hasStream() &&
+                    !this.isTabSwitching;
 
                 if (shouldSwitch) {
                     try {
@@ -288,20 +289,25 @@ export class AudioHandler {
                             `[${timestamp}] 🔄 TAB ACTIVATED: Starting tab switch to ${activeInfo.tabId} (Event-driven switch)`
                         );
                         this.isTabSwitching = true;
-                        
+
                         // Get tab info for better logging
                         let tabInfo = { title: "Unknown", url: "Unknown" };
                         try {
                             const tab = await chrome.tabs.get(activeInfo.tabId);
-                            tabInfo = { title: tab.title || "Unknown", url: tab.url || "Unknown" };
+                            tabInfo = {
+                                title: tab.title || "Unknown",
+                                url: tab.url || "Unknown",
+                            };
                         } catch (tabError) {
-                            console.log(`[${timestamp}] ⚠️ TAB ACTIVATED: Could not get tab info: ${tabError.message}`);
+                            console.log(
+                                `[${timestamp}] ⚠️ TAB ACTIVATED: Could not get tab info: ${tabError.message}`
+                            );
                         }
 
                         const result = await this.screenCapture.switchToTab(
                             activeInfo.tabId
                         );
-                        
+
                         if (!result.success) {
                             // Failsafe mechanism: if switching fails, do nothing and continue listening
                             console.warn(
@@ -327,11 +333,14 @@ export class AudioHandler {
                     // Log specific reason for skipping
                     const reasons = [];
                     if (!this.state.isListening) reasons.push("not listening");
-                    if (!this.screenCapture.hasStream()) reasons.push("no stream");
+                    if (!this.screenCapture.hasStream())
+                        reasons.push("no stream");
                     if (this.isTabSwitching) reasons.push("already switching");
-                    
+
                     console.log(
-                        `[${timestamp}] ⏭️ TAB ACTIVATED: Skipping tab switch (${reasons.join(", ")})`
+                        `[${timestamp}] ⏭️ TAB ACTIVATED: Skipping tab switch (${reasons.join(
+                            ", "
+                        )})`
                     );
                 }
             },
@@ -614,10 +623,18 @@ export class AudioHandler {
 
             if (!this.screenCapture.hasStream()) {
                 console.log(
-                    `[${timestamp}] ⏹️ SCREENSHOT INTERVAL: No stream available, stopping`
+                    `[${timestamp}] ⏹️ SCREENSHOT INTERVAL: No stream available, attempting recovery`
                 );
-                this.stopScreenshotStreaming();
-                return;
+                
+                // Try to recover stream before giving up
+                const recoverySuccess = await this.recoverFromInvalidTab();
+                if (!recoverySuccess) {
+                    console.log(
+                        `[${timestamp}] ⏹️ SCREENSHOT INTERVAL: Recovery failed, stopping gracefully`
+                    );
+                    this.stopScreenshotStreaming();
+                    return;
+                }
             }
 
             try {
@@ -653,7 +670,34 @@ export class AudioHandler {
                     return;
                 }
 
-                // Get tab information for detailed error logging
+                // Enhanced error recovery for tab-related issues
+                if (
+                    error.message &&
+                    (error.message.includes("no longer exists") ||
+                     error.message.includes("not valid for capture") ||
+                     error.message.includes("not accessible"))
+                ) {
+                    console.log(
+                        `[${timestamp}] 🔄 SCREENSHOT INTERVAL: Tab validation failed, attempting recovery`
+                    );
+                    
+                    // Try to recover from invalid tab
+                    const recoverySuccess = await this.recoverFromInvalidTab();
+                    if (recoverySuccess) {
+                        console.log(
+                            `[${timestamp}] ✅ SCREENSHOT INTERVAL: Recovery successful, continuing capture`
+                        );
+                        return; // Skip this capture cycle, continue with next
+                    } else {
+                        console.log(
+                            `[${timestamp}] ❌ SCREENSHOT INTERVAL: Recovery failed, stopping capture`
+                        );
+                        this.stopScreenshotStreaming();
+                        return;
+                    }
+                }
+
+                // For other errors, log details and handle normally
                 try {
                     const currentTabId = this.screenCapture.getCurrentTabId();
                     if (currentTabId) {
@@ -686,11 +730,49 @@ export class AudioHandler {
         }, 100); // 10 FPS
     }
 
-        // Fallback method to check and switch to the active tab
+    // Recovery method for invalid tab scenarios
+    async recoverFromInvalidTab() {
+        const timestamp = new Date().toISOString();
+        console.log(`[${timestamp}] 🔄 RECOVERY: Attempting to recover from invalid tab`);
+        
+        try {
+            // Find current active tab
+            const [activeTab] = await chrome.tabs.query({
+                active: true,
+                currentWindow: true,
+            });
+
+            if (!activeTab) {
+                console.log(`[${timestamp}] ❌ RECOVERY: No active tab found`);
+                return false;
+            }
+
+            // Check if active tab is capturable
+            if (this.screenCapture.isRestrictedUrl(activeTab.url)) {
+                console.log(`[${timestamp}] ❌ RECOVERY: Active tab is restricted (${activeTab.url})`);
+                return false;
+            }
+
+            // Switch to active tab
+            const result = await this.screenCapture.switchToTab(activeTab.id);
+            if (result.success) {
+                console.log(`[${timestamp}] ✅ RECOVERY: Successfully recovered - switched to tab ${activeTab.id} (${activeTab.title})`);
+                return true;
+            } else {
+                console.log(`[${timestamp}] ❌ RECOVERY: Failed to switch to active tab: ${result.error}`);
+                return false;
+            }
+        } catch (error) {
+            console.error(`[${timestamp}] ❌ RECOVERY: Error during recovery:`, error);
+            return false;
+        }
+    }
+
+    // Fallback method to check and switch to the active tab
     async checkAndSwitchToActiveTab() {
         try {
             const timestamp = new Date().toISOString();
-            
+
             // Get the currently active tab
             const [activeTab] = await chrome.tabs.query({
                 active: true,

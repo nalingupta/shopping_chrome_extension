@@ -194,15 +194,9 @@ export class ScreenCaptureService {
             throw new Error("Debugger not attached to current tab");
         }
 
-        // Safety check: verify the current tab still exists before attempting capture
-        try {
-            await chrome.tabs.get(this.currentTabId);
-        } catch (error) {
-            // Tab no longer exists, skip capture
-            console.log(
-                `[${timestamp}] ❌ SCREEN CAPTURE: Current tab ${this.currentTabId} no longer exists, skipping capture`
-            );
-            throw new Error("Current tab no longer exists");
+        // Enhanced validation: verify the current tab is valid for capture
+        if (!(await this.validateCurrentTab())) {
+            throw new Error("Current tab is not valid for capture");
         }
 
         try {
@@ -376,7 +370,10 @@ export class ScreenCaptureService {
                 console.log(
                     `[${timestamp}] ⏭️ TAB SWITCH: Skipping switch - another switch already in progress`
                 );
-                return { success: false, error: "Tab switch already in progress" };
+                return {
+                    success: false,
+                    error: "Tab switch already in progress",
+                };
             }
 
             // If we're already on this tab, no need to switch
@@ -677,6 +674,39 @@ export class ScreenCaptureService {
 
     hasStream() {
         return this.currentTabId && this.attachedTabs.has(this.currentTabId);
+    }
+
+    async validateCurrentTab() {
+        if (!this.currentTabId) {
+            console.log("❌ TAB VALIDATION: No current tab ID");
+            return false;
+        }
+
+        try {
+            const tab = await chrome.tabs.get(this.currentTabId);
+            
+            // Check if tab exists and is capturable
+            if (!tab || this.isRestrictedUrl(tab.url)) {
+                console.log(`❌ TAB VALIDATION: Tab ${this.currentTabId} is not capturable (URL: ${tab?.url || 'unknown'})`);
+                this.cleanupInvalidTab(this.currentTabId);
+                return false;
+            }
+            
+            return true;
+        } catch (error) {
+            // Tab doesn't exist - clean up state
+            console.log(`❌ TAB VALIDATION: Tab ${this.currentTabId} no longer exists: ${error.message}`);
+            this.cleanupInvalidTab(this.currentTabId);
+            return false;
+        }
+    }
+
+    cleanupInvalidTab(tabId) {
+        console.log(`🧹 CLEANUP: Removing invalid tab ${tabId} from tracking`);
+        this.attachedTabs.delete(tabId);
+        if (this.currentTabId === tabId) {
+            this.currentTabId = null;
+        }
     }
 
     async detachFromTab(tabId) {
