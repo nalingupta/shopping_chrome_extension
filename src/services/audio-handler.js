@@ -591,26 +591,13 @@ export class AudioHandler {
 
                 // Handle debugger detach events
                 if (error && error.type === "debugger_detached") {
-                    // Immediately stop listening mode when debugger is detached
-                    if (this.callbacks.status) {
-                        this.callbacks.status(
-                            "Screen capture cancelled - stopping listening mode",
-                            "error",
-                            5000
-                        );
-                    }
+                    // Log the detach but don't stop listening - let the recovery mechanisms handle tab switches
+                    console.log(
+                        `[${new Date().toISOString()}] 🔌 DEBUGGER DETACH: Debugger detached during streaming, allowing recovery mechanisms to handle tab switch`
+                    );
 
-                    // Use setTimeout to avoid async issues in callback
-                    setTimeout(async () => {
-                        await this.stopListening();
-
-                        // Notify UI that listening stopped due to debugger detach
-                        if (this.callbacks.listeningStopped) {
-                            this.callbacks.listeningStopped(
-                                "debugger_detached"
-                            );
-                        }
-                    }, 0);
+                    // Don't call stopListening() - let the existing handleDebuggerDetach and onActivated
+                    // recovery logic handle the tab switch automatically
                 }
             }
         );
@@ -663,11 +650,23 @@ export class AudioHandler {
                     error.message.includes("Detached while handling command")
                 ) {
                     console.log(
-                        `[${timestamp}] 🔄 SCREENSHOT INTERVAL: Debugger detached during capture, stopping interval`
+                        `[${timestamp}] 🔄 SCREENSHOT INTERVAL: Debugger detached during capture, attempting recovery`
                     );
-                    // Don't count this as a failure, just stop the interval
-                    this.stopScreenshotStreaming();
-                    return;
+
+                    // Try to recover from the detachment instead of stopping
+                    const recoverySuccess = await this.recoverFromInvalidTab();
+                    if (recoverySuccess) {
+                        console.log(
+                            `[${timestamp}] ✅ SCREENSHOT INTERVAL: Recovery successful after debugger detach, continuing capture`
+                        );
+                        return; // Skip this capture cycle, continue with next
+                    } else {
+                        console.log(
+                            `[${timestamp}] ❌ SCREENSHOT INTERVAL: Recovery failed after debugger detach, stopping capture`
+                        );
+                        this.stopScreenshotStreaming();
+                        return;
+                    }
                 }
 
                 // Retry logic for temporary debugger attachment issues
