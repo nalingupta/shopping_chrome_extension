@@ -277,54 +277,46 @@ export class AudioHandler {
                     }`
                 );
 
-                if (
-                    this.state.isListening &&
-                    this.screenCapture.hasStream() &&
-                    !this.isTabSwitching
-                ) {
+                // Enhanced conditions for tab switching
+                const shouldSwitch = this.state.isListening && 
+                                   this.screenCapture.hasStream() && 
+                                   !this.isTabSwitching;
+
+                if (shouldSwitch) {
                     try {
                         console.log(
-                            `[${timestamp}] 🔄 TAB ACTIVATED: Starting tab switch to ${activeInfo.tabId}`
+                            `[${timestamp}] 🔄 TAB ACTIVATED: Starting tab switch to ${activeInfo.tabId} (Event-driven switch)`
                         );
                         this.isTabSwitching = true;
+                        
+                        // Get tab info for better logging
+                        let tabInfo = { title: "Unknown", url: "Unknown" };
+                        try {
+                            const tab = await chrome.tabs.get(activeInfo.tabId);
+                            tabInfo = { title: tab.title || "Unknown", url: tab.url || "Unknown" };
+                        } catch (tabError) {
+                            console.log(`[${timestamp}] ⚠️ TAB ACTIVATED: Could not get tab info: ${tabError.message}`);
+                        }
+
                         const result = await this.screenCapture.switchToTab(
                             activeInfo.tabId
                         );
+                        
                         if (!result.success) {
                             // Failsafe mechanism: if switching fails, do nothing and continue listening
-                            try {
-                                const tab = await chrome.tabs.get(
-                                    activeInfo.tabId
-                                );
-                                const tabName = tab.title || "Unknown";
-                                const tabUrl = tab.url || "Unknown";
-                                console.warn(
-                                    `[${timestamp}] ⚠️ FALLBACK: Tab activation switch failed - Tab ID: ${activeInfo.tabId}, Name: "${tabName}", URL: "${tabUrl}", Reason: "Screen capture service rejected tab switch request - ${result.error}. Continuing to capture from current tab."`
-                                );
-                            } catch (tabError) {
-                                console.warn(
-                                    `[${timestamp}] ⚠️ FALLBACK: Tab activation switch failed - Tab ID: ${activeInfo.tabId}, Name: "Unknown", URL: "Unknown", Reason: "Screen capture service rejected tab switch request - ${result.error}. Continuing to capture from current tab. (Tab info unavailable: ${tabError.message})"`
-                                );
-                            }
+                            console.warn(
+                                `[${timestamp}] ⚠️ FALLBACK: Tab activation switch failed - Tab ID: ${activeInfo.tabId}, Name: "${tabInfo.title}", URL: "${tabInfo.url}", Reason: "Screen capture service rejected tab switch request - ${result.error}. Continuing to capture from current tab."`
+                            );
                         } else {
                             console.log(
-                                `[${timestamp}] ✅ TAB ACTIVATED: Successfully switched to tab ${activeInfo.tabId}`
+                                `[${timestamp}] ✅ TAB ACTIVATED: Successfully switched to tab ${activeInfo.tabId} (${tabInfo.title})`
                             );
                         }
                     } catch (error) {
                         // Failsafe mechanism: if switching fails, do nothing and continue listening
-                        try {
-                            const tab = await chrome.tabs.get(activeInfo.tabId);
-                            const tabName = tab.title || "Unknown";
-                            const tabUrl = tab.url || "Unknown";
-                            console.warn(
-                                `[${timestamp}] ⚠️ FALLBACK: Tab activation switch failed - Tab ID: ${activeInfo.tabId}, Name: "${tabName}", URL: "${tabUrl}", Reason: "Screen capture service rejected tab switch request - ${error.message}. Continuing to capture from current tab."`
-                            );
-                        } catch (tabError) {
-                            console.warn(
-                                `[${timestamp}] ⚠️ FALLBACK: Tab activation switch failed - Tab ID: ${activeInfo.tabId}, Name: "Unknown", URL: "Unknown", Reason: "Screen capture service rejected tab switch request - ${error.message}. Continuing to capture from current tab. (Tab info unavailable: ${tabError.message})"`
-                            );
-                        }
+                        console.warn(
+                            `[${timestamp}] ⚠️ FALLBACK: Tab activation switch failed - Tab ID: ${activeInfo.tabId}, Name: "Unknown", URL: "Unknown", Reason: "Screen capture service rejected tab switch request - ${error.message}. Continuing to capture from current tab."`
+                        );
                     } finally {
                         this.isTabSwitching = false;
                         console.log(
@@ -332,8 +324,14 @@ export class AudioHandler {
                         );
                     }
                 } else {
+                    // Log specific reason for skipping
+                    const reasons = [];
+                    if (!this.state.isListening) reasons.push("not listening");
+                    if (!this.screenCapture.hasStream()) reasons.push("no stream");
+                    if (this.isTabSwitching) reasons.push("already switching");
+                    
                     console.log(
-                        `[${timestamp}] ⏭️ TAB ACTIVATED: Skipping tab switch (not listening, no stream, or already switching)`
+                        `[${timestamp}] ⏭️ TAB ACTIVATED: Skipping tab switch (${reasons.join(", ")})`
                     );
                 }
             },
@@ -688,11 +686,11 @@ export class AudioHandler {
         }, 100); // 10 FPS
     }
 
-    // Fallback method to check and switch to the active tab
+        // Fallback method to check and switch to the active tab
     async checkAndSwitchToActiveTab() {
         try {
             const timestamp = new Date().toISOString();
-
+            
             // Get the currently active tab
             const [activeTab] = await chrome.tabs.query({
                 active: true,
@@ -711,15 +709,19 @@ export class AudioHandler {
                 `[${timestamp}] 📊 CHECK ACTIVE TAB: Current tab: ${currentTabId}, Active tab: ${activeTab.id}`
             );
 
-            // If we're not capturing from the active tab, or if we don't have a stream, switch to it
+            // If we're not capturing from the active tab, or if we don't have a stream, log the mismatch
+            // but don't switch - let the onActivated event handle tab switching
             if (
                 currentTabId !== activeTab.id ||
                 !this.screenCapture.hasStream()
             ) {
                 console.log(
-                    `[${timestamp}] 🔄 CHECK ACTIVE TAB: Switching from tab ${currentTabId} to active tab ${activeTab.id}`
+                    `[${timestamp}] 📊 CHECK ACTIVE TAB: Mismatch detected - Current: ${currentTabId}, Active: ${activeTab.id}`
                 );
-                await this.screenCapture.switchToTab(activeTab.id);
+                console.log(
+                    `[${timestamp}] ⏭️ CHECK ACTIVE TAB: Skipping switch (handled by onActivated event)`
+                );
+                // Don't call switchToTab() - let onActivated handle it
             } else {
                 console.log(
                     `[${timestamp}] ✅ CHECK ACTIVE TAB: Already capturing from active tab ${activeTab.id}`

@@ -7,6 +7,7 @@ export class ScreenCaptureService {
         this.frameCallback = null;
         this.errorCallback = null;
         this.isInitialized = false;
+        this.isTabSwitchInProgress = false; // Flag to prevent duplicate switches
     }
 
     // Track when a tab is accessed for better cleanup prioritization
@@ -370,6 +371,14 @@ export class ScreenCaptureService {
                 `[${timestamp}] 🔄 TAB SWITCH: Attempting to switch to tab ${tabId}`
             );
 
+            // Prevent duplicate switches
+            if (this.isTabSwitchInProgress) {
+                console.log(
+                    `[${timestamp}] ⏭️ TAB SWITCH: Skipping switch - another switch already in progress`
+                );
+                return { success: false, error: "Tab switch already in progress" };
+            }
+
             // If we're already on this tab, no need to switch
             if (this.currentTabId === tabId && this.attachedTabs.has(tabId)) {
                 console.log(
@@ -377,6 +386,9 @@ export class ScreenCaptureService {
                 );
                 return { success: true };
             }
+
+            // Set flag to prevent duplicate switches
+            this.isTabSwitchInProgress = true;
 
             // Check if this is the current active tab
             const [activeTab] = await chrome.tabs.query({
@@ -501,6 +513,9 @@ export class ScreenCaptureService {
         } catch (error) {
             console.error("Failed to switch to tab:", tabId, error);
             return { success: false, error: error.message };
+        } finally {
+            // Always reset the flag, regardless of success or failure
+            this.isTabSwitchInProgress = false;
         }
     }
 
