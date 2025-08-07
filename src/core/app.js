@@ -5,34 +5,40 @@ import { UIState } from "../ui/ui-state.js";
 import { AudioHandler } from "../services/audio-handler.js";
 import { UIManager } from "./ui-manager.js";
 import { EventManager } from "./event-manager.js";
+import { LifecycleManager } from "./lifecycle-manager.js";
 
 export class ShoppingAssistant {
     constructor() {
         this.uiManager = new UIManager();
         this.audioHandler = new AudioHandler();
         this.eventManager = new EventManager(this.uiManager, this.audioHandler);
+        this.lifecycleManager = new LifecycleManager(
+            this.uiManager,
+            this.eventManager,
+            this.audioHandler
+        );
 
         this.uiManager.initializeElements();
         this.eventManager.initializeEventListeners();
         this.initializeCallbacks();
-        this.trackSidePanelLifecycle();
-        this.checkAndClearChatHistoryOnReload();
+        this.lifecycleManager.trackSidePanelLifecycle();
+        this.lifecycleManager.checkAndClearChatHistoryOnReload();
         this.eventManager.initializeCrossWindowSync();
-        this.restoreState();
+        this.lifecycleManager.restoreState();
         this.getCurrentPageInfo();
     }
 
     initializeCallbacks() {
         this.audioHandler.setTranscriptionCallback((transcription) => {
-            this.eventManager.handleTranscriptionReceived(transcription);
+            this.handleTranscriptionReceived(transcription);
         });
 
         this.audioHandler.setInterimCallback((interimText) => {
-            this.eventManager.handleInterimTranscription(interimText);
+            this.handleInterimTranscription(interimText);
         });
 
         this.audioHandler.setBotResponseCallback((response) => {
-            this.eventManager.handleBotResponse(response);
+            this.handleBotResponse(response);
         });
 
         this.audioHandler.setStatusCallback((status, type, duration) => {
@@ -40,95 +46,7 @@ export class ShoppingAssistant {
         });
 
         this.audioHandler.setListeningStoppedCallback((reason) => {
-            this.eventManager.handleListeningStopped(reason);
-        });
-    }
-
-    trackSidePanelLifecycle() {
-        // Clean up any orphaned debugger attachments when sidepanel opens
-        this.cleanupDebuggerAttachments();
-
-        chrome.runtime
-            .sendMessage({ type: MESSAGE_TYPES.SIDE_PANEL_OPENED })
-            .catch(() => {});
-        chrome.storage.local.set({ sidePanelOpen: true }).catch(() => {});
-
-        let sidepanelCloseTimeout = null;
-        const CLOSE_DELAY = 10000; // 10 seconds delay - increased to prevent premature closure
-
-        const setSidePanelClosed = async () => {
-            // Stop listening mode if active
-            if (this.audioHandler.isListening()) {
-                await this.eventManager.stopVoiceInput();
-                // Notify background script that listening has stopped
-                chrome.runtime
-                    .sendMessage({ type: MESSAGE_TYPES.LISTENING_STOPPED })
-                    .catch(() => {});
-            }
-
-            // Clean up debugger attachments when sidepanel closes
-            await this.cleanupDebuggerAttachments();
-
-            chrome.runtime
-                .sendMessage({ type: MESSAGE_TYPES.SIDE_PANEL_CLOSED })
-                .catch(() => {});
-            chrome.storage.local.set({ sidePanelOpen: false }).catch(() => {});
-        };
-
-        const handleSidePanelHidden = () => {
-            // Clear any existing timeout
-            if (sidepanelCloseTimeout) {
-                clearTimeout(sidepanelCloseTimeout);
-            }
-
-            // Don't set close timeout if listening mode is active
-            if (this.audioHandler.isListening()) {
-                return;
-            }
-
-            // Set a delayed timeout for closure
-            sidepanelCloseTimeout = setTimeout(async () => {
-                // Only close if the document is still hidden after the delay
-                if (document.hidden) {
-                    await setSidePanelClosed();
-                }
-            }, CLOSE_DELAY);
-        };
-
-        const handleSidePanelVisible = async () => {
-            // Cancel the delayed closure if sidepanel becomes visible again
-            if (sidepanelCloseTimeout) {
-                clearTimeout(sidepanelCloseTimeout);
-                sidepanelCloseTimeout = null;
-            }
-
-            // Check if debugger is properly attached before resuming
-            if (this.audioHandler.isListening()) {
-                try {
-                    // Give the debugger a moment to re-attach if needed
-                    await this.audioHandler.checkAndSwitchToActiveTab();
-                } catch (error) {
-                    // Ignore debugger re-attachment errors
-                }
-            }
-
-            // Re-open sidepanel
-            chrome.runtime
-                .sendMessage({ type: MESSAGE_TYPES.SIDE_PANEL_OPENED })
-                .catch(() => {});
-            chrome.storage.local.set({ sidePanelOpen: true }).catch(() => {});
-        };
-
-        // Handle beforeunload (actual page unload) - immediate closure
-        window.addEventListener("beforeunload", setSidePanelClosed);
-
-        // Handle visibility changes with delay
-        document.addEventListener("visibilitychange", () => {
-            if (document.hidden) {
-                handleSidePanelHidden();
-            } else {
-                handleSidePanelVisible();
-            }
+            this.handleListeningStopped(reason);
         });
     }
 
@@ -147,6 +65,23 @@ export class ShoppingAssistant {
         } catch (error) {
             // Ignore errors
         }
+    }
+
+    // Audio handler callback methods - maintain proper context
+    handleTranscriptionReceived(transcription) {
+        return this.eventManager.handleTranscriptionReceived(transcription);
+    }
+
+    handleInterimTranscription(interimText) {
+        return this.eventManager.handleInterimTranscription(interimText);
+    }
+
+    handleBotResponse(response) {
+        return this.eventManager.handleBotResponse(response);
+    }
+
+    handleListeningStopped(reason) {
+        return this.eventManager.handleListeningStopped(reason);
     }
 
     addMessage(content, type, isLoading = false) {
@@ -181,10 +116,6 @@ export class ShoppingAssistant {
         return this.uiManager.adjustTextareaHeight();
     }
 
-    async saveState() {
-        return this.uiManager.saveState();
-    }
-
     // Event handling delegation methods
     initializeEventListeners() {
         return this.eventManager.initializeEventListeners();
@@ -200,10 +131,6 @@ export class ShoppingAssistant {
 
     async refreshConversationUI() {
         return this.eventManager.refreshConversationUI();
-    }
-
-    updatePageInfo(pageInfo) {
-        return this.eventManager.updatePageInfo(pageInfo);
     }
 
     async handleSendMessage() {
@@ -262,96 +189,46 @@ export class ShoppingAssistant {
         return this.eventManager.handleExtensionReloaded();
     }
 
-    async checkAndClearChatHistoryOnReload() {
-        try {
-            const extensionReloaded = await this.getExtensionReloadedMarker();
-            const lastChatSaved = this.getLastChatSavedTime();
+    // Lifecycle management delegation methods
 
-            if (
-                extensionReloaded &&
-                lastChatSaved &&
-                extensionReloaded > lastChatSaved
-            ) {
-                await UnifiedConversationManager.clearConversation();
-                await this.clearExtensionReloadedMarker();
-            }
-        } catch (error) {
-            // Ignore errors
-        }
+    trackSidePanelLifecycle() {
+        return this.lifecycleManager.trackSidePanelLifecycle();
+    }
+
+    updatePageInfo(pageInfo) {
+        return this.lifecycleManager.updatePageInfo(pageInfo);
+    }
+
+    async saveState() {
+        return this.lifecycleManager.saveState();
+    }
+
+    async checkAndClearChatHistoryOnReload() {
+        return this.lifecycleManager.checkAndClearChatHistoryOnReload();
     }
 
     async getExtensionReloadedMarker() {
-        try {
-            const result = await new Promise((resolve) => {
-                chrome.storage.local.get(["extensionReloaded"], resolve);
-            });
-            return result.extensionReloaded;
-        } catch (error) {
-            return null;
-        }
+        return this.lifecycleManager.getExtensionReloadedMarker();
     }
 
     async clearExtensionReloadedMarker() {
-        try {
-            await new Promise((resolve) => {
-                chrome.storage.local.remove(["extensionReloaded"], resolve);
-            });
-        } catch (error) {
-            // Ignore errors
-        }
+        return this.lifecycleManager.clearExtensionReloadedMarker();
     }
 
     async getLastChatSavedTime() {
-        try {
-            const conversation =
-                await UnifiedConversationManager.getConversation();
-            return conversation.lastUpdated;
-        } catch (error) {
-            return null;
-        }
+        return this.lifecycleManager.getLastChatSavedTime();
     }
 
     async restoreState() {
-        try {
-            // Migrate from old localStorage if needed
-            await UnifiedConversationManager.migrateFromLocalStorage();
-
-            // Get messages and welcome screen state from unified manager
-            const messages =
-                await UnifiedConversationManager.getMessagesForUI();
-            const isWelcomeVisible =
-                await UnifiedConversationManager.getWelcomeScreenState();
-
-            if (messages && messages.length > 0) {
-                messages.forEach((msg) => {
-                    const messageDiv = MessageRenderer.createMessage(
-                        msg.content,
-                        msg.type
-                    );
-                    this.uiManager.elements.messages.appendChild(messageDiv);
-                });
-
-                this.hideWelcomeScreen();
-                this.scrollToBottom();
-            } else if (!isWelcomeVisible) {
-                this.hideWelcomeScreen();
-            } else {
-                this.uiManager.uiState.showStatus("Start a chat", "info");
-            }
-        } catch (error) {
-            console.error("Error restoring state:", error);
-            this.uiManager.uiState.showStatus("Start a chat", "info");
-        }
+        return this.lifecycleManager.restoreState();
     }
 
     async cleanupDebuggerAttachments() {
-        try {
-            // Clean up any existing debugger attachments
-            if (this.audioHandler && this.audioHandler.screenCapture) {
-                await this.audioHandler.screenCapture.cleanup();
-            }
-        } catch (error) {
-            console.error("Error cleaning up debugger attachments:", error);
-        }
+        return this.lifecycleManager.cleanupDebuggerAttachments();
+    }
+
+    // Property accessors for backward compatibility
+    get currentPageInfo() {
+        return this.eventManager.currentPageInfo;
     }
 }

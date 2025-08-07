@@ -111,6 +111,10 @@ export class ScreenCaptureService {
         return this.tabManager.attachedTabs;
     }
 
+    get monitoredTabs() {
+        return this.urlMonitor.monitoredTabs;
+    }
+
     async getTabUrl(tabId) {
         return this.tabManager.getTabUrl(tabId);
     }
