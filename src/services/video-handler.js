@@ -229,18 +229,10 @@ export class VideoHandler {
             if (this._skipNextTick) {
                 this._skipNextTick = false;
                 streamingLogger.logInfo("SKIP first tick after tab switch");
-                // Resume sending after the skipped tick
-                this.videoStreamingStarted = true;
-                streamingLogger.logInfo("RESUME video sending after switch");
+                // Do NOT auto-resume here; wait for stable frame + speech gate
                 return;
             }
-            // Optional safety: if speech is active but sending is off, resume
-            if (this.speechActive && !this.videoStreamingStarted) {
-                this.videoStreamingStarted = true;
-                streamingLogger.logInfo(
-                    "RESUME video sending (auto) due to active speech"
-                );
-            }
+            // Prevent auto-resume; only resume when first stable frame is captured below
             if (!this.screenCapture.hasStream()) {
                 const recoverySuccess = await this.recoverFromInvalidTab();
                 if (!recoverySuccess) {
@@ -281,6 +273,14 @@ export class VideoHandler {
                 streamingLogger.logInfo(
                     `CAPTURED frame from tab=${currIdAfter} (pre=${currIdBefore})`
                 );
+
+                // Resume sending only after first stable frame post-switch and while speech is active
+                if (this.speechActive && !this.videoStreamingStarted) {
+                    this.videoStreamingStarted = true;
+                    streamingLogger.logInfo(
+                        "RESUME video sending after stable frame"
+                    );
+                }
 
                 if (
                     this.videoStreamingStarted &&

@@ -150,6 +150,13 @@ export class EndpointDetectionService {
         if (this.callbacks.onResponseGeneration) {
             this.callbacks.onResponseGeneration(source);
         }
+
+        // Explicit utterance end: notify higher layer (AudioHandler) to stop media gates and send activityEnd
+        try {
+            if (this.callbacks?.onUtteranceEnded) {
+                this.callbacks.onUtteranceEnded(source);
+            }
+        } catch (_) {}
     }
 
     setResponseTimeout() {
