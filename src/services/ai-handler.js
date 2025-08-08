@@ -7,6 +7,7 @@ export class AIHandler {
         this.geminiAPI = new GeminiRealtimeClient();
         this.isGeminiConnected = false;
         this.currentPageInfo = null;
+        this._lastUserMessage = null; // finalized user text or transcript
 
         this.setupGeminiCallbacks();
         this.initializeGemini();
@@ -109,19 +110,20 @@ export class AIHandler {
     endUtterance() {
         (async () => {
             try {
-                // Build context: full history and page metadata (no explicit transcript here)
-                const { contents: historyContents, contextText } =
-                    await ContextAssembler.buildContext({
-                        currentTranscript: "",
-                        currentPageInfo: this.currentPageInfo,
-                    });
-                console.debug(
-                    `[AIHandler] endUtterance: sending history=${
-                        historyContents?.length || 0
-                    }, contextLen=${contextText?.length || 0}`
-                );
-                this.geminiAPI.sendHistoryContents(historyContents);
-                this.geminiAPI.sendTextChunk(contextText);
+                // Send only the finalized user message as a clientContent user turn
+                if (this._lastUserMessage && this._lastUserMessage.trim()) {
+                    const text = this._lastUserMessage.trim();
+                    console.debug(
+                        `[AIHandler] endUtterance: sending UserMessage len=${text.length}`
+                    );
+                    this.geminiAPI.sendHistoryContents([
+                        { role: "user", parts: [{ text }] },
+                    ]);
+                } else {
+                    console.debug(
+                        "[AIHandler] endUtterance: no finalized user message to send"
+                    );
+                }
             } catch (_) {}
             try {
                 this.geminiAPI.sendActivityEnd();
@@ -138,6 +140,10 @@ export class AIHandler {
 
     setCurrentPageInfo(pageInfo) {
         this.currentPageInfo = pageInfo || null;
+    }
+
+    setLastUserMessage(text) {
+        this._lastUserMessage = typeof text === "string" ? text : null;
     }
 
     // REST API Methods (for text messages)

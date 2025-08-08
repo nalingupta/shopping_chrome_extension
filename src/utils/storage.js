@@ -70,7 +70,7 @@ export function clearChatStorageOnReload() {
     try {
         ChatStateManager.clearState();
         ConversationHistoryManager.clearHistory();
-        UnifiedConversationManager.clearConversation();
+        // Do not clear unified conversation here; LifecycleManager will clear only on explicit extension reload
     } catch (error) {
         // Ignore errors during cleanup
     }

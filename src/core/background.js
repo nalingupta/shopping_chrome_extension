@@ -11,16 +11,16 @@ class BackgroundService {
     }
 
     initializeExtension() {
-        // Clear chat history on extension reload/install
-        this.clearChatHistoryOnReload();
+        // Mark extension reload; LifecycleManager will clear conversation when side panel loads
+        this.markExtensionReloaded();
 
         chrome.runtime.onInstalled.addListener(() => {
             chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
-            clearChatStorageOnReload();
+            this.markExtensionReloaded();
         });
 
         chrome.runtime.onStartup.addListener(() => {
-            clearChatStorageOnReload();
+            this.markExtensionReloaded();
         });
 
         chrome.action.onClicked.addListener(async (tab) => {
@@ -38,9 +38,8 @@ class BackgroundService {
         // Hot reload functionality removed
     }
 
-    async clearChatHistoryOnReload() {
+    async markExtensionReloaded() {
         try {
-            clearChatStorageOnReload();
             await StorageManager.set("extensionReloaded", Date.now());
         } catch (error) {
             // Ignore errors

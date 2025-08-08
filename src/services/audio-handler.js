@@ -35,6 +35,21 @@ export class AudioHandler {
                     callbacks.interim(text);
                 }
             },
+            onFinalResult: (finalText) => {
+                try {
+                    // Ensure finalized transcript is available to AIHandler before endUtterance
+                    this.aiHandler?.setLastUserMessage(finalText);
+                    // Keep UI in sync using existing pipeline
+                    const callbacks = this.stateManager.getCallbacks();
+                    if (callbacks.transcription)
+                        callbacks.transcription(finalText);
+                    console.debug(
+                        `[AudioHandler] onFinalResult forwarded len=${
+                            finalText?.length || 0
+                        }`
+                    );
+                } catch (_) {}
+            },
             onAudioStreamingStart: async () => {
                 await this.startAudioStreaming();
                 this.audioStreamingStarted = true;

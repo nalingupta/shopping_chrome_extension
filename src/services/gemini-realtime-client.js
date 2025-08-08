@@ -1,6 +1,7 @@
 import { API_CONFIG } from "../config/api-keys.js";
 import { streamingLogger } from "../utils/streaming-logger.js";
 import { SYSTEM_PROMPT } from "../prompt/system-prompt.js";
+import { ContextAssembler } from "./prompt/context-assembler.js";
 
 export class GeminiRealtimeClient {
     constructor() {
@@ -238,19 +239,8 @@ export class GeminiRealtimeClient {
         this.sendMessage(message);
     }
 
-    // Feature flag: send history via clientContent in Live. Toggle for diagnostics.
-    static SEND_HISTORY_IN_LIVE = false;
-
-    // Send an array of history turns in Gemini format: [{ role: "user"|"model", parts: [{ text }] }, ...]
+    // Send an array of turns via clientContent.turns: [{ role: "user"|"model", parts: [{ text }] }, ...]
     sendHistoryContents(contents) {
-        if (!GeminiRealtimeClient.SEND_HISTORY_IN_LIVE) {
-            try {
-                console.debug(
-                    "[RealtimeClient] SEND_HISTORY_IN_LIVE=false (skipping)"
-                );
-            } catch (_) {}
-            return;
-        }
         if (!Array.isArray(contents) || contents.length === 0) return;
         if (
             !this.isSetupComplete ||
@@ -271,11 +261,27 @@ export class GeminiRealtimeClient {
                 } textPreview=${JSON.stringify(firstText)}`
             );
         } catch (_) {}
-        for (const turn of contents) {
-            if (!turn || !turn.role || !turn.parts) continue;
-            const message = {
-                clientContent: { role: turn.role, parts: turn.parts },
-            };
+        // Batch all turns into a single clientContent message
+        const safeTurns = contents
+            .filter((t) => t && t.role && t.parts)
+            .map((t) => ({
+                // Live WS expects assistant turns labeled as "assistant" (not "model")
+                role: t.role === "model" ? "assistant" : t.role,
+                parts: t.parts,
+            }));
+        try {
+            const roleCounts = safeTurns.reduce(
+                (acc, t) => ((acc[t.role] = (acc[t.role] || 0) + 1), acc),
+                {}
+            );
+            console.debug(
+                `[RealtimeClient] history roles: user=${
+                    roleCounts.user || 0
+                } assistant=${roleCounts.assistant || 0}`
+            );
+        } catch (_) {}
+        if (safeTurns.length > 0) {
+            const message = { clientContent: { turns: safeTurns } };
             this.sendMessage(message);
         }
     }
@@ -440,6 +446,36 @@ export class GeminiRealtimeClient {
                 try {
                     console.debug("[RealtimeClient] setupComplete received");
                 } catch (_) {}
+                // Immediately send conversation history as clientContent turns (no media yet)
+                (async () => {
+                    try {
+                        const history =
+                            await ContextAssembler.buildHistoryContents();
+                        if (history?.length) {
+                            console.debug(
+                                `[RealtimeClient] sending ConversationHistory turns=${history.length}`
+                            );
+                            // Short preview of the first 2 history turns
+                            const previewCount = Math.min(2, history.length);
+                            for (let i = 0; i < previewCount; i++) {
+                                const t = history[i];
+                                const previewText = (
+                                    t?.parts?.[0]?.text || ""
+                                ).slice(0, 40);
+                                console.debug(
+                                    `[RealtimeClient] history[${i}] role=${
+                                        t.role
+                                    } textPreview=${JSON.stringify(
+                                        previewText
+                                    )}`
+                                );
+                            }
+                            this.sendHistoryContents(history);
+                        }
+                    } catch (e) {
+                        console.warn("[RealtimeClient] history send failed", e);
+                    }
+                })();
                 return;
             }
 

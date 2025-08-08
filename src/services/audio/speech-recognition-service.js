@@ -117,6 +117,16 @@ export class SpeechRecognitionService {
                         `[SpeechRec] final: len=${latestTranscript.length}`
                     );
                 } catch (_) {}
+                try {
+                    if (this.callbacks.onFinalResult) {
+                        this.callbacks.onFinalResult(latestTranscript.trim());
+                        console.debug(
+                            `[SpeechRec] onFinalResult len=${
+                                latestTranscript.trim().length
+                            }`
+                        );
+                    }
+                } catch (_) {}
                 this.handleWebSpeechFinalResult();
             }
         };
