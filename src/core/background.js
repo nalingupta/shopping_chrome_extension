@@ -163,9 +163,6 @@ class BackgroundService {
 
     async handleListeningStopped(request, sender, sendResponse) {
         try {
-            // Log that listening has stopped due to sidepanel closure
-            console.log("Listening stopped due to sidepanel closure");
-
             // Any additional cleanup can be added here if needed
             sendResponse({ success: true });
         } catch (error) {

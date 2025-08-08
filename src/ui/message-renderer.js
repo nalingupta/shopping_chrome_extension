@@ -1,10 +1,12 @@
 export class MessageRenderer {
-    static debouncedUpdateTimeout = null;
-    static lastInterimContent = "";
-    static pendingInterimUpdate = "";
-    static lastStreamingContent = ""; // Track last streaming content
+    constructor() {
+        this.debouncedUpdateTimeout = null;
+        this.lastInterimContent = "";
+        this.pendingInterimUpdate = "";
+        this.lastStreamingContent = ""; // Track last streaming content
+    }
 
-    static createMessage(content, type, isLoading = false) {
+    createMessage(content, type, isLoading = false) {
         const messageDiv = document.createElement("div");
         messageDiv.className = `message ${type}-message`;
 
@@ -17,7 +19,7 @@ export class MessageRenderer {
         return messageDiv;
     }
 
-    static createInterimMessage(content) {
+    createInterimMessage(content) {
         const messageDiv = document.createElement("div");
         messageDiv.className = "message user-message interim-message";
         messageDiv.id = "interim-message";
@@ -32,7 +34,7 @@ export class MessageRenderer {
         return messageDiv;
     }
 
-    static updateInterimMessage(content) {
+    updateInterimMessage(content) {
         // Store the pending update
         this.pendingInterimUpdate = content;
 
@@ -50,7 +52,7 @@ export class MessageRenderer {
         }
     }
 
-    static shouldUpdateInterim(newContent) {
+    shouldUpdateInterim(newContent) {
         // Don't update if content is the same
         if (newContent === this.lastInterimContent) {
             return false;
@@ -75,7 +77,7 @@ export class MessageRenderer {
         return true;
     }
 
-    static performInterimUpdate(content) {
+    performInterimUpdate(content) {
         const interimMessage = document.getElementById("interim-message");
         if (interimMessage && content !== this.lastInterimContent) {
             const contentDiv = interimMessage.querySelector(".message-content");
@@ -95,7 +97,7 @@ export class MessageRenderer {
         }
     }
 
-    static createStreamingMessage(content = "") {
+    createStreamingMessage(content = "") {
         // Clear any existing streaming message first
         this.clearStreamingMessage();
 
@@ -119,7 +121,7 @@ export class MessageRenderer {
         return messageDiv;
     }
 
-    static updateStreamingMessage(content) {
+    updateStreamingMessage(content) {
         // Don't update if content hasn't changed
         if (content === this.lastStreamingContent) {
             return;
@@ -143,7 +145,7 @@ export class MessageRenderer {
         }
     }
 
-    static finalizeStreamingMessage() {
+    finalizeStreamingMessage() {
         const streamingMessage = document.getElementById("streaming-message");
         if (streamingMessage) {
             // Remove typing indicator and convert to regular message
@@ -163,7 +165,7 @@ export class MessageRenderer {
         }
     }
 
-    static clearInterimMessage() {
+    clearInterimMessage() {
         // Clear any pending updates
         if (this.debouncedUpdateTimeout) {
             clearTimeout(this.debouncedUpdateTimeout);
@@ -180,7 +182,7 @@ export class MessageRenderer {
         this.pendingInterimUpdate = "";
     }
 
-    static clearStreamingMessage() {
+    clearStreamingMessage() {
         const streamingMessage = document.getElementById("streaming-message");
         if (streamingMessage) {
             streamingMessage.remove();
@@ -188,7 +190,7 @@ export class MessageRenderer {
         this.lastStreamingContent = "";
     }
 
-    static forceUpdateInterimMessage(content) {
+    forceUpdateInterimMessage(content) {
         // Force immediate update without debouncing (for final transcriptions)
         if (this.debouncedUpdateTimeout) {
             clearTimeout(this.debouncedUpdateTimeout);

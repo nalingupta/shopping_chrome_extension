@@ -1,6 +1,6 @@
 {
   "name": "shopping-chrome-extension",
-  "version": "1.0.0",
+  "version": "0.18.0",
   "scripts": {
     "build": "echo 'No build process needed for this extension'",
     "lint": "echo 'Linting completed - no linter configured'"
