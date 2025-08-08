@@ -52,6 +52,8 @@ export class GeminiRealtimeClient {
         this._historySent = null;
         // Utterances captured within the active WS session
         this._sessionUtterances = [];
+        // Guard to avoid double persistence on close + manual disconnect
+        this._hasPersistedUtterances = false;
     }
 
     async initialize() {
@@ -96,6 +98,8 @@ export class GeminiRealtimeClient {
                 this.ws.onopen = async () => {
                     this.isConnected = true;
                     this.reconnectAttempts = 0;
+                    this._hasPersistedUtterances = false;
+                    this._sessionUtterances = [];
 
                     // Ensure AudioContext is running after previous suspend on disconnect
                     try {
@@ -180,8 +184,11 @@ export class GeminiRealtimeClient {
                                     } | user=${up} | output=${ap}`
                                 );
                             });
-                            // Persist async (do not block close)
-                            this.#persistSessionUtterances();
+                            // Persist async once (do not block close)
+                            if (!this._hasPersistedUtterances) {
+                                this._hasPersistedUtterances = true;
+                                this.#persistSessionUtterances();
+                            }
                         }
                     } catch (_) {}
 
@@ -654,8 +661,10 @@ export class GeminiRealtimeClient {
             console.debug(
                 `[RealtimeClient] TurnSummary | channel=${channel} | modality=${modality} | session=${this._connectSeq} turn=${this._turnSeq} | audio=${this._turnStats.audioChunks} chunks, ${audioSize} | screens=${this._turnStats.screens} frames, ${screenSize}`
             );
-            // 2) History
-            console.debug(this.#formatHistoryLineForLog());
+            // 2) History (only on first turn or when non-empty)
+            if (this._turnSeq === 1 || (this._historySent && this._historySent.length > 0)) {
+                console.debug(this.#formatHistoryLineForLog());
+            }
             // 3) User
             console.debug(
                 `[RealtimeClient] User | len=${
@@ -692,26 +701,28 @@ export class GeminiRealtimeClient {
     #formatHistoryLineForLog() {
         const snap = Array.isArray(this._historySent) ? this._historySent : [];
         if (snap.length === 0) return "[RealtimeClient] History | empty";
-        const counts = snap.reduce(
-            (acc, t) => ((acc[t.role] = (acc[t.role] || 0) + 1), acc),
-            {}
-        );
+        const counts = snap.reduce((acc, t) => {
+            const role = t.role === "model" ? "assistant" : t.role;
+            acc[role] = (acc[role] || 0) + 1;
+            return acc;
+        }, {});
         const previews = [];
         if (snap.length <= 2) {
             snap.forEach((t, i) => {
                 const text = (t?.parts?.[0]?.text || "").slice(0, 60);
-                previews.push(`${i}:${t.role}=${JSON.stringify(text)}`);
+                const role = t.role === "model" ? "assistant" : t.role;
+                previews.push(`${i}:${role}=${JSON.stringify(text)}`);
             });
         } else if (snap.length === 3) {
             const first = snap[0];
             const last = snap[2];
             previews.push(
-                `first0:${first.role}=${JSON.stringify(
+                `first0:${first.role === "model" ? "assistant" : first.role}=${JSON.stringify(
                     (first?.parts?.[0]?.text || "").slice(0, 60)
                 )}`
             );
             previews.push(
-                `last0:${last.role}=${JSON.stringify(
+                `last0:${last.role === "model" ? "assistant" : last.role}=${JSON.stringify(
                     (last?.parts?.[0]?.text || "").slice(0, 60)
                 )}`
             );
@@ -721,22 +732,22 @@ export class GeminiRealtimeClient {
             const last1 = snap[snap.length - 2];
             const last0 = snap[snap.length - 1];
             previews.push(
-                `first0:${first0.role}=${JSON.stringify(
+                `first0:${first0.role === "model" ? "assistant" : first0.role}=${JSON.stringify(
                     (first0?.parts?.[0]?.text || "").slice(0, 60)
                 )}`
             );
             previews.push(
-                `first1:${first1.role}=${JSON.stringify(
+                `first1:${first1.role === "model" ? "assistant" : first1.role}=${JSON.stringify(
                     (first1?.parts?.[0]?.text || "").slice(0, 60)
                 )}`
             );
             previews.push(
-                `last1:${last1.role}=${JSON.stringify(
+                `last1:${last1.role === "model" ? "assistant" : last1.role}=${JSON.stringify(
                     (last1?.parts?.[0]?.text || "").slice(0, 60)
                 )}`
             );
             previews.push(
-                `last0:${last0.role}=${JSON.stringify(
+                `last0:${last0.role === "model" ? "assistant" : last0.role}=${JSON.stringify(
                     (last0?.parts?.[0]?.text || "").slice(0, 60)
                 )}`
             );
@@ -847,8 +858,11 @@ export class GeminiRealtimeClient {
 
         if (this.ws) {
             try {
-                // Before closing, persist utterances if any
-                await this.#persistSessionUtterances();
+                // Before closing, persist utterances if any (once)
+                if (!this._hasPersistedUtterances) {
+                    this._hasPersistedUtterances = true;
+                    await this.#persistSessionUtterances();
+                }
             } catch (_) {}
             this.ws.close();
             this.ws = null;
