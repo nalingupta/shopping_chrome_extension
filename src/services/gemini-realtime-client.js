@@ -661,8 +661,8 @@ export class GeminiRealtimeClient {
             console.debug(
                 `[RealtimeClient] TurnSummary | channel=${channel} | modality=${modality} | session=${this._connectSeq} turn=${this._turnSeq} | audio=${this._turnStats.audioChunks} chunks, ${audioSize} | screens=${this._turnStats.screens} frames, ${screenSize}`
             );
-            // 2) History (only on first turn or when non-empty)
-            if (this._turnSeq === 1 || (this._historySent && this._historySent.length > 0)) {
+            // 2) History (first turn only)
+            if (this._turnSeq === 1) {
                 console.debug(this.#formatHistoryLineForLog());
             }
             // 3) User
