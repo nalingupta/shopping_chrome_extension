@@ -101,7 +101,8 @@ export class AudioCaptureService {
 
             if (
                 type === "audioData" &&
-                this.geminiAPI.isGeminiConnectionActive()
+                this.geminiAPI.isGeminiConnectionActive() &&
+                this.geminiAPI.geminiAPI.isAudioInputEnabled()
             ) {
                 const uint8Array = new Uint8Array(pcmData.buffer);
                 const base64 = btoa(String.fromCharCode(...uint8Array));
@@ -133,7 +134,11 @@ export class AudioCaptureService {
             );
 
         audioProcessor.onaudioprocess = (event) => {
-            if (!this.geminiAPI.isGeminiConnectionActive()) return;
+            if (
+                !this.geminiAPI.isGeminiConnectionActive() ||
+                !this.geminiAPI.geminiAPI.isAudioInputEnabled()
+            )
+                return;
 
             const inputData = event.inputBuffer.getChannelData(0);
             const outputData = event.outputBuffer.getChannelData(0);

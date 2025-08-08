@@ -25,6 +25,7 @@ export class GeminiLiveAPI {
         this.reconnectAttempts = 0;
         this.maxReconnectAttempts = 3;
         this.isManualStop = false;
+        this.audioInputEnabled = false;
     }
 
     async initialize() {
@@ -164,6 +165,12 @@ Important: Only describe what you can actually see in the provided screen captur
                         },
                     ],
                 },
+                // Disable server-side automatic VAD; we will send explicit activityStart/activityEnd
+                realtimeInputConfig: {
+                    automaticActivityDetection: {
+                        disabled: true,
+                    },
+                },
                 generationConfig: {
                     temperature: 0.7,
                     topP: 0.95,
@@ -226,6 +233,56 @@ Important: Only describe what you can actually see in the provided screen captur
             },
         };
         this.sendMessage(message);
+    }
+
+    // Explicit utterance boundary controls
+    sendActivityStart() {
+        if (
+            !this.isSetupComplete ||
+            !this.ws ||
+            this.ws.readyState !== WebSocket.OPEN
+        ) {
+            return;
+        }
+        const message = { realtimeInput: { activityStart: {} } };
+        try {
+            this.ws.send(JSON.stringify(message));
+            streamingLogger.logInfo("↗️ Sent activityStart");
+        } catch (error) {
+            console.error("Failed to send activityStart:", error);
+        }
+    }
+
+    sendActivityEnd() {
+        if (
+            !this.isSetupComplete ||
+            !this.ws ||
+            this.ws.readyState !== WebSocket.OPEN
+        ) {
+            return;
+        }
+        const message = { realtimeInput: { activityEnd: {} } };
+        try {
+            this.ws.send(JSON.stringify(message));
+            streamingLogger.logInfo("↗️ Sent activityEnd");
+        } catch (error) {
+            console.error("Failed to send activityEnd:", error);
+        }
+    }
+
+    // Audio input gating
+    enableAudioInput() {
+        this.audioInputEnabled = true;
+        streamingLogger.logInfo("🎤 Audio input ENABLED");
+    }
+
+    disableAudioInput() {
+        this.audioInputEnabled = false;
+        streamingLogger.logInfo("🎤 Audio input DISABLED");
+    }
+
+    isAudioInputEnabled() {
+        return this.audioInputEnabled === true;
     }
 
     sendMessage(message) {

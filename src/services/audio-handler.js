@@ -45,6 +45,12 @@ export class AudioHandler {
                         this.videoHandler.setVideoStreamingStarted(true);
                     }
                 } catch (_) {}
+                // Explicit utterance start: enable audio and inform Gemini
+                try {
+                    if (this.aiHandler) {
+                        this.aiHandler.startUtterance();
+                    }
+                } catch (_) {}
             },
             onVideoStreamingStart: () => {
                 // This will be handled by VideoHandler
@@ -70,6 +76,7 @@ export class AudioHandler {
                 }
             },
             onEndpointDetectionStart: () => this.startEndpointDetection(),
+            onUtteranceEnded: () => this.onExplicitUtteranceEnd(),
         });
     }
 
@@ -199,6 +206,30 @@ export class AudioHandler {
         try {
             if (this.videoHandler) {
                 this.videoHandler.speechActive = false;
+            }
+        } catch (_) {}
+    }
+
+    onExplicitUtteranceEnd() {
+        // Freeze both streams and send activityEnd
+        try {
+            if (this.videoHandler) {
+                this.videoHandler.speechActive = false;
+                this.videoHandler.setVideoStreamingStarted(false);
+            }
+        } catch (_) {}
+        // Reset speech-recognition start flags so the next utterance re-triggers start
+        try {
+            if (this.speechRecognition) {
+                this.speechRecognition.setState({
+                    audioStreamingStarted: false,
+                    videoStreamingStarted: false,
+                });
+            }
+        } catch (_) {}
+        try {
+            if (this.aiHandler) {
+                this.aiHandler.endUtterance();
             }
         } catch (_) {}
     }

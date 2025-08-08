@@ -92,6 +92,23 @@ export class AIHandler {
         }
     }
 
+    // Utterance boundary helpers
+    startUtterance() {
+        try {
+            this.geminiAPI.enableAudioInput();
+            this.geminiAPI.sendActivityStart();
+        } catch (_) {}
+    }
+
+    endUtterance() {
+        try {
+            this.geminiAPI.sendActivityEnd();
+        } catch (_) {}
+        try {
+            this.geminiAPI.disableAudioInput();
+        } catch (_) {}
+    }
+
     // REST API Methods (for text messages)
     async sendTextMessage(message) {
         // Use REST API flow for text input
