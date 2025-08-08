@@ -72,22 +72,8 @@ export class UIManager {
     setUserInterim(text) {
         this.hideWelcomeScreen();
         if (this.controller) {
-            try {
-                console.debug(
-                    `[UIManager] setUserInterim via controller len=${
-                        text?.length || 0
-                    }`
-                );
-            } catch (_) {}
             this.controller.onInterim(text);
         } else {
-            try {
-                console.debug(
-                    `[UIManager] setUserInterim via renderer len=${
-                        text?.length || 0
-                    }`
-                );
-            } catch (_) {}
             this.conversationRenderer?.setUserInterim(text);
         }
     }

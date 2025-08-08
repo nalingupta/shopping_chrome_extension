@@ -114,11 +114,9 @@ export class AIHandler {
                 if (this._lastUserMessage && this._lastUserMessage.trim()) {
                     const text = this._lastUserMessage.trim();
                     console.debug(
-                        `[AIHandler] endUtterance: sending UserMessage len=${text.length}`
+                        `[AIHandler] endUtterance: UserMessage len=${text.length}`
                     );
-                    this.geminiAPI.sendHistoryContents([
-                        { role: "user", parts: [{ text }] },
-                    ]);
+                    this.geminiAPI.sendUserMessage(text);
                 } else {
                     console.debug(
                         "[AIHandler] endUtterance: no finalized user message to send"

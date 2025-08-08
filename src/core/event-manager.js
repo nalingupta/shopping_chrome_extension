@@ -301,11 +301,6 @@ export class EventManager {
             interimText &&
             this.multimediaOrchestrator.isMultimediaSessionActive()
         ) {
-            try {
-                console.debug(
-                    `[EventManager] interim received len=${interimText.length}`
-                );
-            } catch (_) {}
             this.uiManager.setUserInterim(interimText);
         }
     }

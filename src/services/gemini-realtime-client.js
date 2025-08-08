@@ -220,27 +220,11 @@ export class GeminiRealtimeClient {
         } catch (_) {}
     }
 
-    // Optional helper to send a text chunk to the WS
-    sendTextChunk(text) {
-        if (!text || !text.trim()) return;
-        if (
-            !this.isSetupComplete ||
-            !this.ws ||
-            this.ws.readyState !== WebSocket.OPEN
-        ) {
-            return;
-        }
-        const message = { realtimeInput: { text } };
-        try {
-            console.debug(
-                `[RealtimeClient] Sending context text len=${text.length}`
-            );
-        } catch (_) {}
-        this.sendMessage(message);
-    }
+    // Deprecated: text chunks over realtimeInput are not used anymore
+    sendTextChunk(_) {}
 
-    // Send an array of turns via clientContent.turns: [{ role: "user"|"model", parts: [{ text }] }, ...]
-    sendHistoryContents(contents) {
+    // One-time conversation history after setupComplete
+    sendConversationHistory(contents) {
         if (!Array.isArray(contents) || contents.length === 0) return;
         if (
             !this.isSetupComplete ||
@@ -249,18 +233,6 @@ export class GeminiRealtimeClient {
         ) {
             return;
         }
-        try {
-            console.debug(
-                `[RealtimeClient] Sending history turns=${contents.length}`
-            );
-            const first = contents[0] || {};
-            const firstText = (first.parts?.[0]?.text || "").slice(0, 60);
-            console.debug(
-                `[RealtimeClient] history[0]: role=${
-                    first.role
-                } textPreview=${JSON.stringify(firstText)}`
-            );
-        } catch (_) {}
         // Batch all turns into a single clientContent message
         const safeTurns = contents
             .filter((t) => t && t.role && t.parts)
@@ -274,16 +246,52 @@ export class GeminiRealtimeClient {
                 (acc, t) => ((acc[t.role] = (acc[t.role] || 0) + 1), acc),
                 {}
             );
+            const previews = safeTurns.slice(0, 2).map((t, i) => {
+                const textPreview = (t?.parts?.[0]?.text || "").slice(0, 60);
+                return `${i}:${t.role}=${JSON.stringify(textPreview)}`;
+            });
             console.debug(
-                `[RealtimeClient] history roles: user=${
-                    roleCounts.user || 0
-                } assistant=${roleCounts.assistant || 0}`
+                `[RealtimeClient] ConversationHistory send | turns=${
+                    safeTurns.length
+                } | roles user=${roleCounts.user || 0} assistant=${
+                    roleCounts.assistant || 0
+                } | previews ${previews.join(" ")}`
             );
         } catch (_) {}
         if (safeTurns.length > 0) {
             const message = { clientContent: { turns: safeTurns } };
             this.sendMessage(message);
         }
+    }
+
+    // Per-turn finalized user message only
+    sendUserMessage(text) {
+        const trimmed = typeof text === "string" ? text.trim() : "";
+        if (!trimmed) return;
+        if (
+            !this.isSetupComplete ||
+            !this.ws ||
+            this.ws.readyState !== WebSocket.OPEN
+        ) {
+            return;
+        }
+        try {
+            const preview = JSON.stringify(trimmed.slice(0, 80));
+            console.debug(
+                `[RealtimeClient] UserMessage send | len=${trimmed.length} | preview=${preview}`
+            );
+        } catch (_) {}
+        const message = {
+            clientContent: {
+                turns: [
+                    {
+                        role: "user",
+                        parts: [{ text: trimmed }],
+                    },
+                ],
+            },
+        };
+        this.sendMessage(message);
     }
 
     sendAudioChunk(base64Data) {
@@ -444,7 +452,7 @@ export class GeminiRealtimeClient {
                 this.isSetupComplete = true;
                 this.processBufferedChunks();
                 try {
-                    console.debug("[RealtimeClient] setupComplete received");
+                    console.debug("[RealtimeClient] SetupComplete");
                 } catch (_) {}
                 // Immediately send conversation history as clientContent turns (no media yet)
                 (async () => {
@@ -452,25 +460,7 @@ export class GeminiRealtimeClient {
                         const history =
                             await ContextAssembler.buildHistoryContents();
                         if (history?.length) {
-                            console.debug(
-                                `[RealtimeClient] sending ConversationHistory turns=${history.length}`
-                            );
-                            // Short preview of the first 2 history turns
-                            const previewCount = Math.min(2, history.length);
-                            for (let i = 0; i < previewCount; i++) {
-                                const t = history[i];
-                                const previewText = (
-                                    t?.parts?.[0]?.text || ""
-                                ).slice(0, 40);
-                                console.debug(
-                                    `[RealtimeClient] history[${i}] role=${
-                                        t.role
-                                    } textPreview=${JSON.stringify(
-                                        previewText
-                                    )}`
-                                );
-                            }
-                            this.sendHistoryContents(history);
+                            this.sendConversationHistory(history);
                         }
                     } catch (e) {
                         console.warn("[RealtimeClient] history send failed", e);
