@@ -627,23 +627,11 @@ export class GeminiRealtimeClient {
             });
         }
 
-        // Record utterance for this WS session
-        try {
-            const user = this._turnStats.userText || "";
-            const assistant = finalText || "";
-            if (user || assistant) {
-                this._sessionUtterances.push({
-                    user,
-                    assistant,
-                    ts: Date.now(),
-                });
-            }
-        } catch (_) {}
-
         // Emit four-line TurnSummary (more readable)
         try {
             const modality = this._turnStats.audioChunks > 0 ? "voice" : "text";
             const channel = "WS";
+            const uttNum = this._sessionUtterances.length + 1; // current utterance index (previous-only buffer)
             const userPreview = JSON.stringify(
                 (this._turnStats.userText || "").slice(0, 120)
             );
@@ -659,7 +647,7 @@ export class GeminiRealtimeClient {
 
             // 1) Summary
             console.debug(
-                `[RealtimeClient] TurnSummary | channel=${channel} | modality=${modality} | session=${this._connectSeq} turn=${this._turnSeq} | audio=${this._turnStats.audioChunks} chunks, ${audioSize} | screens=${this._turnStats.screens} frames, ${screenSize}`
+                `[RealtimeClient] TurnSummary | utt=${uttNum} | channel=${channel} | modality=${modality} | session=${this._connectSeq} turn=${this._turnSeq} | audio=${this._turnStats.audioChunks} chunks, ${audioSize} | screens=${this._turnStats.screens} frames, ${screenSize}`
             );
             // 2) History (first turn only)
             if (this._turnSeq === 1) {
@@ -667,26 +655,25 @@ export class GeminiRealtimeClient {
             }
             // 3) User
             console.debug(
-                `[RealtimeClient] User | len=${
+                `[RealtimeClient] User | utt=${uttNum} | len=${
                     (this._turnStats.userText || "").length
                 } | ${userPreview}`
             );
             // 4) Output
             console.debug(
-                `[RealtimeClient] Output | len=${
+                `[RealtimeClient] Output | utt=${uttNum} | len=${
                     finalText?.length || 0
                 } | ${outputPreview}`
             );
-            // 5) Utterance
-            console.debug(
-                `[RealtimeClient] Utterance ${
-                    this._sessionUtterances.length
-                } | userLen=${
-                    (this._turnStats.userText || "").length
-                } | outputLen=${
-                    finalText?.length || 0
-                } | userPreview=${userPreview} | outputPreview=${outputPreview}`
-            );
+        } catch (_) {}
+
+        // Append current utterance AFTER logging so previous-only semantics hold
+        try {
+            const user = this._turnStats.userText || "";
+            const assistant = finalText || "";
+            if (user || assistant) {
+                this._sessionUtterances.push({ user, assistant, ts: Date.now() });
+            }
         } catch (_) {}
     }
 
