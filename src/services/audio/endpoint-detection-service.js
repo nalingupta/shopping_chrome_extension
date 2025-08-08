@@ -20,6 +20,8 @@ export class EndpointDetectionService {
             onResponseGeneration: null,
             onStatus: null,
             onEndpointDetectionStart: null,
+            onSpeechStart: null,
+            onUtteranceEnded: null,
         };
 
         this.state = {
@@ -77,6 +79,11 @@ export class EndpointDetectionService {
     onSpeechDetected() {
         this.endpointDetection.lastSpeechTime = Date.now();
         this.resetSilenceTimer();
+        if (this.callbacks.onSpeechStart) {
+            try {
+                this.callbacks.onSpeechStart();
+            } catch (_) {}
+        }
     }
 
     onAudioLevelDetected(level) {

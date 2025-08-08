@@ -102,14 +102,19 @@ export class AudioCaptureService {
 
             if (type !== "audioData") return;
 
-            // 1) Gemini path (priority, unchanged)
+            // 1) Gemini path (priority): send only after activityStart is sent
             if (
                 this.geminiAPI.isGeminiConnectionActive() &&
-                this.geminiAPI.geminiAPI.isAudioInputEnabled()
+                this.geminiAPI.geminiAPI.isAudioInputEnabled() &&
+                this.geminiAPI.geminiAPI.hasActiveUtterance()
             ) {
                 const uint8Array = new Uint8Array(pcmData.buffer);
                 const base64 = btoa(String.fromCharCode(...uint8Array));
                 this.geminiAPI.sendAudioData(base64);
+                try {
+                    // concise trace for diagnostics only
+                    console.log("[Gemini] audio-frame", uint8Array.byteLength);
+                } catch (_) {}
             }
 
             // 2) Deepgram path (non-blocking, binary Int16)

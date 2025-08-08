@@ -95,8 +95,11 @@ export class AIHandler {
     // Utterance boundary helpers
     startUtterance() {
         try {
-            this.geminiAPI.enableAudioInput();
+            console.log("[AIHandler] startUtterance (enter)");
+            // Send start first, then enable audio to avoid race where frames arrive before start
             this.geminiAPI.sendActivityStart();
+            this.geminiAPI.enableAudioInput();
+            console.log("[AIHandler] startUtterance (sent)");
         } catch (_) {}
     }
 
@@ -106,6 +109,7 @@ export class AIHandler {
         } catch (_) {}
         try {
             this.geminiAPI.disableAudioInput();
+            console.log("[AIHandler] endUtterance");
         } catch (_) {}
     }
 

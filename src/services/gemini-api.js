@@ -14,6 +14,7 @@ export class GeminiLiveAPI {
         this.isProcessingTurn = false;
         this.currentStreamingResponse = ""; // Track streaming response
         this.isStreaming = false; // Track if we're currently streaming
+        this.activeUtterance = false; // True after activityStart is sent
         this.callbacks = {
             onBotResponse: null,
             onConnectionStateChange: null,
@@ -86,6 +87,7 @@ export class GeminiLiveAPI {
 
                     // Start streaming logger
                     streamingLogger.start();
+                    console.log("[Gemini] setup requested");
 
                     if (this.callbacks.onConnectionStateChange) {
                         this.callbacks.onConnectionStateChange("connected");
@@ -113,6 +115,7 @@ export class GeminiLiveAPI {
                 this.ws.onclose = (event) => {
                     this.isConnected = false;
                     this.isSetupComplete = false;
+                    this.activeUtterance = false;
                     this.stopKeepAlive();
                     this.clearBuffers();
 
@@ -204,12 +207,15 @@ Important: Only describe what you can actually see in the provided screen captur
         // Log audio chunk for streaming statistics
         streamingLogger.logAudioChunk(base64Data.length);
 
+        // Send audio using mediaChunks per Gemini Live WS schema
         const message = {
             realtimeInput: {
-                audio: {
-                    data: base64Data,
-                    mimeType: "audio/pcm;rate=16000",
-                },
+                mediaChunks: [
+                    {
+                        data: base64Data,
+                        mimeType: "audio/pcm;rate=16000",
+                    },
+                ],
             },
         };
         this.sendMessage(message);
@@ -249,12 +255,21 @@ Important: Only describe what you can actually see in the provided screen captur
             !this.ws ||
             this.ws.readyState !== WebSocket.OPEN
         ) {
+            try {
+                console.warn("[Gemini] skip activityStart", {
+                    setupComplete: this.isSetupComplete,
+                    hasWs: !!this.ws,
+                    readyState: this.ws ? this.ws.readyState : -1,
+                });
+            } catch (_) {}
             return;
         }
         const message = { realtimeInput: { activityStart: {} } };
         try {
             this.ws.send(JSON.stringify(message));
             streamingLogger.logInfo("↗️ Sent activityStart");
+            console.log("[Gemini] activityStart sent");
+            this.activeUtterance = true;
         } catch (error) {
             console.error("Failed to send activityStart:", error);
         }
@@ -272,6 +287,8 @@ Important: Only describe what you can actually see in the provided screen captur
         try {
             this.ws.send(JSON.stringify(message));
             streamingLogger.logInfo("↗️ Sent activityEnd");
+            console.log("[Gemini] activityEnd sent");
+            this.activeUtterance = false;
         } catch (error) {
             console.error("Failed to send activityEnd:", error);
         }
@@ -315,11 +332,68 @@ Important: Only describe what you can actually see in the provided screen captur
         try {
             const message = JSON.parse(data);
 
+            // Minimal receive-side tracing to diagnose missing text
+            try {
+                const hasServerContent = !!message.serverContent;
+                const hasModelTurn = !!message.serverContent?.modelTurn;
+                const hasCandidates =
+                    Array.isArray(message.candidates) ||
+                    Array.isArray(message.serverContent?.candidates);
+                const hasRealtimeOutput = !!message.realtimeOutput;
+                const hasOutput = Array.isArray(message.output);
+
+                const hasText = !!(
+                    message.text ||
+                    message.delta?.text ||
+                    message.serverContent?.text ||
+                    (Array.isArray(message.serverContent?.parts) &&
+                        message.serverContent.parts.some((p) => p.text)) ||
+                    (Array.isArray(message.serverContent?.modelTurn?.parts) &&
+                        message.serverContent.modelTurn.parts.some(
+                            (p) => p.text
+                        )) ||
+                    (Array.isArray(message.candidates) &&
+                        message.candidates.some(
+                            (c) =>
+                                Array.isArray(c?.content?.parts) &&
+                                c.content.parts.some((p) => p.text)
+                        )) ||
+                    (Array.isArray(message.serverContent?.candidates) &&
+                        message.serverContent.candidates.some(
+                            (c) =>
+                                Array.isArray(c?.content?.parts) &&
+                                c.content.parts.some((p) => p.text)
+                        )) ||
+                    (Array.isArray(message.realtimeOutput?.output) &&
+                        message.realtimeOutput.output.some(
+                            (o) =>
+                                Array.isArray(o?.content?.parts) &&
+                                o.content.parts.some((p) => p.text)
+                        )) ||
+                    (Array.isArray(message.output) &&
+                        message.output.some(
+                            (o) =>
+                                Array.isArray(o?.content?.parts) &&
+                                o.content.parts.some((p) => p.text)
+                        ))
+                );
+                console.log("[Gemini] rx", {
+                    keys: Object.keys(message).slice(0, 5),
+                    hasText,
+                    hasServerContent,
+                    hasModelTurn,
+                    hasCandidates,
+                    hasRealtimeOutput,
+                    hasOutput,
+                });
+            } catch (_) {}
+
             if (
                 message.setupComplete !== undefined ||
                 message.setup_complete !== undefined
             ) {
                 this.isSetupComplete = true;
+                console.log("[Gemini] setupComplete");
                 this.processBufferedChunks();
                 return;
             }
@@ -347,6 +421,9 @@ Important: Only describe what you can actually see in the provided screen captur
             if (chunkText) {
                 this.currentStreamingResponse += chunkText;
                 this.isStreaming = true;
+                try {
+                    console.log("[Gemini] text-chunk", chunkText.slice(0, 40));
+                } catch (_) {}
 
                 // Send real-time streaming update to UI (ChatGPT-style)
                 if (this.callbacks.onStreamingUpdate) {
@@ -373,6 +450,7 @@ Important: Only describe what you can actually see in the provided screen captur
                 this.currentStreamingResponse = "";
                 this.isStreaming = false;
                 this.isProcessingTurn = false;
+                console.log("[Gemini] turnComplete");
                 break;
             }
         }
@@ -381,34 +459,84 @@ Important: Only describe what you can actually see in the provided screen captur
     extractTextFromMessage(message) {
         let text = "";
 
-        // Check for different possible response structures
-        if (
-            message.serverContent &&
-            message.serverContent.modelTurn &&
-            message.serverContent.modelTurn.parts
-        ) {
-            message.serverContent.modelTurn.parts.forEach((part) => {
-                if (part.text) {
-                    text += part.text;
+        // Known shapes from Gemini Live API
+        // 1) serverContent.modelTurn.parts[].text
+        const modelTurnParts = message.serverContent?.modelTurn?.parts;
+        if (Array.isArray(modelTurnParts)) {
+            modelTurnParts.forEach((part) => {
+                if (part?.text) text += part.text;
+            });
+        }
+
+        // 2) serverContent.parts[].text
+        const serverParts = message.serverContent?.parts;
+        if (Array.isArray(serverParts)) {
+            serverParts.forEach((part) => {
+                if (part?.text) text += part.text;
+            });
+        }
+
+        // 3) serverContent.text
+        if (message.serverContent?.text) {
+            text += message.serverContent.text;
+        }
+
+        // 4) top-level text and delta.text (incremental)
+        if (message.text) {
+            text += message.text;
+        }
+        if (message.delta?.text) {
+            text += message.delta.text;
+        }
+
+        // 5) candidates[].content.parts[].text
+        const candidates = message.candidates;
+        if (Array.isArray(candidates)) {
+            candidates.forEach((c) => {
+                const parts = c?.content?.parts;
+                if (Array.isArray(parts)) {
+                    parts.forEach((p) => {
+                        if (p?.text) text += p.text;
+                    });
                 }
             });
         }
 
-        // Check for direct text in serverContent
-        if (message.serverContent && message.serverContent.text) {
-            text += message.serverContent.text;
+        // 6) serverContent.candidates[].content.parts[].text
+        const scCandidates = message.serverContent?.candidates;
+        if (Array.isArray(scCandidates)) {
+            scCandidates.forEach((c) => {
+                const parts = c?.content?.parts;
+                if (Array.isArray(parts)) {
+                    parts.forEach((p) => {
+                        if (p?.text) text += p.text;
+                    });
+                }
+            });
         }
 
-        // Check for direct text in message
-        if (message.text) {
-            text += message.text;
+        // 7) realtimeOutput.output[].content.parts[].text
+        const rtOutput = message.realtimeOutput?.output;
+        if (Array.isArray(rtOutput)) {
+            rtOutput.forEach((o) => {
+                const parts = o?.content?.parts;
+                if (Array.isArray(parts)) {
+                    parts.forEach((p) => {
+                        if (p?.text) text += p.text;
+                    });
+                }
+            });
         }
 
-        // Check for parts array in serverContent
-        if (message.serverContent && message.serverContent.parts) {
-            message.serverContent.parts.forEach((part) => {
-                if (part.text) {
-                    text += part.text;
+        // 8) output[].content.parts[].text
+        const outArray = message.output;
+        if (Array.isArray(outArray)) {
+            outArray.forEach((o) => {
+                const parts = o?.content?.parts;
+                if (Array.isArray(parts)) {
+                    parts.forEach((p) => {
+                        if (p?.text) text += p.text;
+                    });
                 }
             });
         }
@@ -536,6 +664,7 @@ Important: Only describe what you can actually see in the provided screen captur
 
         this.isConnected = false;
         this.isSetupComplete = false;
+        this.activeUtterance = false;
         this.clearBuffers();
 
         // Stop streaming logger
@@ -569,6 +698,10 @@ Important: Only describe what you can actually see in the provided screen captur
             isConnected: this.isConnected,
             isSetupComplete: this.isSetupComplete,
         };
+    }
+
+    hasActiveUtterance() {
+        return this.activeUtterance === true;
     }
 
     // Await completion of the current turn; resolves with final text or null on disconnect

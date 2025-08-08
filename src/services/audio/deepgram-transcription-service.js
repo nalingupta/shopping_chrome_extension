@@ -41,6 +41,7 @@ export class DeepgramTranscriptionService {
         this.streamEpochMs = null;
         this.sentAnyAudio = false;
         this.bufferedInt16 = new Int16Array(0);
+        this._loggedUtteranceStart = false;
     }
 
     setCallbacks(callbacks) {
@@ -167,10 +168,8 @@ export class DeepgramTranscriptionService {
 
         // Coalesce ~20ms to reduce WS overhead
         this.bufferedInt16 = this.concatInt16(this.bufferedInt16, int16Frame);
-        const minSamples = Math.max(
-            1,
-            Math.floor(this.config.sample_rate * 0.02)
-        );
+        const sr = this.config.sample_rate || 16000;
+        const minSamples = Math.max(1, Math.floor(sr * 0.02));
         if (this.bufferedInt16.length >= minSamples) {
             const toSend = this.bufferedInt16;
             this.bufferedInt16 = new Int16Array(0);
@@ -202,6 +201,12 @@ export class DeepgramTranscriptionService {
                     this.speechBuffer.interimText = text;
                     this.speechBuffer.lastWebSpeechUpdate = Date.now();
                 }
+                if (!this._loggedUtteranceStart) {
+                    streamingLogger.logInfo(
+                        `[DG] first-interim len=${text.length}`
+                    );
+                    this._loggedUtteranceStart = true;
+                }
                 this.callbacks.onInterimResult(text);
             }
             if (isFinal && text && this.callbacks.onInterimResult) {
@@ -214,6 +219,8 @@ export class DeepgramTranscriptionService {
             }
 
             if (speechFinal) {
+                streamingLogger.logInfo("[DG] endpoint (speech_final=true)");
+                this._loggedUtteranceStart = false;
                 // Endpoint reached: mark as final and trigger app's utterance end flow
                 if (this.callbacks.onWebSpeechFinalResult) {
                     this.callbacks.onWebSpeechFinalResult();

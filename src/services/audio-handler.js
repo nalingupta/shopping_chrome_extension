@@ -77,6 +77,7 @@ export class AudioHandler {
             },
             onEndpointDetectionStart: () => this.startEndpointDetection(),
             onUtteranceEnded: () => this.onExplicitUtteranceEnd(),
+            onSpeechStart: () => this.onSpeechDetected(),
         });
     }
 
@@ -187,10 +188,14 @@ export class AudioHandler {
     }
 
     onSpeechDetected() {
-        this.endpointDetection.onSpeechDetected();
         // Gate Gemini start on actual speech detection (local VAD)
         if (!this.audioStreamingStarted) {
             this.audioStreamingStarted = true;
+            try {
+                console.log(
+                    "[VAD] speech start -> startUtterance + enable video"
+                );
+            } catch (_) {}
             // Enable video sending during speech
             try {
                 if (this.videoHandler) {
@@ -201,9 +206,14 @@ export class AudioHandler {
             // Start utterance for Gemini (enable audio input + activityStart)
             try {
                 if (this.aiHandler) {
+                    console.log("[Gemini] activityStart");
                     this.aiHandler.startUtterance();
                 }
-            } catch (_) {}
+            } catch (e) {
+                try {
+                    console.error("[AudioHandler] startUtterance failed", e);
+                } catch (_) {}
+            }
         }
     }
 
@@ -222,6 +232,9 @@ export class AudioHandler {
     }
 
     handleWebSpeechFinalResult() {
+        try {
+            console.log("[DG] endpoint -> handleWebSpeechFinalResult");
+        } catch (_) {}
         this.endpointDetection.handleWebSpeechFinalResult();
         // Stop sending video frames when speech finalizes
         try {
