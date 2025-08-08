@@ -200,14 +200,15 @@ export class EventManager {
     }
 
     async stopVoiceInput() {
+        // Flip UI to idle immediately; background cleanup continues
         this.uiManager.elements.voiceButton.classList.remove("listening");
         this.uiManager.elements.voiceButton.title = "";
+        this.uiManager.uiState.setSpeechState("idle");
+        this.uiManager.uiState.showStatus("Start a chat", "info");
+        // Proceed with full stop
         await this.multimediaOrchestrator.stopMultimedia();
         // Clear any live UI buffers
         this.uiManager.conversationRenderer?.reset();
-
-        this.uiManager.uiState.setSpeechState("idle");
-        this.uiManager.uiState.showStatus("Start a chat", "info");
     }
 
     handleListeningStopped(reason) {

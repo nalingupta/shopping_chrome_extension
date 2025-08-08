@@ -26,6 +26,7 @@ export class GeminiLiveAPI {
         this.maxReconnectAttempts = 3;
         this.isManualStop = false;
         this.audioInputEnabled = false;
+        this.pendingTurnResolvers = [];
     }
 
     async initialize() {
@@ -121,6 +122,12 @@ export class GeminiLiveAPI {
                     if (this.callbacks.onConnectionStateChange) {
                         this.callbacks.onConnectionStateChange("disconnected");
                     }
+
+                    // Resolve any pending turn waiters on close
+                    try {
+                        const resolvers = this.pendingTurnResolvers.splice(0);
+                        resolvers.forEach((resolve) => resolve(null));
+                    } catch (_) {}
 
                     if (
                         !this.isManualStop &&
@@ -417,6 +424,12 @@ Important: Only describe what you can actually see in the provided screen captur
                 timestamp: Date.now(),
             });
         }
+
+        // Resolve any pending waiters for turn completion
+        try {
+            const resolvers = this.pendingTurnResolvers.splice(0);
+            resolvers.forEach((resolve) => resolve(finalText || ""));
+        } catch (_) {}
     }
 
     processBufferedChunks() {
@@ -527,6 +540,12 @@ Important: Only describe what you can actually see in the provided screen captur
 
         // Stop streaming logger
         streamingLogger.stop();
+
+        // Resolve any pending turn waiters on explicit disconnect
+        try {
+            const resolvers = this.pendingTurnResolvers.splice(0);
+            resolvers.forEach((resolve) => resolve(null));
+        } catch (_) {}
     }
 
     setBotResponseCallback(callback) {
@@ -550,5 +569,12 @@ Important: Only describe what you can actually see in the provided screen captur
             isConnected: this.isConnected,
             isSetupComplete: this.isSetupComplete,
         };
+    }
+
+    // Await completion of the current turn; resolves with final text or null on disconnect
+    waitForTurnCompletion() {
+        return new Promise((resolve) => {
+            this.pendingTurnResolvers.push(resolve);
+        });
     }
 }

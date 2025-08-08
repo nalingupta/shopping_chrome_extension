@@ -54,7 +54,10 @@ export class MultimediaOrchestrator {
             await this.audioHandler.setupAudioCapture();
             await this.startMediaStreaming();
 
-            // Start audio processing
+            // Start audio worklet immediately so frames are available for DG
+            await this.audioHandler.startAudioStreaming();
+
+            // Start transcription (opens Deepgram WS)
             this.audioHandler.startLocalSpeechRecognition();
             this.audioHandler.startEndpointDetection();
             this.audioHandler.startSpeechKeepAlive();
@@ -81,6 +84,20 @@ export class MultimediaOrchestrator {
         }
 
         try {
+            // Signal utterance end to Gemini to avoid hanging "thinking..."
+            // Only await turn completion if a response stream actually started
+            let turnDone = Promise.resolve(null);
+            try {
+                if (this.aiHandler) {
+                    const wasStreaming =
+                        this.aiHandler.geminiAPI?.isStreaming === true;
+                    this.aiHandler.endUtterance();
+                    if (wasStreaming) {
+                        turnDone = this.aiHandler.waitForTurnCompletion();
+                    }
+                }
+            } catch (_) {}
+
             // Handle any pending transcription
             if (this.speechBuffer.interimText.trim()) {
                 const callbacks = this.audioHandler.stateManager.getCallbacks();
@@ -98,7 +115,7 @@ export class MultimediaOrchestrator {
                 isGeminiProcessing: false,
             };
 
-            // Stop audio processing
+            // Stop audio processing (Deepgram + mic) and endpoint detection immediately
             this.audioHandler.stopEndpointDetection();
             if (this.audioHandler.speechRecognition) {
                 this.audioHandler.speechRecognition.stopSpeechRecognition();
@@ -110,6 +127,11 @@ export class MultimediaOrchestrator {
             // Stop video processing
             this.videoHandler.stopScreenshotStreaming();
             await this.videoHandler.cleanup();
+
+            // Await Gemini turn completion if in progress, then disconnect
+            try {
+                await turnDone;
+            } catch (_) {}
 
             // Disconnect from Gemini
             await this.aiHandler.disconnectFromGemini();

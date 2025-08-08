@@ -109,6 +109,11 @@ export class AIHandler {
         } catch (_) {}
     }
 
+    // Event-based: wait until Gemini signals turn completion (or null on disconnect)
+    async waitForTurnCompletion() {
+        return this.geminiAPI.waitForTurnCompletion();
+    }
+
     // REST API Methods (for text messages)
     async sendTextMessage(message) {
         // Use REST API flow for text input

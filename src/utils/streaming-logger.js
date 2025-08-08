@@ -20,19 +20,10 @@ export class StreamingLogger {
 
     start() {
         if (this.isActive) return;
-
+        // Keep state but do not output periodic matrix logs
         this.isActive = true;
         this.audioStats = { chunksSent: 0, lastSent: 0, totalBytes: 0 };
         this.videoStats = { framesSent: 0, lastSent: 0, totalBytes: 0 };
-
-        // Log status every 5 seconds instead of every chunk/frame
-        this.statusInterval = setInterval(() => {
-            this.logStatus();
-        }, 5000);
-
-        console.log(
-            "🎤📹 AUDIO & VIDEO STREAMS STARTED - Status updates every 5s"
-        );
     }
 
     stop() {
@@ -43,50 +34,24 @@ export class StreamingLogger {
             clearInterval(this.statusInterval);
             this.statusInterval = null;
         }
-
-        this.logStatus();
-        console.log("🎤📹 AUDIO & VIDEO STREAMS STOPPED");
     }
 
     logAudioChunk(bytes) {
+        // No-op: suppress matrix logs
         this.audioStats.chunksSent++;
         this.audioStats.lastSent = Date.now();
         this.audioStats.totalBytes += bytes;
     }
 
     logVideoFrame(bytes) {
+        // No-op: suppress matrix logs
         this.videoStats.framesSent++;
         this.videoStats.lastSent = Date.now();
         this.videoStats.totalBytes += bytes;
     }
 
     logStatus() {
-        const now = Date.now();
-        const audioActive = now - this.audioStats.lastSent < 10000; // 10s threshold
-        const videoActive = now - this.videoStats.lastSent < 10000; // 10s threshold
-
-        // Always show both streams clearly, even if inactive
-        const audioStatus = audioActive
-            ? `🎤 AUDIO: ${
-                  this.audioStats.chunksSent > 0
-                      ? Math.round(this.audioStats.chunksSent / 5)
-                      : 0
-              }/s (${this.formatBytes(this.audioStats.totalBytes)})`
-            : "🎤 AUDIO: inactive";
-
-        const videoStatus = videoActive
-            ? `📹 VIDEO: ${
-                  this.videoStats.framesSent > 0
-                      ? Math.round(this.videoStats.framesSent / 5)
-                      : 0
-              }/s (${this.formatBytes(this.videoStats.totalBytes)})`
-            : "📹 VIDEO: inactive";
-
-        console.log(`📊 STREAMS | ${audioStatus} | ${videoStatus}`);
-
-        // Reset counters for next interval
-        this.audioStats.chunksSent = 0;
-        this.videoStats.framesSent = 0;
+        // No-op: remove periodic matrix logging
     }
 
     formatBytes(bytes) {
@@ -103,6 +68,18 @@ export class StreamingLogger {
 
     logInfo(message) {
         console.log(`ℹ️ ${message}`);
+    }
+
+    // Simple metric logger for numeric values
+    logMetric(name, value) {
+        // Only output latency metric in milliseconds
+        if (name === "deepgram_latency_ms") {
+            try {
+                console.log(`${value}`);
+            } catch (_) {
+                // no-op
+            }
+        }
     }
 
     // Manual trigger for testing

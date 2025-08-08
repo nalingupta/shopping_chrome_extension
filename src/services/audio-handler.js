@@ -1,5 +1,5 @@
 import { AudioCaptureService } from "./audio/audio-capture-service.js";
-import { SpeechRecognitionService } from "./audio/speech-recognition-service.js";
+import { DeepgramTranscriptionService } from "./audio/deepgram-transcription-service.js";
 import { EndpointDetectionService } from "./audio/endpoint-detection-service.js";
 import { AudioStateManager } from "./audio/audio-state-manager.js";
 
@@ -10,7 +10,7 @@ export class AudioHandler {
 
         // Audio services
         this.audioCapture = new AudioCaptureService(this.aiHandler);
-        this.speechRecognition = new SpeechRecognitionService();
+        this.speechRecognition = new DeepgramTranscriptionService();
         this.endpointDetection = new EndpointDetectionService();
         this.stateManager = new AudioStateManager();
 
@@ -81,7 +81,18 @@ export class AudioHandler {
     }
 
     async setupAudioCapture() {
-        return this.audioCapture.setupAudioCapture();
+        const ok = await this.audioCapture.setupAudioCapture();
+        // Provide Deepgram service reference for dual-send
+        try {
+            this.audioCapture.deepgramService = this.speechRecognition;
+            // Best-effort: inform DG of sample rate if available
+            const sr =
+                this.aiHandler?.geminiAPI?.geminiAPI?.audioContext?.sampleRate;
+            if (sr && this.speechRecognition?.config) {
+                this.speechRecognition.config.sample_rate = sr;
+            }
+        } catch (_) {}
+        return ok;
     }
 
     async startAudioStreaming() {
@@ -177,13 +188,23 @@ export class AudioHandler {
 
     onSpeechDetected() {
         this.endpointDetection.onSpeechDetected();
-        // Optional safety: ensure video sending resumes when speech starts
-        try {
-            if (this.videoHandler) {
-                this.videoHandler.speechActive = true;
-                this.videoHandler.setVideoStreamingStarted(true);
-            }
-        } catch (_) {}
+        // Gate Gemini start on actual speech detection (local VAD)
+        if (!this.audioStreamingStarted) {
+            this.audioStreamingStarted = true;
+            // Enable video sending during speech
+            try {
+                if (this.videoHandler) {
+                    this.videoHandler.speechActive = true;
+                    this.videoHandler.setVideoStreamingStarted(true);
+                }
+            } catch (_) {}
+            // Start utterance for Gemini (enable audio input + activityStart)
+            try {
+                if (this.aiHandler) {
+                    this.aiHandler.startUtterance();
+                }
+            } catch (_) {}
+        }
     }
 
     onAudioLevelDetected(level) {

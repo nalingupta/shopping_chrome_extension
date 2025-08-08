@@ -7,6 +7,7 @@ export class AudioCaptureService {
         this.audioWorkletNode = null;
         this.audioSource = null;
         this.onAudioLevelCallback = null;
+        this.deepgramService = null;
     }
 
     async setupAudioCapture() {
@@ -99,18 +100,31 @@ export class AudioCaptureService {
         this.audioWorkletNode.port.onmessage = (event) => {
             const { type, pcmData, maxAmplitude } = event.data;
 
+            if (type !== "audioData") return;
+
+            // 1) Gemini path (priority, unchanged)
             if (
-                type === "audioData" &&
                 this.geminiAPI.isGeminiConnectionActive() &&
                 this.geminiAPI.geminiAPI.isAudioInputEnabled()
             ) {
                 const uint8Array = new Uint8Array(pcmData.buffer);
                 const base64 = btoa(String.fromCharCode(...uint8Array));
                 this.geminiAPI.sendAudioData(base64);
+            }
 
-                if (maxAmplitude !== undefined) {
-                    this.onAudioLevelDetected(maxAmplitude);
+            // 2) Deepgram path (non-blocking, binary Int16)
+            try {
+                if (
+                    this.deepgramService &&
+                    this.deepgramService.isSpeechRecognitionActive()
+                ) {
+                    this.deepgramService.sendAudioFrame(pcmData);
                 }
+            } catch (_) {}
+
+            // Audio level/VAD callback
+            if (maxAmplitude !== undefined) {
+                this.onAudioLevelDetected(maxAmplitude);
             }
         };
 
