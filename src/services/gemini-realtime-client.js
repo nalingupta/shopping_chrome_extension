@@ -54,6 +54,8 @@ export class GeminiRealtimeClient {
         this._sessionUtterances = [];
         // Guard to avoid double persistence on close + manual disconnect
         this._hasPersistedUtterances = false;
+        // Suppress user capture when sending history payloads
+        this._suppressUserCapture = false;
     }
 
     async initialize() {
@@ -286,26 +288,61 @@ export class GeminiRealtimeClient {
                 role: t.role === "model" ? "assistant" : t.role,
                 parts: t.parts,
             }));
-        try {
-            const roleCounts = safeTurns.reduce(
-                (acc, t) => ((acc[t.role] = (acc[t.role] || 0) + 1), acc),
-                {}
-            );
-            const previews = safeTurns.slice(0, 2).map((t, i) => {
-                const textPreview = (t?.parts?.[0]?.text || "").slice(0, 60);
-                return `${i}:${t.role}=${JSON.stringify(textPreview)}`;
-            });
-            console.debug(
-                `[RealtimeClient] ConversationHistory send | turns=${
-                    safeTurns.length
-                } | roles user=${roleCounts.user || 0} assistant=${
-                    roleCounts.assistant || 0
-                } | previews ${previews.join(" ")}`
-            );
-        } catch (_) {}
         if (safeTurns.length > 0) {
             const message = { clientContent: { turns: safeTurns } };
+            // Avoid capturing these user turns as the current utterance input
+            this._suppressUserCapture = true;
             this.sendMessage(message);
+            this._suppressUserCapture = false;
+            // Log canonical history derived from the exact payload we sent
+            try {
+                // Build paired turns from the exact payload
+                const turnsRaw = [];
+                let pendingUser = null;
+                safeTurns.forEach((m) => {
+                    const role = m.role;
+                    const text = (m?.parts?.[0]?.text || "").trim();
+                    if (role === "user") {
+                        if (pendingUser !== null) {
+                            turnsRaw.push({
+                                user: pendingUser,
+                                assistant: null,
+                            });
+                        }
+                        pendingUser = text;
+                    } else if (role === "assistant") {
+                        if (pendingUser !== null) {
+                            turnsRaw.push({
+                                user: pendingUser,
+                                assistant: text,
+                            });
+                            pendingUser = null;
+                        } else if (
+                            turnsRaw.length > 0 &&
+                            turnsRaw[turnsRaw.length - 1].assistant == null
+                        ) {
+                            turnsRaw[turnsRaw.length - 1].assistant = text;
+                        } else {
+                            turnsRaw.push({ user: "", assistant: text });
+                        }
+                    }
+                });
+                if (pendingUser !== null)
+                    turnsRaw.push({ user: pendingUser, assistant: null });
+
+                // Normalize + dedupe consecutive identical pairs for logging only
+                const norm = (s) => (s || "").trim();
+                const turns = [];
+                for (const t of turnsRaw) {
+                    const last = turns[turns.length - 1];
+                    const same =
+                        last &&
+                        norm(last.user) === norm(t.user) &&
+                        norm(last.assistant || "") === norm(t.assistant || "");
+                    if (!same) turns.push(t);
+                }
+                console.debug(this.#formatCanonicalHistoryLine(turns));
+            } catch (_) {}
         }
     }
 
@@ -320,8 +357,6 @@ export class GeminiRealtimeClient {
         ) {
             return;
         }
-        // Cache user text for turn summary
-        this._turnStats.userText = trimmed;
         const message = {
             clientContent: {
                 turns: [
@@ -471,8 +506,40 @@ export class GeminiRealtimeClient {
             try {
                 const messageStr = JSON.stringify(message);
 
-                // Send message to Gemini
+                // Pre-send inspection to update aggregates from the exact payload
+                try {
+                    if (message?.realtimeInput?.audio?.data) {
+                        const b64 = message.realtimeInput.audio.data;
+                        this._turnStats.audioChunks += 1;
+                        this._turnStats.audioBytes +=
+                            this.#estimateBase64Bytes(b64);
+                    }
+                    const media = message?.realtimeInput?.mediaChunks;
+                    if (Array.isArray(media)) {
+                        for (const chunk of media) {
+                            const data = chunk?.data;
+                            if (data) {
+                                this._turnStats.screens += 1;
+                                this._turnStats.screenBytes +=
+                                    this.#estimateBase64Bytes(data);
+                            }
+                        }
+                    }
+                    const turns = message?.clientContent?.turns;
+                    if (Array.isArray(turns) && !this._suppressUserCapture) {
+                        for (const t of turns) {
+                            if (t?.role === "user") {
+                                const txt =
+                                    t?.parts
+                                        ?.map((p) => p?.text || "")
+                                        .join(" | ") || "";
+                                this._turnStats.userText = txt;
+                            }
+                        }
+                    }
+                } catch (_) {}
 
+                // Send message to Gemini
                 this.ws.send(messageStr);
             } catch (error) {
                 try {
@@ -502,18 +569,19 @@ export class GeminiRealtimeClient {
                 // Immediately send conversation history as clientContent turns (no media yet)
                 (async () => {
                     try {
-                        const history =
-                            await ContextAssembler.buildHistoryContents();
-                        // Snapshot the history used for this session
-                        this._historySent = Array.isArray(history)
-                            ? JSON.parse(JSON.stringify(history))
-                            : [];
-                        if (this._historySent.length) {
-                            this.sendConversationHistory(this._historySent);
+                        const turns =
+                            await ContextAssembler.getCanonicalTurns();
+                        // Flatten to WS contents for sending; keep canonical turns for logging
+                        const wsContents =
+                            ContextAssembler.flattenTurnsToWsContents(turns);
+                        this._historySent = turns;
+                        // Send payload if any (logging will be handled inside sendConversationHistory)
+                        if (wsContents.length) {
+                            this.sendConversationHistory(wsContents);
                         } else {
                             try {
                                 console.debug(
-                                    "[RealtimeClient] ConversationHistory send | empty"
+                                    "[RealtimeClient] History | empty"
                                 );
                             } catch (_) {}
                         }
@@ -649,10 +717,7 @@ export class GeminiRealtimeClient {
             console.debug(
                 `[RealtimeClient] TurnSummary | utt=${uttNum} | channel=${channel} | modality=${modality} | session=${this._connectSeq} turn=${this._turnSeq} | audio=${this._turnStats.audioChunks} chunks, ${audioSize} | screens=${this._turnStats.screens} frames, ${screenSize}`
             );
-            // 2) History (first turn only)
-            if (this._turnSeq === 1) {
-                console.debug(this.#formatHistoryLineForLog());
-            }
+            // 2) History: no longer printed per turn; printed once at setup
             // 3) User
             console.debug(
                 `[RealtimeClient] User | utt=${uttNum} | len=${
@@ -672,7 +737,11 @@ export class GeminiRealtimeClient {
             const user = this._turnStats.userText || "";
             const assistant = finalText || "";
             if (user || assistant) {
-                this._sessionUtterances.push({ user, assistant, ts: Date.now() });
+                this._sessionUtterances.push({
+                    user,
+                    assistant,
+                    ts: Date.now(),
+                });
             }
         } catch (_) {}
     }
@@ -685,63 +754,98 @@ export class GeminiRealtimeClient {
         return Math.floor((len * 3) / 4) - padding;
     }
 
+    // Format a canonical turns array (from ContextAssembler.getCanonicalTurns) into
+    // a single-line history preview: first turn … last turn, with in-progress support
+    #formatCanonicalHistoryLine(turns) {
+        const pairs = Array.isArray(turns) ? turns : [];
+        const turnsCount = pairs.length;
+        if (turnsCount === 0) return "[RealtimeClient] History | empty";
+
+        const first = pairs[0];
+        const firstUser = JSON.stringify((first.user || "").slice(0, 60));
+        const firstAssistant =
+            first.assistant == null
+                ? "(pending)"
+                : JSON.stringify((first.assistant || "").slice(0, 60));
+
+        if (turnsCount === 1) {
+            return `[RealtimeClient] History | turns=1 | first: user=${firstUser} assistant=${firstAssistant}`;
+        }
+
+        const last = pairs[turnsCount - 1];
+        const lastUser = JSON.stringify((last.user || "").slice(0, 60));
+        const lastAssistant =
+            last.assistant == null
+                ? "(pending)"
+                : JSON.stringify((last.assistant || "").slice(0, 60));
+
+        return `[RealtimeClient] History | turns=${turnsCount} | first: user=${firstUser} assistant=${firstAssistant} | ... | last: user=${lastUser} assistant=${lastAssistant}`;
+    }
+
     #formatHistoryLineForLog() {
         const snap = Array.isArray(this._historySent) ? this._historySent : [];
         if (snap.length === 0) return "[RealtimeClient] History | empty";
-        const counts = snap.reduce((acc, t) => {
-            const role = t.role === "model" ? "assistant" : t.role;
-            acc[role] = (acc[role] || 0) + 1;
-            return acc;
-        }, {});
-        const previews = [];
-        if (snap.length <= 2) {
-            snap.forEach((t, i) => {
-                const text = (t?.parts?.[0]?.text || "").slice(0, 60);
-                const role = t.role === "model" ? "assistant" : t.role;
-                previews.push(`${i}:${role}=${JSON.stringify(text)}`);
-            });
-        } else if (snap.length === 3) {
-            const first = snap[0];
-            const last = snap[2];
-            previews.push(
-                `first0:${first.role === "model" ? "assistant" : first.role}=${JSON.stringify(
-                    (first?.parts?.[0]?.text || "").slice(0, 60)
-                )}`
-            );
-            previews.push(
-                `last0:${last.role === "model" ? "assistant" : last.role}=${JSON.stringify(
-                    (last?.parts?.[0]?.text || "").slice(0, 60)
-                )}`
-            );
-        } else {
-            const first0 = snap[0];
-            const first1 = snap[1];
-            const last1 = snap[snap.length - 2];
-            const last0 = snap[snap.length - 1];
-            previews.push(
-                `first0:${first0.role === "model" ? "assistant" : first0.role}=${JSON.stringify(
-                    (first0?.parts?.[0]?.text || "").slice(0, 60)
-                )}`
-            );
-            previews.push(
-                `first1:${first1.role === "model" ? "assistant" : first1.role}=${JSON.stringify(
-                    (first1?.parts?.[0]?.text || "").slice(0, 60)
-                )}`
-            );
-            previews.push(
-                `last1:${last1.role === "model" ? "assistant" : last1.role}=${JSON.stringify(
-                    (last1?.parts?.[0]?.text || "").slice(0, 60)
-                )}`
-            );
-            previews.push(
-                `last0:${last0.role === "model" ? "assistant" : last0.role}=${JSON.stringify(
-                    (last0?.parts?.[0]?.text || "").slice(0, 60)
-                )}`
-            );
+
+        // Build paired turns: user -> assistant (model treated as assistant)
+        const pairs = [];
+        let currentUser = null;
+        for (const m of snap) {
+            const role = m.role === "model" ? "assistant" : m.role;
+            const text = (m?.parts?.[0]?.text || "").trim();
+            if (role === "user") {
+                // Start a new turn; if previous user was unpaired, push it as in-progress
+                if (currentUser !== null) {
+                    pairs.push({ user: currentUser, assistant: null });
+                }
+                currentUser = text;
+            } else if (role === "assistant") {
+                if (currentUser !== null) {
+                    pairs.push({ user: currentUser, assistant: text });
+                    currentUser = null;
+                } else {
+                    // Assistant with no leading user; attach to previous if exists
+                    if (
+                        pairs.length > 0 &&
+                        pairs[pairs.length - 1].assistant == null
+                    ) {
+                        pairs[pairs.length - 1].assistant = text;
+                    } else {
+                        // Edge: stray assistant, treat as its own turn with empty user
+                        pairs.push({ user: "", assistant: text });
+                    }
+                }
+            }
         }
-        return `[RealtimeClient] History | turns=${snap.length} roles user=${
-            counts.user || 0
-        } assistant=${counts.assistant || 0} | previews ${previews.join(" ")}`;
+        // Trailing in-progress user
+        if (currentUser !== null) {
+            pairs.push({ user: currentUser, assistant: null });
+        }
+
+        const turnsCount = pairs.length;
+        if (turnsCount === 0) return "[RealtimeClient] History | empty";
+
+        const first = pairs[0];
+        const last = pairs[turnsCount - 1];
+        const firstUser = JSON.stringify((first.user || "").slice(0, 60));
+        const firstAssistant =
+            first.assistant == null
+                ? "(pending)"
+                : JSON.stringify((first.assistant || "").slice(0, 60));
+        const lastUser =
+            turnsCount > 1
+                ? JSON.stringify((last.user || "").slice(0, 60))
+                : null;
+        const lastAssistant =
+            turnsCount > 1
+                ? last.assistant == null
+                    ? "(pending)"
+                    : JSON.stringify((last.assistant || "").slice(0, 60))
+                : null;
+
+        if (turnsCount === 1) {
+            return `[RealtimeClient] History | turns=1 | first: user=${firstUser} assistant=${firstAssistant}`;
+        }
+        return `[RealtimeClient] History | turns=${turnsCount} | first: user=${firstUser} assistant=${firstAssistant} | ... | last: user=${lastUser} assistant=${lastAssistant}`;
     }
 
     processBufferedChunks() {

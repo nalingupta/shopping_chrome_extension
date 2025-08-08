@@ -7,10 +7,36 @@ export class UnifiedConversationManager {
 
     static async getConversation() {
         try {
-            const result = await chrome.storage.sync.get([
+            // Prefer local storage for conversation
+            const localResult = await chrome.storage.local.get([
                 this.CONVERSATION_KEY,
             ]);
-            const conversation = result[this.CONVERSATION_KEY];
+            let conversation = localResult[this.CONVERSATION_KEY];
+
+            // If not present locally, try to migrate from sync → local
+            if (!conversation) {
+                const syncResult = await chrome.storage.sync.get([
+                    this.CONVERSATION_KEY,
+                ]);
+                const syncConversation = syncResult[this.CONVERSATION_KEY];
+                if (syncConversation) {
+                    conversation = syncConversation;
+                    try {
+                        await chrome.storage.local.set({
+                            [this.CONVERSATION_KEY]: conversation,
+                        });
+                        await chrome.storage.sync.remove([
+                            this.CONVERSATION_KEY,
+                        ]);
+                        this.broadcastConversationUpdate();
+                    } catch (migrateErr) {
+                        console.error(
+                            "Error migrating conversation from sync to local:",
+                            migrateErr
+                        );
+                    }
+                }
+            }
 
             if (!conversation) {
                 return {
@@ -61,7 +87,7 @@ export class UnifiedConversationManager {
 
             conversation.lastUpdated = Date.now();
 
-            await chrome.storage.sync.set({
+            await chrome.storage.local.set({
                 [this.CONVERSATION_KEY]: conversation,
             });
 
@@ -89,7 +115,7 @@ export class UnifiedConversationManager {
             conversation.isWelcomeVisible = isWelcomeVisible;
             conversation.lastUpdated = Date.now();
 
-            await chrome.storage.sync.set({
+            await chrome.storage.local.set({
                 [this.CONVERSATION_KEY]: conversation,
             });
 
@@ -147,7 +173,7 @@ export class UnifiedConversationManager {
             conversation.isWelcomeVisible = isVisible;
             conversation.lastUpdated = Date.now();
 
-            await chrome.storage.sync.set({
+            await chrome.storage.local.set({
                 [this.CONVERSATION_KEY]: conversation,
             });
 
@@ -163,7 +189,7 @@ export class UnifiedConversationManager {
 
     static async clearConversation() {
         try {
-            await chrome.storage.sync.remove([this.CONVERSATION_KEY]);
+            await chrome.storage.local.remove([this.CONVERSATION_KEY]);
 
             // Broadcast change to all windows
             this.broadcastConversationUpdate();
@@ -178,7 +204,7 @@ export class UnifiedConversationManager {
     static async addConversationListener(callback) {
         try {
             chrome.storage.onChanged.addListener((changes, namespace) => {
-                if (namespace === "sync" && changes[this.CONVERSATION_KEY]) {
+                if (namespace === "local" && changes[this.CONVERSATION_KEY]) {
                     callback(changes[this.CONVERSATION_KEY].newValue);
                 }
             });

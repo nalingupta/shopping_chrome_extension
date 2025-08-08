@@ -26,12 +26,11 @@ export class GeminiTextClient {
             throw new Error("Gemini API key not configured");
         }
 
-        // Build unified context (full history, mapped to Gemini roles) and a concise context block
-        const { contents: historyContents, contextText } =
-            await ContextAssembler.buildContext({
-                currentTranscript: query,
-                currentPageInfo: pageInfo,
-            });
+        // Build canonical turns and then REST-friendly history contents
+        const turns = await ContextAssembler.getCanonicalTurns();
+        const historyContents =
+            ContextAssembler.flattenTurnsToRestContents(turns);
+        const contextText = query;
 
         try {
             console.debug(
@@ -91,10 +90,69 @@ export class GeminiTextClient {
 
         try {
             console.debug(
-                `[TextClient] Request: contents=${contents.length}, userParts=${
-                    userParts.length
+                `[TextClient] Request: contents=${
+                    requestBody.contents.length
                 }, hasSystemInstruction=${!!systemPrompt}`
             );
+            // Build canonical history from the exact payload we send
+            const pairs = [];
+            let pendingUser = null;
+            for (const c of requestBody.contents) {
+                const role = c.role === "model" ? "assistant" : c.role;
+                const text = (c?.parts?.[0]?.text || "").trim();
+                if (role === "user") {
+                    if (pendingUser !== null)
+                        pairs.push({ user: pendingUser, assistant: null });
+                    pendingUser = text;
+                } else if (role === "assistant") {
+                    if (pendingUser !== null) {
+                        pairs.push({ user: pendingUser, assistant: text });
+                        pendingUser = null;
+                    } else if (
+                        pairs.length > 0 &&
+                        pairs[pairs.length - 1].assistant == null
+                    ) {
+                        pairs[pairs.length - 1].assistant = text;
+                    } else {
+                        pairs.push({ user: "", assistant: text });
+                    }
+                }
+            }
+            if (pendingUser !== null)
+                pairs.push({ user: pendingUser, assistant: null });
+            const n = pairs.length;
+            if (n === 0) {
+                console.debug("[TextClient] History | empty");
+            } else if (n === 1) {
+                const f = pairs[0];
+                console.debug(
+                    `[TextClient] History | turns=1 | first: user=${JSON.stringify(
+                        (f.user || "").slice(0, 60)
+                    )} assistant=${
+                        f.assistant == null
+                            ? "(pending)"
+                            : JSON.stringify((f.assistant || "").slice(0, 60))
+                    }`
+                );
+            } else {
+                const f = pairs[0];
+                const l = pairs[n - 1];
+                console.debug(
+                    `[TextClient] History | turns=${n} | first: user=${JSON.stringify(
+                        (f.user || "").slice(0, 60)
+                    )} assistant=${
+                        f.assistant == null
+                            ? "(pending)"
+                            : JSON.stringify((f.assistant || "").slice(0, 60))
+                    } | ... | last: user=${JSON.stringify(
+                        (l.user || "").slice(0, 60)
+                    )} assistant=${
+                        l.assistant == null
+                            ? "(pending)"
+                            : JSON.stringify((l.assistant || "").slice(0, 60))
+                    }`
+                );
+            }
         } catch (_) {}
 
         const response = await fetch(url, {
