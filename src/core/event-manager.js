@@ -1,12 +1,10 @@
 import { MESSAGE_TYPES } from "../utils/constants.js";
 import { UnifiedConversationManager } from "../utils/storage.js";
-import { MessageRenderer } from "../ui/message-renderer.js";
 
 export class EventManager {
-    constructor(uiManager, multimediaOrchestrator, messageRenderer) {
+    constructor(uiManager, multimediaOrchestrator) {
         this.uiManager = uiManager;
         this.multimediaOrchestrator = multimediaOrchestrator;
-        this.messageRenderer = messageRenderer;
         this.currentPageInfo = null;
     }
 
@@ -68,7 +66,7 @@ export class EventManager {
 
     async handleConversationUpdate() {
         try {
-            // Refresh the UI with latest conversation data
+            // Refresh the UI with latest conversation data (append-only)
             await this.refreshConversationUI();
         } catch (error) {
             console.error("Error handling conversation update:", error);
@@ -77,27 +75,15 @@ export class EventManager {
 
     async refreshConversationUI() {
         try {
-            // Get latest messages from unified storage
+            // Append-only restore using the new renderer
             const messages =
                 await UnifiedConversationManager.getMessagesForUI();
             const isWelcomeVisible =
                 await UnifiedConversationManager.getWelcomeScreenState();
 
-            // Clear current UI
-            this.uiManager.elements.messages.innerHTML = "";
-
-            // Restore messages
             if (messages && messages.length > 0) {
-                messages.forEach((msg) => {
-                    const messageDiv = this.messageRenderer.createMessage(
-                        msg.content,
-                        msg.type
-                    );
-                    this.uiManager.elements.messages.appendChild(messageDiv);
-                });
-
+                this.uiManager.conversationRenderer?.restore(messages);
                 this.hideWelcomeScreen();
-                this.scrollToBottom();
             } else if (!isWelcomeVisible) {
                 this.hideWelcomeScreen();
             } else {
@@ -116,7 +102,9 @@ export class EventManager {
         const message = this.uiManager.elements.userInput.value.trim();
         if (!message || this.uiManager.uiState.isProcessing) return;
 
-        this.addMessage(message, "user");
+        // Begin a new turn via controller: interim then finalize to set anchor
+        this.uiManager.setUserInterim(message);
+        this.uiManager.finalizeUserInterim(message);
         this.uiManager.elements.userInput.value = "";
         this.adjustTextareaHeight();
 
@@ -127,30 +115,20 @@ export class EventManager {
         this.uiManager.uiState.setProcessing(true);
         this.uiManager.elements.sendButton.disabled = true;
 
-        const loadingMessage = this.addMessage(
-            "Thinking...",
-            "assistant",
-            true
-        );
-
         try {
             // Send text message directly to AIHandler
             const result =
                 await this.multimediaOrchestrator.aiHandler.sendTextMessage(
                     message
                 );
-            this.removeMessage(loadingMessage);
 
-            if (result.success) {
-                // The response will be rendered by the callback system
-            } else {
+            if (!result.success) {
                 this.addMessage(
                     "Sorry, I encountered an error. Please try again.",
                     "assistant"
                 );
             }
         } catch (error) {
-            this.removeMessage(loadingMessage);
             this.addMessage(
                 "Sorry, I encountered an error. Please try again.",
                 "assistant"
@@ -166,8 +144,7 @@ export class EventManager {
 
     async handleClearChat() {
         this.uiManager.elements.messages.innerHTML = "";
-        this.messageRenderer.clearInterimMessage();
-        this.messageRenderer.clearStreamingMessage();
+        this.uiManager.conversationRenderer?.reset();
         this.uiManager.uiState.clearStatus();
 
         this.uiManager.elements.userInput.value = "";
@@ -226,7 +203,8 @@ export class EventManager {
         this.uiManager.elements.voiceButton.classList.remove("listening");
         this.uiManager.elements.voiceButton.title = "";
         await this.multimediaOrchestrator.stopMultimedia();
-        this.messageRenderer.clearInterimMessage();
+        // Clear any live UI buffers
+        this.uiManager.conversationRenderer?.reset();
 
         this.uiManager.uiState.setSpeechState("idle");
         this.uiManager.uiState.showStatus("Start a chat", "info");
@@ -236,7 +214,8 @@ export class EventManager {
         // Reset UI state when listening stops due to external factors
         this.uiManager.elements.voiceButton.classList.remove("listening");
         this.uiManager.elements.voiceButton.title = "";
-        this.messageRenderer.clearInterimMessage();
+        // Clear any live UI buffers
+        this.uiManager.conversationRenderer?.reset();
 
         this.uiManager.uiState.setSpeechState("idle");
 
@@ -281,8 +260,8 @@ export class EventManager {
 
     handleTranscriptionReceived(transcription) {
         if (transcription) {
-            this.messageRenderer.clearInterimMessage();
-            this.messageRenderer.clearStreamingMessage(); // Clear any existing streaming messages
+            // Finalize the current user interim into a finalized bubble, snap to top
+            // and prepare assistant pending state
 
             if (this.isErrorTranscription(transcription)) {
                 this.uiManager.uiState.showStatus(
@@ -294,7 +273,7 @@ export class EventManager {
                 return;
             }
 
-            this.addMessage(transcription, "user", false);
+            this.uiManager.finalizeUserInterim(transcription);
 
             // Set processing state when user message is finalized
             this.uiManager.uiState.setSpeechState("processing");
@@ -310,7 +289,7 @@ export class EventManager {
             interimText &&
             this.multimediaOrchestrator.isMultimediaSessionActive()
         ) {
-            this.showInterimText(interimText);
+            this.uiManager.setUserInterim(interimText);
         }
     }
 
@@ -319,22 +298,14 @@ export class EventManager {
         this.uiManager.uiState.setSpeechState("responding");
 
         if (response.isStreaming) {
-            // Handle streaming update (ChatGPT-style)
-            this.updateStreamingMessage(response.text);
+            // Controller ensures pending on first stream; just update
+            this.uiManager.updateAssistantStream(response.text);
         } else {
-            // Handle final response
-            const existingStreaming =
-                document.getElementById("streaming-message");
-            if (!existingStreaming && response.text) {
-                // No streaming message existed; render a normal assistant message
-                this.addMessage(response.text, "assistant");
-            } else {
-                // Finalize existing streaming message
-                this.messageRenderer.finalizeStreamingMessage();
+            // Finalize assistant stream; if no stream existed, append directly
+            if (response.text) {
+                this.uiManager.updateAssistantStream(response.text);
+                this.uiManager.finalizeAssistantStream();
             }
-
-            // Ensure final scroll to bottom
-            this.scrollToBottom();
 
             // Save the finalized message to chat history
             this.saveState();
@@ -374,11 +345,12 @@ export class EventManager {
     }
 
     showInterimText(text) {
-        return this.uiManager.showInterimText(text);
+        // Deprecated
+        this.uiManager.setUserInterim(text);
     }
 
     updateStreamingMessage(text) {
-        return this.uiManager.updateStreamingMessage(text);
+        this.uiManager.updateAssistantStream(text);
     }
 
     scrollToBottom() {
