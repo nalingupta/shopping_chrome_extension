@@ -37,6 +37,21 @@ export class GeminiRealtimeClient {
             firstAudioAt: null,
             firstVideoAt: null,
         };
+
+        // Per-turn aggregated stats (for TurnSummary logs)
+        this._turnSeq = 0;
+        this._turnStats = {
+            audioChunks: 0,
+            audioBytes: 0,
+            screens: 0,
+            screenBytes: 0,
+            userText: "",
+        };
+
+        // Snapshot of conversation history sent at setupComplete
+        this._historySent = null;
+        // Utterances captured within the active WS session
+        this._sessionUtterances = [];
     }
 
     async initialize() {
@@ -122,7 +137,7 @@ export class GeminiRealtimeClient {
 
                 this.ws.onerror = (error) => {
                     try {
-                        console.error("[RealtimeClient] WS onerror:", error);
+                        console.error("Gemini WS error:", error);
                     } catch (_) {}
                     if (this.callbacks.onError) {
                         this.callbacks.onError(error);
@@ -141,8 +156,33 @@ export class GeminiRealtimeClient {
 
                     try {
                         console.warn(
-                            `[RealtimeClient] WS onclose: code=${event.code} reason=${event.reason} wasClean=${event.wasClean}`
+                            `Gemini WS closed: code=${event.code} reason=${event.reason} wasClean=${event.wasClean}`
                         );
+                        // On session end, persist captured utterances to conversation history
+                        if (
+                            this._sessionUtterances &&
+                            this._sessionUtterances.length > 0
+                        ) {
+                            const total = this._sessionUtterances.length;
+                            console.debug(
+                                `[RealtimeClient] Utterances (${total})`
+                            );
+                            this._sessionUtterances.forEach((u, idx) => {
+                                const up = JSON.stringify(
+                                    (u.user || "").slice(0, 120)
+                                );
+                                const ap = JSON.stringify(
+                                    (u.assistant || "").slice(0, 120)
+                                );
+                                console.debug(
+                                    `[RealtimeClient] Utterance ${
+                                        idx + 1
+                                    } | user=${up} | output=${ap}`
+                                );
+                            });
+                            // Persist async (do not block close)
+                            this.#persistSessionUtterances();
+                        }
                     } catch (_) {}
 
                     if (this.callbacks.onConnectionStateChange) {
@@ -189,13 +229,7 @@ export class GeminiRealtimeClient {
             },
         };
 
-        try {
-            console.debug(
-                `[RealtimeClient] Sending setup. systemPromptLen=${
-                    (SYSTEM_PROMPT || "").length
-                }`
-            );
-        } catch (_) {}
+        // Suppress verbose setup debug logging
         this.sendMessage(setupMessage);
     }
 
@@ -207,17 +241,21 @@ export class GeminiRealtimeClient {
             firstAudioAt: null,
             firstVideoAt: null,
         };
-        try {
-            console.debug(`[RealtimeClient] utteranceStart at ${Date.now()}`);
-        } catch (_) {}
+        // Suppress utteranceStart debug log
+
+        // Reset per-turn stats and increment sequence for summary
+        this._turnSeq += 1;
+        this._turnStats = {
+            audioChunks: 0,
+            audioBytes: 0,
+            screens: 0,
+            screenBytes: 0,
+            userText: "",
+        };
     }
 
     logUtteranceEnd(elapsedMs) {
-        try {
-            console.debug(
-                `[RealtimeClient] utteranceEnd after ${elapsedMs}ms audioChunks=${this._utteranceCounters.audioChunks} videoFrames=${this._utteranceCounters.videoFrames} firstAudioAt=${this._utteranceCounters.firstAudioAt} firstVideoAt=${this._utteranceCounters.firstVideoAt}`
-            );
-        } catch (_) {}
+        // Suppress utteranceEnd debug log
     }
 
     // Deprecated: text chunks over realtimeInput are not used anymore
@@ -275,12 +313,8 @@ export class GeminiRealtimeClient {
         ) {
             return;
         }
-        try {
-            const preview = JSON.stringify(trimmed.slice(0, 80));
-            console.debug(
-                `[RealtimeClient] UserMessage send | len=${trimmed.length} | preview=${preview}`
-            );
-        } catch (_) {}
+        // Cache user text for turn summary
+        this._turnStats.userText = trimmed;
         const message = {
             clientContent: {
                 turns: [
@@ -307,13 +341,17 @@ export class GeminiRealtimeClient {
         // Log audio chunk for streaming statistics
         streamingLogger.logAudioChunk(base64Data.length);
 
+        // Aggregate per-turn audio stats
+        try {
+            const bytes = this.#estimateBase64Bytes(base64Data);
+            this._turnStats.audioChunks += 1;
+            this._turnStats.audioBytes += bytes;
+        } catch (_) {}
+
         // Utterance diagnostics: first-chunk and counter
         try {
             if (this._utteranceCounters.audioChunks === 0) {
                 this._utteranceCounters.firstAudioAt = Date.now();
-                console.debug(
-                    `[RealtimeClient] first audio chunk this utterance. audioInputEnabled=${this.audioInputEnabled}`
-                );
             }
             this._utteranceCounters.audioChunks += 1;
         } catch (_) {}
@@ -342,6 +380,13 @@ export class GeminiRealtimeClient {
 
         // Log video frame for streaming statistics
         streamingLogger.logVideoFrame(base64Data.length);
+
+        // Aggregate per-turn video stats
+        try {
+            const bytes = this.#estimateBase64Bytes(base64Data);
+            this._turnStats.screens += 1;
+            this._turnStats.screenBytes += bytes;
+        } catch (_) {}
 
         // Utterance diagnostics: first-frame and counter
         try {
@@ -377,7 +422,6 @@ export class GeminiRealtimeClient {
         try {
             this.ws.send(JSON.stringify(message));
             streamingLogger.logInfo("↗️ Sent activityStart");
-            console.debug(`[RealtimeClient] activityStart at ${Date.now()}`);
         } catch (error) {
             console.error("Failed to send activityStart:", error);
         }
@@ -395,7 +439,6 @@ export class GeminiRealtimeClient {
         try {
             this.ws.send(JSON.stringify(message));
             streamingLogger.logInfo("↗️ Sent activityEnd");
-            console.debug(`[RealtimeClient] activityEnd at ${Date.now()}`);
         } catch (error) {
             console.error("Failed to send activityEnd:", error);
         }
@@ -427,17 +470,14 @@ export class GeminiRealtimeClient {
             } catch (error) {
                 try {
                     console.error(
-                        "[RealtimeClient] Failed to send message. readyState=",
+                        "Gemini WS failed to send message. readyState=",
                         this.ws?.readyState,
                         error
                     );
                 } catch (_) {}
             }
         } else {
-            console.warn(
-                "Cannot send message - WebSocket not ready. State:",
-                this.ws?.readyState
-            );
+            console.warn("Gemini WS not ready. State:", this.ws?.readyState);
         }
     }
 
@@ -451,16 +491,24 @@ export class GeminiRealtimeClient {
             ) {
                 this.isSetupComplete = true;
                 this.processBufferedChunks();
-                try {
-                    console.debug("[RealtimeClient] SetupComplete");
-                } catch (_) {}
+                // Suppress SetupComplete debug log
                 // Immediately send conversation history as clientContent turns (no media yet)
                 (async () => {
                     try {
                         const history =
                             await ContextAssembler.buildHistoryContents();
-                        if (history?.length) {
-                            this.sendConversationHistory(history);
+                        // Snapshot the history used for this session
+                        this._historySent = Array.isArray(history)
+                            ? JSON.parse(JSON.stringify(history))
+                            : [];
+                        if (this._historySent.length) {
+                            this.sendConversationHistory(this._historySent);
+                        } else {
+                            try {
+                                console.debug(
+                                    "[RealtimeClient] ConversationHistory send | empty"
+                                );
+                            } catch (_) {}
                         }
                     } catch (e) {
                         console.warn("[RealtimeClient] history send failed", e);
@@ -502,11 +550,7 @@ export class GeminiRealtimeClient {
                         timestamp: Date.now(),
                     });
                 }
-                try {
-                    console.debug(
-                        `[RealtimeClient] chunk received len=${chunkText.length}`
-                    );
-                } catch (_) {}
+                // Suppress chunk-length per message debug log
             }
 
             // Only rely on explicit turn completion flag from Gemini
@@ -518,11 +562,7 @@ export class GeminiRealtimeClient {
 
             if (isTurnComplete) {
                 this.isProcessingTurn = true;
-                try {
-                    console.debug(
-                        `[RealtimeClient] turnComplete. finalLen=${this.currentStreamingResponse.length}`
-                    );
-                } catch (_) {}
+                // Suppress turnComplete debug log
                 await this.handleCompleteTurn(this.currentStreamingResponse);
                 this.currentTurn = [];
                 this.currentStreamingResponse = "";
@@ -579,6 +619,131 @@ export class GeminiRealtimeClient {
                 timestamp: Date.now(),
             });
         }
+
+        // Record utterance for this WS session
+        try {
+            const user = this._turnStats.userText || "";
+            const assistant = finalText || "";
+            if (user || assistant) {
+                this._sessionUtterances.push({
+                    user,
+                    assistant,
+                    ts: Date.now(),
+                });
+            }
+        } catch (_) {}
+
+        // Emit four-line TurnSummary (more readable)
+        try {
+            const modality = this._turnStats.audioChunks > 0 ? "voice" : "text";
+            const channel = "WS";
+            const userPreview = JSON.stringify(
+                (this._turnStats.userText || "").slice(0, 120)
+            );
+            const outputPreview = JSON.stringify(
+                (finalText || "").slice(0, 120)
+            );
+            const audioSize = streamingLogger.formatBytes(
+                this._turnStats.audioBytes
+            );
+            const screenSize = streamingLogger.formatBytes(
+                this._turnStats.screenBytes
+            );
+
+            // 1) Summary
+            console.debug(
+                `[RealtimeClient] TurnSummary | channel=${channel} | modality=${modality} | session=${this._connectSeq} turn=${this._turnSeq} | audio=${this._turnStats.audioChunks} chunks, ${audioSize} | screens=${this._turnStats.screens} frames, ${screenSize}`
+            );
+            // 2) History
+            console.debug(this.#formatHistoryLineForLog());
+            // 3) User
+            console.debug(
+                `[RealtimeClient] User | len=${
+                    (this._turnStats.userText || "").length
+                } | ${userPreview}`
+            );
+            // 4) Output
+            console.debug(
+                `[RealtimeClient] Output | len=${
+                    finalText?.length || 0
+                } | ${outputPreview}`
+            );
+            // 5) Utterance
+            console.debug(
+                `[RealtimeClient] Utterance ${
+                    this._sessionUtterances.length
+                } | userLen=${
+                    (this._turnStats.userText || "").length
+                } | outputLen=${
+                    finalText?.length || 0
+                } | userPreview=${userPreview} | outputPreview=${outputPreview}`
+            );
+        } catch (_) {}
+    }
+
+    // Private helpers
+    #estimateBase64Bytes(b64) {
+        if (!b64) return 0;
+        const len = b64.length;
+        const padding = b64.endsWith("==") ? 2 : b64.endsWith("=") ? 1 : 0;
+        return Math.floor((len * 3) / 4) - padding;
+    }
+
+    #formatHistoryLineForLog() {
+        const snap = Array.isArray(this._historySent) ? this._historySent : [];
+        if (snap.length === 0) return "[RealtimeClient] History | empty";
+        const counts = snap.reduce(
+            (acc, t) => ((acc[t.role] = (acc[t.role] || 0) + 1), acc),
+            {}
+        );
+        const previews = [];
+        if (snap.length <= 2) {
+            snap.forEach((t, i) => {
+                const text = (t?.parts?.[0]?.text || "").slice(0, 60);
+                previews.push(`${i}:${t.role}=${JSON.stringify(text)}`);
+            });
+        } else if (snap.length === 3) {
+            const first = snap[0];
+            const last = snap[2];
+            previews.push(
+                `first0:${first.role}=${JSON.stringify(
+                    (first?.parts?.[0]?.text || "").slice(0, 60)
+                )}`
+            );
+            previews.push(
+                `last0:${last.role}=${JSON.stringify(
+                    (last?.parts?.[0]?.text || "").slice(0, 60)
+                )}`
+            );
+        } else {
+            const first0 = snap[0];
+            const first1 = snap[1];
+            const last1 = snap[snap.length - 2];
+            const last0 = snap[snap.length - 1];
+            previews.push(
+                `first0:${first0.role}=${JSON.stringify(
+                    (first0?.parts?.[0]?.text || "").slice(0, 60)
+                )}`
+            );
+            previews.push(
+                `first1:${first1.role}=${JSON.stringify(
+                    (first1?.parts?.[0]?.text || "").slice(0, 60)
+                )}`
+            );
+            previews.push(
+                `last1:${last1.role}=${JSON.stringify(
+                    (last1?.parts?.[0]?.text || "").slice(0, 60)
+                )}`
+            );
+            previews.push(
+                `last0:${last0.role}=${JSON.stringify(
+                    (last0?.parts?.[0]?.text || "").slice(0, 60)
+                )}`
+            );
+        }
+        return `[RealtimeClient] History | turns=${snap.length} roles user=${
+            counts.user || 0
+        } assistant=${counts.assistant || 0} | previews ${previews.join(" ")}`;
     }
 
     processBufferedChunks() {
@@ -616,7 +781,7 @@ export class GeminiRealtimeClient {
                 try {
                     this.ws.send(JSON.stringify(keepAliveMessage));
                 } catch (error) {
-                    console.error("Keep-alive failed:", error);
+                    console.error("Gemini WS keep-alive failed:", error);
                 }
             }
         }, 30000);
@@ -642,7 +807,7 @@ export class GeminiRealtimeClient {
 
         try {
             console.warn(
-                `[RealtimeClient] scheduleReconnection attempt=${this.reconnectAttempts} delayMs=${delay}`
+                `Gemini WS scheduleReconnection attempt=${this.reconnectAttempts} delayMs=${delay}`
             );
         } catch (_) {}
 
@@ -651,7 +816,7 @@ export class GeminiRealtimeClient {
                 try {
                     await this.connect();
                 } catch (error) {
-                    console.error("Reconnection failed:", error);
+                    console.error("Gemini WS reconnection failed:", error);
                 }
             }
         }, delay);
@@ -681,6 +846,10 @@ export class GeminiRealtimeClient {
         }
 
         if (this.ws) {
+            try {
+                // Before closing, persist utterances if any
+                await this.#persistSessionUtterances();
+            } catch (_) {}
             this.ws.close();
             this.ws = null;
         }
@@ -695,6 +864,39 @@ export class GeminiRealtimeClient {
 
         // Stop streaming logger
         streamingLogger.stop();
+    }
+
+    async #persistSessionUtterances() {
+        try {
+            if (
+                !this._sessionUtterances ||
+                this._sessionUtterances.length === 0
+            ) {
+                return;
+            }
+            const { UnifiedConversationManager } = await import(
+                "../utils/storage.js"
+            );
+            for (const u of this._sessionUtterances) {
+                if (u.user) {
+                    await UnifiedConversationManager.saveMessage(
+                        u.user,
+                        "user",
+                        u.ts
+                    );
+                }
+                if (u.assistant) {
+                    await UnifiedConversationManager.saveMessage(
+                        u.assistant,
+                        "assistant",
+                        u.ts
+                    );
+                }
+            }
+            this._sessionUtterances = [];
+        } catch (err) {
+            console.error("Failed to persist session utterances:", err);
+        }
     }
 
     setBotResponseCallback(callback) {

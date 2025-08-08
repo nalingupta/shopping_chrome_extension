@@ -113,14 +113,9 @@ export class AIHandler {
                 // Send only the finalized user message as a clientContent user turn
                 if (this._lastUserMessage && this._lastUserMessage.trim()) {
                     const text = this._lastUserMessage.trim();
-                    console.debug(
-                        `[AIHandler] endUtterance: UserMessage len=${text.length}`
-                    );
                     this.geminiAPI.sendUserMessage(text);
                 } else {
-                    console.debug(
-                        "[AIHandler] endUtterance: no finalized user message to send"
-                    );
+                    // No finalized user message to send
                 }
             } catch (_) {}
             try {

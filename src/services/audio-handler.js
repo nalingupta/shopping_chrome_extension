@@ -43,11 +43,6 @@ export class AudioHandler {
                     const callbacks = this.stateManager.getCallbacks();
                     if (callbacks.transcription)
                         callbacks.transcription(finalText);
-                    console.debug(
-                        `[AudioHandler] onFinalResult forwarded len=${
-                            finalText?.length || 0
-                        }`
-                    );
                 } catch (_) {}
             },
             onAudioStreamingStart: async () => {

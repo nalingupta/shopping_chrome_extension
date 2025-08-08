@@ -52,11 +52,7 @@ export class SpeechRecognitionService {
         this.speechRecognition.interimResults = true;
         this.speechRecognition.lang = "en-US";
 
-        try {
-            console.debug(
-                `[SpeechRec] start: lang=${this.speechRecognition.lang} interimResults=${this.speechRecognition.interimResults}`
-            );
-        } catch (_) {}
+        // Suppress SpeechRec start debug log
 
         this.speechRecognition.onresult = async (event) => {
             if (this.callbacks.onSpeechDetected) {
@@ -103,28 +99,13 @@ export class SpeechRecognitionService {
             this.speechBuffer.lastWebSpeechUpdate = Date.now();
 
             if (hasInterimResults && this.callbacks.onInterimResult) {
-                try {
-                    console.debug(
-                        `[SpeechRec] interim: len=${latestTranscript.length}`
-                    );
-                } catch (_) {}
                 this.callbacks.onInterimResult(latestTranscript);
             }
 
             if (hasFinalResults) {
                 try {
-                    console.debug(
-                        `[SpeechRec] final: len=${latestTranscript.length}`
-                    );
-                } catch (_) {}
-                try {
                     if (this.callbacks.onFinalResult) {
                         this.callbacks.onFinalResult(latestTranscript.trim());
-                        console.debug(
-                            `[SpeechRec] onFinalResult len=${
-                                latestTranscript.trim().length
-                            }`
-                        );
                     }
                 } catch (_) {}
                 this.handleWebSpeechFinalResult();
@@ -149,17 +130,11 @@ export class SpeechRecognitionService {
                 const now = Date.now();
                 const timeSinceLastActivity =
                     now - (this.lastSpeechActivity || now);
-                try {
-                    console.debug(
-                        `[SpeechRec] onend: isListening=${this.state.isListening} timeSinceLastActivityMs=${timeSinceLastActivity}`
-                    );
-                } catch (_) {}
+                // Suppress SpeechRec onend debug log
                 if (timeSinceLastActivity < 30000) {
                     setTimeout(() => {
                         if (this.state.isListening) {
-                            try {
-                                console.debug("[SpeechRec] restarting SR");
-                            } catch (_) {}
+                            // Suppress SpeechRec restart debug log
                             this.restartSpeechRecognition();
                         }
                     }, 100);
@@ -182,11 +157,6 @@ export class SpeechRecognitionService {
 
             setTimeout(() => {
                 if (this.state.isListening) {
-                    try {
-                        console.debug(
-                            "[SpeechRec] restart -> startLocalSpeechRecognition()"
-                        );
-                    } catch (_) {}
                     this.startLocalSpeechRecognition();
                 }
             }, 200);

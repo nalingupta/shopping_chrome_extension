@@ -53,12 +53,7 @@ export class ConversationController {
         }
         const turn = this.#getTurn(this.activeTurnId);
         if (!turn) return;
-        try {
-            console.log("[Final] turn=", this.activeTurnId, {
-                prevUserText: turn.user.text,
-                prevAssistantStatus: turn.assistant.status,
-            });
-        } catch (_) {}
+        // Suppress verbose final-turn console log
         turn.user.text = finalText;
         turn.user.finalized = true;
         this.view.finalizeUser(this.activeTurnId, finalText);
