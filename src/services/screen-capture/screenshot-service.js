@@ -54,10 +54,6 @@ export class ScreenshotService {
             );
 
             if (result && result.data) {
-                // Include tabId in a debug log to ensure capture source
-                console.log(
-                    `[captureFrame] tabId=${tabId} size=${result.data.length}`
-                );
                 return result.data;
             } else {
                 throw new Error("No screenshot data received");

@@ -250,7 +250,7 @@ export class VideoHandler {
                     });
                     const currentTabId = this.screenCapture.getCurrentTabId();
                     if (activeTab && currentTabId !== activeTab.id) {
-                        streamingLogger.logInfo(
+                        console.log(
                             `MISMATCH detected (current=${currentTabId}, active=${activeTab.id}) → switching now`
                         );
                         await this.screenCapture.switchToTab(activeTab.id);

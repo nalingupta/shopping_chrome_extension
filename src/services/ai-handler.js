@@ -1,10 +1,12 @@
 import { GeminiRealtimeClient } from "./gemini-realtime-client.js";
 import { GeminiTextClient } from "./gemini-text-client.js";
+import { ContextAssembler } from "./prompt/context-assembler.js";
 
 export class AIHandler {
     constructor() {
         this.geminiAPI = new GeminiRealtimeClient();
         this.isGeminiConnected = false;
+        this.currentPageInfo = null;
 
         this.setupGeminiCallbacks();
         this.initializeGemini();
@@ -95,33 +97,69 @@ export class AIHandler {
     // Utterance boundary helpers
     startUtterance() {
         try {
+            this._utteranceStartTs = Date.now();
             this.geminiAPI.enableAudioInput();
+            try {
+                this.geminiAPI.markUtteranceStart();
+            } catch (_) {}
             this.geminiAPI.sendActivityStart();
         } catch (_) {}
     }
 
     endUtterance() {
-        try {
-            this.geminiAPI.sendActivityEnd();
-        } catch (_) {}
-        try {
-            this.geminiAPI.disableAudioInput();
-        } catch (_) {}
+        (async () => {
+            try {
+                // Build context: full history and page metadata (no explicit transcript here)
+                const { contents: historyContents, contextText } =
+                    await ContextAssembler.buildContext({
+                        currentTranscript: "",
+                        currentPageInfo: this.currentPageInfo,
+                    });
+                console.debug(
+                    `[AIHandler] endUtterance: sending history=${
+                        historyContents?.length || 0
+                    }, contextLen=${contextText?.length || 0}`
+                );
+                this.geminiAPI.sendHistoryContents(historyContents);
+                this.geminiAPI.sendTextChunk(contextText);
+            } catch (_) {}
+            try {
+                this.geminiAPI.sendActivityEnd();
+                const elapsed = this._utteranceStartTs
+                    ? Date.now() - this._utteranceStartTs
+                    : 0;
+                this.geminiAPI.logUtteranceEnd?.(elapsed);
+            } catch (_) {}
+            try {
+                this.geminiAPI.disableAudioInput();
+            } catch (_) {}
+        })();
+    }
+
+    setCurrentPageInfo(pageInfo) {
+        this.currentPageInfo = pageInfo || null;
     }
 
     // REST API Methods (for text messages)
     async sendTextMessage(message) {
         // Use REST API flow for text input
         try {
-            // Minimal request body: just pass the text; page context not available here
-            const responseText = await GeminiTextClient.callGeminiAPI([
-                { role: "user", content: message },
-            ]);
+            console.debug("[AIHandler] sendTextMessage start");
+            // Use the unified generator which assembles history + page context
+            const responseText = await GeminiTextClient.generateGeminiResponse(
+                message,
+                this.currentPageInfo
+            );
 
             // Forward as if it were a final bot response
             if (responseText && this.geminiAPI && this.geminiAPI.callbacks) {
                 const onBotResponse = this.geminiAPI.callbacks.onBotResponse;
                 if (onBotResponse) {
+                    console.debug(
+                        `[AIHandler] sendTextMessage success, textLen=${
+                            responseText?.length || 0
+                        }`
+                    );
                     onBotResponse({
                         text: responseText,
                         isStreaming: false,

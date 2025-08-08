@@ -35,6 +35,13 @@ export class ConversationController {
         if (!this.activeTurnId) {
             this.#createTurn();
         }
+        try {
+            console.debug(
+                `[Controller] onInterim len=${text?.length || 0} activeTurnId=${
+                    this.activeTurnId
+                } anchorTurnId=${this.anchorTurnId}`
+            );
+        } catch (_) {}
         const turn = this.#getTurn(this.activeTurnId);
         if (!turn) return;
         if (turn.user.finalized) {

@@ -96,6 +96,12 @@ export class EventManager {
 
     updatePageInfo(pageInfo) {
         this.currentPageInfo = pageInfo;
+        // Share page info with AI so it can include it in context assembly
+        try {
+            this.multimediaOrchestrator?.aiHandler?.setCurrentPageInfo(
+                pageInfo
+            );
+        } catch (_) {}
     }
 
     async handleSendMessage() {
@@ -289,6 +295,11 @@ export class EventManager {
             interimText &&
             this.multimediaOrchestrator.isMultimediaSessionActive()
         ) {
+            try {
+                console.debug(
+                    `[EventManager] interim received len=${interimText.length}`
+                );
+            } catch (_) {}
             this.uiManager.setUserInterim(interimText);
         }
     }

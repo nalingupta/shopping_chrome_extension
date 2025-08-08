@@ -52,6 +52,12 @@ export class SpeechRecognitionService {
         this.speechRecognition.interimResults = true;
         this.speechRecognition.lang = "en-US";
 
+        try {
+            console.debug(
+                `[SpeechRec] start: lang=${this.speechRecognition.lang} interimResults=${this.speechRecognition.interimResults}`
+            );
+        } catch (_) {}
+
         this.speechRecognition.onresult = async (event) => {
             if (this.callbacks.onSpeechDetected) {
                 this.callbacks.onSpeechDetected();
@@ -97,16 +103,26 @@ export class SpeechRecognitionService {
             this.speechBuffer.lastWebSpeechUpdate = Date.now();
 
             if (hasInterimResults && this.callbacks.onInterimResult) {
+                try {
+                    console.debug(
+                        `[SpeechRec] interim: len=${latestTranscript.length}`
+                    );
+                } catch (_) {}
                 this.callbacks.onInterimResult(latestTranscript);
             }
 
             if (hasFinalResults) {
+                try {
+                    console.debug(
+                        `[SpeechRec] final: len=${latestTranscript.length}`
+                    );
+                } catch (_) {}
                 this.handleWebSpeechFinalResult();
             }
         };
 
         this.speechRecognition.onerror = (event) => {
-            console.warn("Speech recognition error:", event.error);
+            console.warn("[SpeechRec] error:", event.error);
 
             const timeoutErrors = ["no-speech", "network"];
             if (this.state.isListening && timeoutErrors.includes(event.error)) {
@@ -123,10 +139,17 @@ export class SpeechRecognitionService {
                 const now = Date.now();
                 const timeSinceLastActivity =
                     now - (this.lastSpeechActivity || now);
-
+                try {
+                    console.debug(
+                        `[SpeechRec] onend: isListening=${this.state.isListening} timeSinceLastActivityMs=${timeSinceLastActivity}`
+                    );
+                } catch (_) {}
                 if (timeSinceLastActivity < 30000) {
                     setTimeout(() => {
                         if (this.state.isListening) {
+                            try {
+                                console.debug("[SpeechRec] restarting SR");
+                            } catch (_) {}
                             this.restartSpeechRecognition();
                         }
                     }, 100);
@@ -149,6 +172,11 @@ export class SpeechRecognitionService {
 
             setTimeout(() => {
                 if (this.state.isListening) {
+                    try {
+                        console.debug(
+                            "[SpeechRec] restart -> startLocalSpeechRecognition()"
+                        );
+                    } catch (_) {}
                     this.startLocalSpeechRecognition();
                 }
             }, 200);

@@ -1,5 +1,6 @@
 import { API_CONFIG } from "../config/api-keys.js";
 import { streamingLogger } from "../utils/streaming-logger.js";
+import { SYSTEM_PROMPT } from "../prompt/system-prompt.js";
 
 export class GeminiRealtimeClient {
     constructor() {
@@ -26,6 +27,15 @@ export class GeminiRealtimeClient {
         this.maxReconnectAttempts = 3;
         this.isManualStop = false;
         this.audioInputEnabled = false;
+        this._connectSeq = 0; // debug: connection attempts
+
+        // Utterance-level diagnostics
+        this._utteranceCounters = {
+            audioChunks: 0,
+            videoFrames: 0,
+            firstAudioAt: null,
+            firstVideoAt: null,
+        };
     }
 
     async initialize() {
@@ -56,11 +66,18 @@ export class GeminiRealtimeClient {
 
                 const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${API_CONFIG.GEMINI_API_KEY}`;
 
+                // Debug: mark new connection attempt
+                this._connectSeq += 1;
+                try {
+                    console.debug(
+                        `[RealtimeClient] connect() attempt #${this._connectSeq}`
+                    );
+                } catch (_) {}
+
                 this.ws = new WebSocket(wsUrl);
                 this.ws.binaryType = "blob";
 
                 this.ws.onopen = async () => {
-                    console.log("Gemini WebSocket connected successfully");
                     this.isConnected = true;
                     this.reconnectAttempts = 0;
 
@@ -103,6 +120,9 @@ export class GeminiRealtimeClient {
                 };
 
                 this.ws.onerror = (error) => {
+                    try {
+                        console.error("[RealtimeClient] WS onerror:", error);
+                    } catch (_) {}
                     if (this.callbacks.onError) {
                         this.callbacks.onError(error);
                     }
@@ -117,6 +137,12 @@ export class GeminiRealtimeClient {
 
                     // Stop streaming logger
                     streamingLogger.stop();
+
+                    try {
+                        console.warn(
+                            `[RealtimeClient] WS onclose: code=${event.code} reason=${event.reason} wasClean=${event.wasClean}`
+                        );
+                    } catch (_) {}
 
                     if (this.callbacks.onConnectionStateChange) {
                         this.callbacks.onConnectionStateChange("disconnected");
@@ -142,26 +168,7 @@ export class GeminiRealtimeClient {
                 systemInstruction: {
                     parts: [
                         {
-                            text: `You are a helpful shopping assistant with access to both visual and audio input from the user.
-
-You receive periodic screen captures and can hear their questions through their microphone. The visual data may not always be perfectly clear or up-to-date.
-
-Your capabilities:
-- Analyze product listings, prices, and reviews when visible on screen
-- Compare products across different sites as the user browses
-- Provide shopping recommendations based on what you can see
-- Answer questions about products visible in the screen captures
-- Help with price comparisons and deal analysis
-- Identify product features from images/videos on the page
-
-When responding:
-1. Only comment on what you can clearly see in the screen captures
-2. If the visual information is unclear, ask for clarification
-3. Base recommendations on what is actually visible, not assumptions
-4. Be conversational and natural in your responses
-5. If you can't see specific shopping content clearly, ask them to navigate to or describe the product
-
-Important: Only describe what you can actually see in the provided screen captures. If something is unclear or not visible, say so rather than making assumptions.`,
+                            text: SYSTEM_PROMPT,
                         },
                     ],
                 },
@@ -181,7 +188,96 @@ Important: Only describe what you can actually see in the provided screen captur
             },
         };
 
+        try {
+            console.debug(
+                `[RealtimeClient] Sending setup. systemPromptLen=${
+                    (SYSTEM_PROMPT || "").length
+                }`
+            );
+        } catch (_) {}
         this.sendMessage(setupMessage);
+    }
+
+    // Utterance diagnostics helpers
+    markUtteranceStart() {
+        this._utteranceCounters = {
+            audioChunks: 0,
+            videoFrames: 0,
+            firstAudioAt: null,
+            firstVideoAt: null,
+        };
+        try {
+            console.debug(`[RealtimeClient] utteranceStart at ${Date.now()}`);
+        } catch (_) {}
+    }
+
+    logUtteranceEnd(elapsedMs) {
+        try {
+            console.debug(
+                `[RealtimeClient] utteranceEnd after ${elapsedMs}ms audioChunks=${this._utteranceCounters.audioChunks} videoFrames=${this._utteranceCounters.videoFrames} firstAudioAt=${this._utteranceCounters.firstAudioAt} firstVideoAt=${this._utteranceCounters.firstVideoAt}`
+            );
+        } catch (_) {}
+    }
+
+    // Optional helper to send a text chunk to the WS
+    sendTextChunk(text) {
+        if (!text || !text.trim()) return;
+        if (
+            !this.isSetupComplete ||
+            !this.ws ||
+            this.ws.readyState !== WebSocket.OPEN
+        ) {
+            return;
+        }
+        const message = { realtimeInput: { text } };
+        try {
+            console.debug(
+                `[RealtimeClient] Sending context text len=${text.length}`
+            );
+        } catch (_) {}
+        this.sendMessage(message);
+    }
+
+    // Feature flag: send history via clientContent in Live. Toggle for diagnostics.
+    static SEND_HISTORY_IN_LIVE = false;
+
+    // Send an array of history turns in Gemini format: [{ role: "user"|"model", parts: [{ text }] }, ...]
+    sendHistoryContents(contents) {
+        if (!GeminiRealtimeClient.SEND_HISTORY_IN_LIVE) {
+            try {
+                console.debug(
+                    "[RealtimeClient] SEND_HISTORY_IN_LIVE=false (skipping)"
+                );
+            } catch (_) {}
+            return;
+        }
+        if (!Array.isArray(contents) || contents.length === 0) return;
+        if (
+            !this.isSetupComplete ||
+            !this.ws ||
+            this.ws.readyState !== WebSocket.OPEN
+        ) {
+            return;
+        }
+        try {
+            console.debug(
+                `[RealtimeClient] Sending history turns=${contents.length}`
+            );
+            const first = contents[0] || {};
+            const firstText = (first.parts?.[0]?.text || "").slice(0, 60);
+            console.debug(
+                `[RealtimeClient] history[0]: role=${
+                    first.role
+                } textPreview=${JSON.stringify(firstText)}`
+            );
+        } catch (_) {}
+        for (const turn of contents) {
+            if (!turn || !turn.role || !turn.parts) continue;
+            const message = {
+                clientContent: { role: turn.role, parts: turn.parts },
+            };
+            this.sendMessage(message);
+        }
     }
 
     sendAudioChunk(base64Data) {
@@ -196,6 +292,17 @@ Important: Only describe what you can actually see in the provided screen captur
 
         // Log audio chunk for streaming statistics
         streamingLogger.logAudioChunk(base64Data.length);
+
+        // Utterance diagnostics: first-chunk and counter
+        try {
+            if (this._utteranceCounters.audioChunks === 0) {
+                this._utteranceCounters.firstAudioAt = Date.now();
+                console.debug(
+                    `[RealtimeClient] first audio chunk this utterance. audioInputEnabled=${this.audioInputEnabled}`
+                );
+            }
+            this._utteranceCounters.audioChunks += 1;
+        } catch (_) {}
 
         const message = {
             realtimeInput: {
@@ -221,6 +328,14 @@ Important: Only describe what you can actually see in the provided screen captur
 
         // Log video frame for streaming statistics
         streamingLogger.logVideoFrame(base64Data.length);
+
+        // Utterance diagnostics: first-frame and counter
+        try {
+            if (this._utteranceCounters.videoFrames === 0) {
+                this._utteranceCounters.firstVideoAt = Date.now();
+            }
+            this._utteranceCounters.videoFrames += 1;
+        } catch (_) {}
 
         const message = {
             realtimeInput: {
@@ -248,6 +363,7 @@ Important: Only describe what you can actually see in the provided screen captur
         try {
             this.ws.send(JSON.stringify(message));
             streamingLogger.logInfo("↗️ Sent activityStart");
+            console.debug(`[RealtimeClient] activityStart at ${Date.now()}`);
         } catch (error) {
             console.error("Failed to send activityStart:", error);
         }
@@ -265,6 +381,7 @@ Important: Only describe what you can actually see in the provided screen captur
         try {
             this.ws.send(JSON.stringify(message));
             streamingLogger.logInfo("↗️ Sent activityEnd");
+            console.debug(`[RealtimeClient] activityEnd at ${Date.now()}`);
         } catch (error) {
             console.error("Failed to send activityEnd:", error);
         }
@@ -294,7 +411,13 @@ Important: Only describe what you can actually see in the provided screen captur
 
                 this.ws.send(messageStr);
             } catch (error) {
-                console.error("Failed to send message:", error);
+                try {
+                    console.error(
+                        "[RealtimeClient] Failed to send message. readyState=",
+                        this.ws?.readyState,
+                        error
+                    );
+                } catch (_) {}
             }
         } else {
             console.warn(
@@ -314,6 +437,9 @@ Important: Only describe what you can actually see in the provided screen captur
             ) {
                 this.isSetupComplete = true;
                 this.processBufferedChunks();
+                try {
+                    console.debug("[RealtimeClient] setupComplete received");
+                } catch (_) {}
                 return;
             }
 
@@ -350,6 +476,11 @@ Important: Only describe what you can actually see in the provided screen captur
                         timestamp: Date.now(),
                     });
                 }
+                try {
+                    console.debug(
+                        `[RealtimeClient] chunk received len=${chunkText.length}`
+                    );
+                } catch (_) {}
             }
 
             // Only rely on explicit turn completion flag from Gemini
@@ -361,6 +492,11 @@ Important: Only describe what you can actually see in the provided screen captur
 
             if (isTurnComplete) {
                 this.isProcessingTurn = true;
+                try {
+                    console.debug(
+                        `[RealtimeClient] turnComplete. finalLen=${this.currentStreamingResponse.length}`
+                    );
+                } catch (_) {}
                 await this.handleCompleteTurn(this.currentStreamingResponse);
                 this.currentTurn = [];
                 this.currentStreamingResponse = "";
@@ -477,6 +613,12 @@ Important: Only describe what you can actually see in the provided screen captur
             30000
         );
         this.reconnectAttempts++;
+
+        try {
+            console.warn(
+                `[RealtimeClient] scheduleReconnection attempt=${this.reconnectAttempts} delayMs=${delay}`
+            );
+        } catch (_) {}
 
         this.reconnectTimer = setTimeout(async () => {
             if (!this.isManualStop) {
