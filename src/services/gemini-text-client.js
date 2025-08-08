@@ -1,7 +1,7 @@
 import { API_CONFIG } from "../config/api-keys.js";
 import { UnifiedConversationManager } from "../utils/storage.js";
 
-export class ShoppingAssistant {
+export class GeminiTextClient {
     static async processQuery(data) {
         const { query, pageInfo } = data;
 
@@ -51,7 +51,7 @@ Always be helpful, concise, and focus on the user's shopping needs.`;
         // Add conversation history as previous turns
         if (conversationHistory.length > 0) {
             console.log(
-                `🧠 ShoppingAssistant: Including ${conversationHistory.length} conversation history messages`
+                `🧠 GeminiTextClient: Including ${conversationHistory.length} conversation history messages`
             );
             conversationHistory.forEach((turn) => {
                 messages.push({

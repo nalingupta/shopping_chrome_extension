@@ -1,6 +1,6 @@
 import { MESSAGE_TYPES } from "../utils/constants.js";
 import { StorageManager, clearChatStorageOnReload } from "../utils/storage.js";
-import { ShoppingAssistant } from "../services/shopping-assistant.js";
+import { GeminiTextClient } from "../services/gemini-text-client.js";
 import { MicrophoneService } from "../services/microphone-service.js";
 
 class BackgroundService {
@@ -118,7 +118,7 @@ class BackgroundService {
 
     async handleProcessUserQuery(request, sender, sendResponse) {
         try {
-            const response = await ShoppingAssistant.processQuery(request.data);
+            const response = await GeminiTextClient.processQuery(request.data);
             sendResponse(response);
         } catch (error) {
             sendResponse({

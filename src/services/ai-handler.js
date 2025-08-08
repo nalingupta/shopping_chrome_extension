@@ -1,9 +1,9 @@
-import { GeminiLiveAPI } from "./gemini-api.js";
-import { ShoppingAssistant as RestShoppingAssistant } from "./shopping-assistant.js";
+import { GeminiRealtimeClient } from "./gemini-realtime-client.js";
+import { GeminiTextClient } from "./gemini-text-client.js";
 
 export class AIHandler {
     constructor() {
-        this.geminiAPI = new GeminiLiveAPI();
+        this.geminiAPI = new GeminiRealtimeClient();
         this.isGeminiConnected = false;
 
         this.setupGeminiCallbacks();
@@ -114,7 +114,7 @@ export class AIHandler {
         // Use REST API flow for text input
         try {
             // Minimal request body: just pass the text; page context not available here
-            const responseText = await RestShoppingAssistant.callGeminiAPI([
+            const responseText = await GeminiTextClient.callGeminiAPI([
                 { role: "user", content: message },
             ]);
 

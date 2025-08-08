@@ -1,7 +1,7 @@
 import { API_CONFIG } from "../config/api-keys.js";
 import { streamingLogger } from "../utils/streaming-logger.js";
 
-export class GeminiLiveAPI {
+export class GeminiRealtimeClient {
     constructor() {
         this.ws = null;
         this.isConnected = false;
