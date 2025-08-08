@@ -341,7 +341,7 @@ export class GeminiRealtimeClient {
                         norm(last.assistant || "") === norm(t.assistant || "");
                     if (!same) turns.push(t);
                 }
-                console.debug(this.#formatCanonicalHistoryLine(turns));
+                this.#logCanonicalHistory(turns);
             } catch (_) {}
         }
     }
@@ -713,23 +713,22 @@ export class GeminiRealtimeClient {
                 this._turnStats.screenBytes
             );
 
-            // 1) Summary
+            // Styled, user-friendly block: header uses Session/Turn, colored lines
+            const sHdr = "color:#6a1b9a;font-weight:bold"; // purple
+            const sLbl = "color:#00838f;font-weight:bold"; // teal
+            const sUser = "color:#1e88e5;font-weight:bold"; // blue
+            const sAsst = "color:#2e7d32;font-weight:bold"; // green
             console.debug(
-                `[RealtimeClient] TurnSummary | utt=${uttNum} | channel=${channel} | modality=${modality} | session=${this._connectSeq} turn=${this._turnSeq} | audio=${this._turnStats.audioChunks} chunks, ${audioSize} | screens=${this._turnStats.screens} frames, ${screenSize}`
+                `%c[RealtimeClient] Session ${this._connectSeq} Turn ${this._turnSeq}`,
+                sHdr
             );
-            // 2) History: no longer printed per turn; printed once at setup
-            // 3) User
             console.debug(
-                `[RealtimeClient] User | utt=${uttNum} | len=${
-                    (this._turnStats.userText || "").length
-                } | ${userPreview}`
+                `%cSummary:%c [${channel} | ${modality} | audio=${this._turnStats.audioChunks} chunks (${audioSize}) | screens=${this._turnStats.screens} frames (${screenSize})]`,
+                sLbl,
+                ""
             );
-            // 4) Output
-            console.debug(
-                `[RealtimeClient] Output | utt=${uttNum} | len=${
-                    finalText?.length || 0
-                } | ${outputPreview}`
-            );
+            console.debug(`%cUser:%c ${userPreview}`, sUser, "");
+            console.debug(`%cOutput:%c ${outputPreview}`, sAsst, "");
         } catch (_) {}
 
         // Append current utterance AFTER logging so previous-only semantics hold
@@ -754,32 +753,57 @@ export class GeminiRealtimeClient {
         return Math.floor((len * 3) / 4) - padding;
     }
 
-    // Format a canonical turns array (from ContextAssembler.getCanonicalTurns) into
-    // a single-line history preview: first turn … last turn, with in-progress support
-    #formatCanonicalHistoryLine(turns) {
+    // Pretty multi-line, colorized canonical history output (first and last turns)
+    #logCanonicalHistory(turns) {
         const pairs = Array.isArray(turns) ? turns : [];
-        const turnsCount = pairs.length;
-        if (turnsCount === 0) return "[RealtimeClient] History | empty";
-
-        const first = pairs[0];
-        const firstUser = JSON.stringify((first.user || "").slice(0, 60));
-        const firstAssistant =
-            first.assistant == null
-                ? "(pending)"
-                : JSON.stringify((first.assistant || "").slice(0, 60));
-
-        if (turnsCount === 1) {
-            return `[RealtimeClient] History | turns=1 | first: user=${firstUser} assistant=${firstAssistant}`;
+        if (pairs.length === 0) {
+            console.debug("[RealtimeClient] History | empty");
+            return;
         }
-
-        const last = pairs[turnsCount - 1];
-        const lastUser = JSON.stringify((last.user || "").slice(0, 60));
-        const lastAssistant =
-            last.assistant == null
-                ? "(pending)"
-                : JSON.stringify((last.assistant || "").slice(0, 60));
-
-        return `[RealtimeClient] History | turns=${turnsCount} | first: user=${firstUser} assistant=${firstAssistant} | ... | last: user=${lastUser} assistant=${lastAssistant}`;
+        const sHdr = "color:#6a1b9a;font-weight:bold"; // purple
+        const sUser = "color:#1e88e5;font-weight:bold"; // blue
+        const sAsst = "color:#2e7d32;font-weight:bold"; // green
+        console.debug(
+            `%c[RealtimeClient] History | total turns=${pairs.length}`,
+            sHdr
+        );
+        const first = pairs[0];
+        console.debug(
+            `%cTurn 1 — User:%c ${JSON.stringify(
+                (first.user || "").slice(0, 60)
+            )}`,
+            sUser,
+            ""
+        );
+        console.debug(
+            `%cTurn 1 — Assistant:%c ${
+                first.assistant == null
+                    ? "(pending)"
+                    : JSON.stringify((first.assistant || "").slice(0, 60))
+            }`,
+            sAsst,
+            ""
+        );
+        if (pairs.length > 1) {
+            const last = pairs[pairs.length - 1];
+            console.debug("…");
+            console.debug(
+                `%cTurn ${pairs.length} — User:%c ${JSON.stringify(
+                    (last.user || "").slice(0, 60)
+                )}`,
+                sUser,
+                ""
+            );
+            console.debug(
+                `%cTurn ${pairs.length} — Assistant:%c ${
+                    last.assistant == null
+                        ? "(pending)"
+                        : JSON.stringify((last.assistant || "").slice(0, 60))
+                }`,
+                sAsst,
+                ""
+            );
+        }
     }
 
     #formatHistoryLineForLog() {

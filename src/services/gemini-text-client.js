@@ -94,32 +94,42 @@ export class GeminiTextClient {
                     requestBody.contents.length
                 }, hasSystemInstruction=${!!systemPrompt}`
             );
-            // Build canonical history from the exact payload we send
-            const pairs = [];
+            // Build canonical history from the exact payload we send, then normalize+dedupe for logs
+            const rawPairs = [];
             let pendingUser = null;
             for (const c of requestBody.contents) {
                 const role = c.role === "model" ? "assistant" : c.role;
                 const text = (c?.parts?.[0]?.text || "").trim();
                 if (role === "user") {
                     if (pendingUser !== null)
-                        pairs.push({ user: pendingUser, assistant: null });
+                        rawPairs.push({ user: pendingUser, assistant: null });
                     pendingUser = text;
                 } else if (role === "assistant") {
                     if (pendingUser !== null) {
-                        pairs.push({ user: pendingUser, assistant: text });
+                        rawPairs.push({ user: pendingUser, assistant: text });
                         pendingUser = null;
                     } else if (
-                        pairs.length > 0 &&
-                        pairs[pairs.length - 1].assistant == null
+                        rawPairs.length > 0 &&
+                        rawPairs[rawPairs.length - 1].assistant == null
                     ) {
-                        pairs[pairs.length - 1].assistant = text;
+                        rawPairs[rawPairs.length - 1].assistant = text;
                     } else {
-                        pairs.push({ user: "", assistant: text });
+                        rawPairs.push({ user: "", assistant: text });
                     }
                 }
             }
             if (pendingUser !== null)
-                pairs.push({ user: pendingUser, assistant: null });
+                rawPairs.push({ user: pendingUser, assistant: null });
+            const norm = (s) => (s || "").trim();
+            const pairs = [];
+            for (const t of rawPairs) {
+                const last = pairs[pairs.length - 1];
+                const same =
+                    last &&
+                    norm(last.user) === norm(t.user) &&
+                    norm(last.assistant || "") === norm(t.assistant || "");
+                if (!same) pairs.push(t);
+            }
             const n = pairs.length;
             if (n === 0) {
                 console.debug("[TextClient] History | empty");
@@ -205,101 +215,31 @@ export class GeminiTextClient {
                 return Math.floor((len * 3) / 4) - padding;
             })();
             const screenSize = streamingLogger.formatBytes(screenBytes);
-            const buildHistoryLine = () => {
-                try {
-                    const snap = Array.isArray(historyContents)
-                        ? historyContents
-                        : [];
-                    if (snap.length === 0)
-                        return "[TextClient] History | empty";
-                    const counts = snap.reduce(
-                        (acc, t) => (
-                            (acc[t.role] = (acc[t.role] || 0) + 1), acc
-                        ),
-                        {}
-                    );
-                    const previews = [];
-                    if (snap.length <= 2) {
-                        snap.forEach((t, i) => {
-                            const text = (t?.parts?.[0]?.text || "").slice(
-                                0,
-                                60
-                            );
-                            previews.push(
-                                `${i}:${t.role}=${JSON.stringify(text)}`
-                            );
-                        });
-                    } else if (snap.length === 3) {
-                        const first = snap[0];
-                        const last = snap[2];
-                        previews.push(
-                            `first0:${first.role}=${JSON.stringify(
-                                (first?.parts?.[0]?.text || "").slice(0, 60)
-                            )}`
-                        );
-                        previews.push(
-                            `last0:${last.role}=${JSON.stringify(
-                                (last?.parts?.[0]?.text || "").slice(0, 60)
-                            )}`
-                        );
-                    } else {
-                        const first0 = snap[0];
-                        const first1 = snap[1];
-                        const last1 = snap[snap.length - 2];
-                        const last0 = snap[snap.length - 1];
-                        previews.push(
-                            `first0:${first0.role}=${JSON.stringify(
-                                (first0?.parts?.[0]?.text || "").slice(0, 60)
-                            )}`
-                        );
-                        previews.push(
-                            `first1:${first1.role}=${JSON.stringify(
-                                (first1?.parts?.[0]?.text || "").slice(0, 60)
-                            )}`
-                        );
-                        previews.push(
-                            `last1:${last1.role}=${JSON.stringify(
-                                (last1?.parts?.[0]?.text || "").slice(0, 60)
-                            )}`
-                        );
-                        previews.push(
-                            `last0:${last0.role}=${JSON.stringify(
-                                (last0?.parts?.[0]?.text || "").slice(0, 60)
-                            )}`
-                        );
-                    }
-                    return `[TextClient] History | turns=${
-                        snap.length
-                    } roles user=${counts.user || 0} assistant=${
-                        counts.assistant || 0
-                    } | previews ${previews.join(" ")}`;
-                } catch (_) {
-                    return "[TextClient] History | unavailable";
-                }
-            };
-            const userPreview = JSON.stringify(
-                (contextText || "").slice(0, 120)
-            );
-            const outputPreview = JSON.stringify(
-                (primaryText || "").slice(0, 120)
-            );
-            // Line 1: Summary
+            const sHdr = "color:#6a1b9a;font-weight:bold"; // purple
+            const sLbl = "color:#00838f;font-weight:bold"; // teal
+            const sUser = "color:#1e88e5;font-weight:bold"; // blue
+            const sAsst = "color:#2e7d32;font-weight:bold"; // green
+            console.debug(`%c[TextClient] Turn`, sHdr);
             console.debug(
-                `[TextClient] TurnSummary | channel=REST | modality=text | session=- turn=- | audio=0 chunks, 0 B | screens=${
+                `%cSummary:%c [REST | text | screens=${
                     pageInfo?.screenCapture ? 1 : 0
-                } frame, ${screenSize}`
+                } frame${pageInfo?.screenCapture ? "" : "s"} (${screenSize})]`,
+                sLbl,
+                ""
             );
-            // Line 2: History
-            console.debug(buildHistoryLine());
-            // Line 3: User
             console.debug(
-                `[TextClient] User | len=${
-                    (contextText || "").length
-                } | ${userPreview}`
+                `%cUser:%c ${JSON.stringify(
+                    (contextText || "").slice(0, 120)
+                )}`,
+                sUser,
+                ""
             );
-            // Line 4: Output
             console.debug(
-                `[TextClient] Output | len=${primaryText.length} | ${outputPreview}`
+                `%cOutput:%c ${JSON.stringify(
+                    (primaryText || "").slice(0, 120)
+                )}`,
+                sAsst,
+                ""
             );
         } catch (_) {}
 
