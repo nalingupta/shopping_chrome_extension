@@ -1,18 +1,13 @@
 import { MESSAGE_TYPES } from "../utils/constants.js";
 import { UnifiedConversationManager } from "../utils/storage.js";
-import { MessageRenderer } from "../ui/message-renderer.js";
+// MessageRenderer removed; using ConversationRenderer via UIManager
 
 export class LifecycleManager {
-    constructor(
-        uiManager,
-        eventManager,
-        multimediaOrchestrator,
-        messageRenderer
-    ) {
+    constructor(uiManager, eventManager, multimediaOrchestrator, _unused) {
         this.uiManager = uiManager;
         this.eventManager = eventManager;
         this.multimediaOrchestrator = multimediaOrchestrator;
-        this.messageRenderer = messageRenderer;
+        this.messageRenderer = null;
     }
 
     trackSidePanelLifecycle() {
@@ -182,16 +177,8 @@ export class LifecycleManager {
                 await UnifiedConversationManager.getWelcomeScreenState();
 
             if (messages && messages.length > 0) {
-                messages.forEach((msg) => {
-                    const messageDiv = this.messageRenderer.createMessage(
-                        msg.content,
-                        msg.type
-                    );
-                    this.uiManager.elements.messages.appendChild(messageDiv);
-                });
-
+                this.uiManager.conversationRenderer?.restore(messages);
                 this.hideWelcomeScreen();
-                this.scrollToBottom();
             } else if (!isWelcomeVisible) {
                 this.hideWelcomeScreen();
             } else {

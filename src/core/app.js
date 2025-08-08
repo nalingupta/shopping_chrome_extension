@@ -1,6 +1,6 @@
 import { MESSAGE_TYPES } from "../utils/constants.js";
 import { UnifiedConversationManager } from "../utils/storage.js";
-import { MessageRenderer } from "../ui/message-renderer.js";
+import { ConversationRenderer } from "../ui/conversation-renderer.js";
 import { UIState } from "../ui/ui-state.js";
 import { MultimediaOrchestrator } from "../services/multimedia-orchestrator.js";
 import { AudioHandler } from "../services/audio-handler.js";
@@ -12,8 +12,7 @@ import { LifecycleManager } from "./lifecycle-manager.js";
 
 export class ShoppingAssistant {
     constructor() {
-        this.messageRenderer = new MessageRenderer();
-        this.uiManager = new UIManager(this.messageRenderer);
+        this.uiManager = new UIManager();
 
         // Create new handlers
         this.aiHandler = new AIHandler();
@@ -27,14 +26,13 @@ export class ShoppingAssistant {
 
         this.eventManager = new EventManager(
             this.uiManager,
-            this.multimediaOrchestrator,
-            this.messageRenderer
+            this.multimediaOrchestrator
         );
         this.lifecycleManager = new LifecycleManager(
             this.uiManager,
             this.eventManager,
             this.multimediaOrchestrator,
-            this.messageRenderer
+            null
         );
 
         this.uiManager.initializeElements();
@@ -159,11 +157,12 @@ export class ShoppingAssistant {
     }
 
     showInterimText(text) {
-        return this.uiManager.showInterimText(text);
+        // Deprecated
+        this.uiManager.setUserInterim(text);
     }
 
     updateStreamingMessage(text) {
-        return this.uiManager.updateStreamingMessage(text);
+        this.uiManager.updateAssistantStream(text);
     }
 
     scrollToBottom() {

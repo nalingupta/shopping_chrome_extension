@@ -419,20 +419,22 @@ body {
     display: flex;
     flex-direction: column;
     gap: var(--spacing-lg);
+    scroll-behavior: auto; /* no smooth scroll for snap-to-top */
 }
 
 .message {
-    max-width: 85%;
+    display: flex; /* full-width row container */
+    width: 100%;
+    align-items: flex-start;
     word-wrap: break-word;
-    animation: fadeIn 0.3s ease-out;
+    animation: none; /* remove fade-in per update to avoid flicker */
 }
 
 .assistant-message {
-    align-self: flex-start;
+    justify-content: flex-start;
 }
-
 .user-message {
-    align-self: flex-end;
+    justify-content: flex-end;
 }
 
 .message-content {
@@ -440,10 +442,32 @@ body {
     border-radius: var(--border-radius);
     font-size: var(--font-size-base);
     line-height: 1.5;
-    transition: all 0.2s ease;
+    transition: none; /* no transition on content */
     word-wrap: break-word;
     white-space: pre-wrap;
     min-height: 1.5em; /* Prevent layout shifts */
+    display: block; /* bubble is block inside a flex row */
+}
+
+/* Fixed-width bubbles: compute once relative to container width */
+:root {
+    --bubble-gutter: 48px; /* total side padding/gaps to subtract */
+}
+.message-content.fixed-width,
+.message-content.bubble {
+    width: var(--bubbleWidthPx);
+    max-width: var(--bubbleWidthPx);
+    flex: 0 0 auto;
+    overflow-wrap: break-word;
+    will-change: contents; /* optimize streaming text updates */
+    contain: content; /* isolate layout */
+    white-space: pre-wrap;
+}
+
+.turn {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-sm);
 }
 
 .assistant-message .message-content {
@@ -686,36 +710,7 @@ body {
     animation: dots 1.5s steps(4, end) infinite;
 }
 
-/* Interim Transcription - Smooth transitions */
-.interim-message {
-    /* Stable base styling */
-    animation: none;
-}
-
-.interim-message .message-content {
-    background: var(--color-accent);
-    color: white;
-    box-shadow: var(--shadow-sm);
-    position: relative;
-    transition: none; /* No transitions by default */
-}
-
-.interim-content {
-    position: relative;
-    min-height: 1.2em; /* Prevent height jumping */
-}
-
-/* Smooth update transition */
-.interim-content.updating {
-    transition: opacity 0.15s ease-in-out;
-    opacity: 0.9;
-}
-
-/* Stable text display */
-.interim-content {
-    word-wrap: break-word;
-    white-space: pre-wrap;
-}
+/* Remove old interim-specific styles (deprecated) */
 
 /* Active transcription indicator - pulsing dots */
 .interim-content::after {
@@ -827,42 +822,35 @@ body {
     }
 }
 
-/* Streaming message styles */
-.streaming-message {
-    opacity: 0.95;
-    transition: opacity 0.2s ease;
-    animation: streamingFadeIn 0.3s ease-out;
-}
-
-.streaming-content {
-    position: relative;
-    min-height: 1.5em; /* Prevent layout shifts */
-}
-
-@keyframes streamingFadeIn {
-    from {
-        opacity: 0;
-        transform: translateY(8px);
-    }
-    to {
-        opacity: 0.95;
-        transform: translateY(0);
-    }
-}
-
-.typing-indicator {
+/* New streaming caret and thinking styles */
+.thinking {
     display: inline-block;
-    animation: typingBlink 1.2s infinite;
+    color: var(--color-secondary);
+    margin-right: 6px;
+}
+.thinking::after {
+    content: "";
+    display: inline-block;
+    width: 16px;
+    height: 1em;
+    margin-left: 4px;
+    animation: dots 1.5s steps(4, end) infinite;
+}
+.thinking.hidden {
+    display: none;
+}
+
+.caret {
+    display: inline-block;
     color: var(--color-accent);
     font-weight: bold;
     margin-left: 2px;
-    opacity: 0.8;
+    animation: typingBlink 1.2s infinite steps(1, end);
 }
-
 @keyframes typingBlink {
     0%,
     50% {
-        opacity: 0.8;
+        opacity: 0.85;
     }
     51%,
     100% {
