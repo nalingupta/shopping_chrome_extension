@@ -41,8 +41,9 @@ export class ScreenshotService {
         }
 
         try {
+            const tabId = this.tabManager.getCurrentTabId();
             const result = await chrome.debugger.sendCommand(
-                { tabId: this.tabManager.getCurrentTabId() },
+                { tabId },
                 "Page.captureScreenshot",
                 {
                     format: "jpeg",
@@ -53,6 +54,10 @@ export class ScreenshotService {
             );
 
             if (result && result.data) {
+                // Include tabId in a debug log to ensure capture source
+                console.log(
+                    `[captureFrame] tabId=${tabId} size=${result.data.length}`
+                );
                 return result.data;
             } else {
                 throw new Error("No screenshot data received");

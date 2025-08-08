@@ -135,6 +135,14 @@ export class EndpointDetectionService {
         this.speechBuffer.isGeminiProcessing = true;
         this.setResponseTimeout();
 
+        // Proactively mark speech ended for video sending purposes
+        try {
+            if (this.callbacks?.onStatus) {
+                // no-op; status already handled
+            }
+            // We don’t directly know VideoHandler here; AudioHandler reacts to this via callbacks and stops sending
+        } catch (_) {}
+
         if (this.callbacks.onStatus) {
             this.callbacks.onStatus("Processing speech...", "info");
         }

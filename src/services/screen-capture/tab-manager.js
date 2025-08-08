@@ -132,8 +132,11 @@ export class TabManager {
                 return { success: true };
             }
 
-            const isNewTab = !this.attachedTabs.has(tabId);
             this.isTabSwitchInProgress = true;
+            const isNewTab = !this.attachedTabs.has(tabId);
+            console.log(
+                `[TabManager] switchToTab start -> tabId=${tabId} isNew=${isNewTab}`
+            );
 
             if (!this.attachedTabs.has(tabId)) {
                 const maxAttachments = 10;
@@ -222,6 +225,7 @@ export class TabManager {
             }
 
             this.currentTabId = tabId;
+            console.log(`[TabManager] switchToTab set currentTabId=${tabId}`);
             this.markTabAccessed(tabId);
 
             return { success: true };
@@ -230,6 +234,9 @@ export class TabManager {
             return { success: false, error: error.message };
         } finally {
             this.isTabSwitchInProgress = false;
+            console.log(
+                `[TabManager] switchToTab end -> currentTabId=${this.currentTabId}`
+            );
         }
     }
 

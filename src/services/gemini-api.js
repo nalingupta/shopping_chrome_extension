@@ -65,11 +65,17 @@ export class GeminiLiveAPI {
 
                     // Ensure AudioContext is running after previous suspend on disconnect
                     try {
-                        if (this.audioContext && this.audioContext.state === "suspended") {
+                        if (
+                            this.audioContext &&
+                            this.audioContext.state === "suspended"
+                        ) {
                             await this.audioContext.resume();
                         }
                     } catch (resumeError) {
-                        console.warn("AudioContext resume failed:", resumeError);
+                        console.warn(
+                            "AudioContext resume failed:",
+                            resumeError
+                        );
                     }
 
                     await new Promise((resolve) => setTimeout(resolve, 100));
@@ -201,8 +207,8 @@ Important: Only describe what you can actually see in the provided screen captur
             !this.ws ||
             this.ws.readyState !== WebSocket.OPEN
         ) {
-            // Bound the buffer to the most recent frame only (avoid stale flush)
-            this.pendingVideoFrames = [base64Data];
+            // Drop frame when not ready; do not buffer to avoid stale sends
+            streamingLogger.logInfo("DROP video frame (setup not ready)");
             return;
         }
 
@@ -365,6 +371,11 @@ Important: Only describe what you can actually see in the provided screen captur
 
         // Optional safety: do NOT flush stale video frames on setup complete
         // Clear any queued frames to ensure only current-tab frames are sent
+        if (this.pendingVideoFrames.length > 0) {
+            streamingLogger.logInfo(
+                `DROP ${this.pendingVideoFrames.length} queued video frames on setupComplete`
+            );
+        }
         this.pendingVideoFrames = [];
     }
 

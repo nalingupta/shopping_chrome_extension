@@ -4,8 +4,9 @@ import { EndpointDetectionService } from "./audio/endpoint-detection-service.js"
 import { AudioStateManager } from "./audio/audio-state-manager.js";
 
 export class AudioHandler {
-    constructor(aiHandler) {
+    constructor(aiHandler, videoHandler) {
         this.aiHandler = aiHandler;
+        this.videoHandler = videoHandler;
 
         // Audio services
         this.audioCapture = new AudioCaptureService(this.aiHandler);
@@ -37,6 +38,13 @@ export class AudioHandler {
             onAudioStreamingStart: async () => {
                 await this.startAudioStreaming();
                 this.audioStreamingStarted = true;
+                // Start sending video frames only while speaking
+                try {
+                    if (this.videoHandler) {
+                        this.videoHandler.speechActive = true;
+                        this.videoHandler.setVideoStreamingStarted(true);
+                    }
+                } catch (_) {}
             },
             onVideoStreamingStart: () => {
                 // This will be handled by VideoHandler
@@ -162,6 +170,13 @@ export class AudioHandler {
 
     onSpeechDetected() {
         this.endpointDetection.onSpeechDetected();
+        // Optional safety: ensure video sending resumes when speech starts
+        try {
+            if (this.videoHandler) {
+                this.videoHandler.speechActive = true;
+                this.videoHandler.setVideoStreamingStarted(true);
+            }
+        } catch (_) {}
     }
 
     onAudioLevelDetected(level) {
@@ -170,10 +185,22 @@ export class AudioHandler {
 
     handleSilenceDetected() {
         this.endpointDetection.handleSilenceDetected();
+        // Stop sending video frames when speech ends
+        try {
+            if (this.videoHandler) {
+                this.videoHandler.speechActive = false;
+            }
+        } catch (_) {}
     }
 
     handleWebSpeechFinalResult() {
         this.endpointDetection.handleWebSpeechFinalResult();
+        // Stop sending video frames when speech finalizes
+        try {
+            if (this.videoHandler) {
+                this.videoHandler.speechActive = false;
+            }
+        } catch (_) {}
     }
 
     triggerResponseGeneration(source) {

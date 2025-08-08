@@ -62,6 +62,8 @@ export class MultimediaOrchestrator {
             // Set listening state
             this.audioHandler.setListeningState(true);
             this.videoHandler.setVideoStreamingStarted(true);
+            // Ensure we start with speech inactive; will be toggled by AudioHandler callbacks
+            this.videoHandler.speechActive = false;
 
             this.isMultimediaActive = true;
 
@@ -115,6 +117,7 @@ export class MultimediaOrchestrator {
             // Reset states
             this.audioHandler.setListeningState(false);
             this.videoHandler.setVideoStreamingStarted(false);
+            this.videoHandler.speechActive = false;
             this.audioHandler.audioStreamingStarted = false;
 
             this.isMultimediaActive = false;

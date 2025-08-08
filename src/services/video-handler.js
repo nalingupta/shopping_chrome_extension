@@ -15,6 +15,7 @@ export class VideoHandler {
         this.screenshotInterval = null;
         this.screenCaptureFailureCount = 0;
         this.isTabSwitching = false;
+        this.speechActive = false; // gate sending by speech activity
     }
 
     async setupScreenCapture() {
@@ -80,9 +81,8 @@ export class VideoHandler {
                     } catch (error) {
                         console.warn("Tab activation switch failed:", error);
                     } finally {
-                        // Brief stabilization delay before resuming sends
-                        await new Promise((r) => setTimeout(r, 150));
-                        this.videoStreamingStarted = true;
+                        // Skip first tick instead of fixed delay; gating will prevent stale sends
+                        this._skipNextTick = true;
                         this.isTabSwitching = false;
                     }
                 }
@@ -226,6 +226,21 @@ export class VideoHandler {
         streamingLogger.logInfo("📹 Video stream started (10 FPS)");
 
         this.screenshotInterval = setInterval(async () => {
+            if (this._skipNextTick) {
+                this._skipNextTick = false;
+                streamingLogger.logInfo("SKIP first tick after tab switch");
+                // Resume sending after the skipped tick
+                this.videoStreamingStarted = true;
+                streamingLogger.logInfo("RESUME video sending after switch");
+                return;
+            }
+            // Optional safety: if speech is active but sending is off, resume
+            if (this.speechActive && !this.videoStreamingStarted) {
+                this.videoStreamingStarted = true;
+                streamingLogger.logInfo(
+                    "RESUME video sending (auto) due to active speech"
+                );
+            }
             if (!this.screenCapture.hasStream()) {
                 const recoverySuccess = await this.recoverFromInvalidTab();
                 if (!recoverySuccess) {
@@ -235,19 +250,55 @@ export class VideoHandler {
             }
 
             try {
-                await this.checkAndSwitchToActiveTab();
+                // Actively self-heal: switch immediately if mismatch
+                try {
+                    const [activeTab] = await chrome.tabs.query({
+                        active: true,
+                        currentWindow: true,
+                    });
+                    const currentTabId = this.screenCapture.getCurrentTabId();
+                    if (activeTab && currentTabId !== activeTab.id) {
+                        streamingLogger.logInfo(
+                            `MISMATCH detected (current=${currentTabId}, active=${activeTab.id}) → switching now`
+                        );
+                        await this.screenCapture.switchToTab(activeTab.id);
+                        // Skip this tick to avoid capturing mid-transition
+                        return;
+                    }
+                } catch (_) {}
+                const currIdBefore = this.screenCapture.getCurrentTabId();
                 const frameData = await this.screenCapture.captureFrame();
+                const currIdAfter = this.screenCapture.getCurrentTabId();
+                // Guard: if tabId changed mid-tick, drop this frame
+                if (currIdBefore !== currIdAfter) {
+                    streamingLogger.logInfo(
+                        `DROP frame due to tab change mid-tick (pre=${currIdBefore} post=${currIdAfter})`
+                    );
+                    return;
+                }
                 this.screenCaptureFailureCount = 0;
                 this.previewManager.updatePreview(frameData);
+                streamingLogger.logInfo(
+                    `CAPTURED frame from tab=${currIdAfter} (pre=${currIdBefore})`
+                );
 
                 if (
                     this.videoStreamingStarted &&
+                    this.speechActive &&
                     this.aiHandler.isGeminiConnectionActive()
                 ) {
                     // Only send when Gemini is fully setup to avoid buffering stale frames
-                    const status = this.aiHandler.geminiAPI?.getConnectionStatus?.();
+                    const status =
+                        this.aiHandler.geminiAPI?.getConnectionStatus?.();
+                    streamingLogger.logInfo(
+                        `FRAME ready tab=${this.screenCapture.getCurrentTabId()} setup=${!!status?.isSetupComplete}`
+                    );
                     if (status?.isSetupComplete) {
                         this.aiHandler.sendVideoData(frameData);
+                    } else {
+                        streamingLogger.logInfo(
+                            `FRAME skipped (setup incomplete) tab=${this.screenCapture.getCurrentTabId()}`
+                        );
                     }
                 }
             } catch (error) {

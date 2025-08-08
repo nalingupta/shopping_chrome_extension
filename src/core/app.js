@@ -17,8 +17,8 @@ export class ShoppingAssistant {
 
         // Create new handlers
         this.aiHandler = new AIHandler();
-        this.audioHandler = new AudioHandler(this.aiHandler);
         this.videoHandler = new VideoHandler(this.aiHandler);
+        this.audioHandler = new AudioHandler(this.aiHandler, this.videoHandler);
         this.multimediaOrchestrator = new MultimediaOrchestrator(
             this.audioHandler,
             this.videoHandler,
