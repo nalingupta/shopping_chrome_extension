@@ -68,8 +68,12 @@ export class AudioHandler {
                     );
                 } catch (_) {}
                 try {
-                    const newText = typeof finalText === "string" ? finalText : "";
-                    if (!this._dgFinalBest || newText.length >= this._dgFinalBest.length) {
+                    const newText =
+                        typeof finalText === "string" ? finalText : "";
+                    if (
+                        !this._dgFinalBest ||
+                        newText.length >= this._dgFinalBest.length
+                    ) {
                         this._dgFinalBest = newText;
                     }
                     this.aiHandler?.setLastUserMessage(this._dgFinalBest);
@@ -101,7 +105,9 @@ export class AudioHandler {
                     // Ensure we send the best accumulated final
                     try {
                         if (this._dgFinalBest) {
-                            this.aiHandler.setLastUserMessage(this._dgFinalBest);
+                            this.aiHandler.setLastUserMessage(
+                                this._dgFinalBest
+                            );
                         }
                     } catch (_) {}
                     this.onExplicitUtteranceEnd();
@@ -170,7 +176,19 @@ export class AudioHandler {
                 }
             },
             onEndpointDetectionStart: () => this.startEndpointDetection(),
-            onUtteranceEnded: () => this.onExplicitUtteranceEnd(),
+            onUtteranceEnded: (source) => {
+                // Use Deepgram as source-of-truth for utterance end
+                if (source === "web_speech_final") {
+                    this.onExplicitUtteranceEnd();
+                } else {
+                    // Ignore local silence end while Deepgram is active; fallback-only
+                    try {
+                        console.debug(
+                            `[AudioHandler] ignore local end '${source}' while using Deepgram`
+                        );
+                    } catch (_) {}
+                }
+            },
             onSpeechStart: () => this.onLocalSpeechStart(),
         });
     }

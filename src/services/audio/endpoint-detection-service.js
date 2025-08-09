@@ -139,6 +139,7 @@ export class EndpointDetectionService {
         }
 
         streamingLogger.logInfo("Web Speech API final result");
+        // Preserve source so handler can differentiate
         this.triggerResponseGeneration("web_speech_final");
     }
 
