@@ -37,11 +37,11 @@ export class AudioHandler {
                 const callbacks = this.stateManager.getCallbacks();
                 if (callbacks.interim) callbacks.interim(text);
 
-                // On first interim, trigger audio/video streaming and start utterance
+                // On first interim, ensure audio/video streaming starts (utterance start is driven by local VAD)
                 if (!this.audioStreamingStarted) {
                     try {
                         console.debug(
-                            "[Deepgram→AudioHandler] first interim → startAudioStreaming + startUtterance"
+                            "[Deepgram→AudioHandler] first interim → startAudioStreaming (no utterance start here)"
                         );
                     } catch (_) {}
                     this.startAudioStreaming()
@@ -53,11 +53,6 @@ export class AudioHandler {
                                     this.videoHandler.setVideoStreamingStarted(
                                         true
                                     );
-                                }
-                            } catch (_) {}
-                            try {
-                                if (this.aiHandler) {
-                                    this.aiHandler.startUtterance();
                                 }
                             } catch (_) {}
                         })
@@ -295,6 +290,12 @@ export class AudioHandler {
                 })
                 .catch(() => {});
         }
+        // Resume Deepgram sending if it was paused after previous utterance
+        try {
+            if (this.deepgram) {
+                this.deepgram.resume();
+            }
+        } catch (_) {}
         try {
             if (this.aiHandler) {
                 this.aiHandler.startUtterance();

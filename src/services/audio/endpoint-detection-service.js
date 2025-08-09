@@ -27,6 +27,8 @@ export class EndpointDetectionService {
             isListening: false,
             audioStreamingStarted: false,
             isSpeechActive: false,
+            lastUtteranceEndAt: 0,
+            minRestartSilenceMs: 350,
         };
 
         this.speechBuffer = {
@@ -101,11 +103,15 @@ export class EndpointDetectionService {
         if (averageLevel > this.endpointDetection.audioLevelThreshold) {
             // Rising above threshold indicates speech activity; only fire once per utterance
             if (!this.state.isSpeechActive) {
-                this.state.isSpeechActive = true;
-                if (this.callbacks.onSpeechStart) {
-                    try {
-                        this.callbacks.onSpeechStart();
-                    } catch (_) {}
+                const now = Date.now();
+                const sinceEnd = now - (this.state.lastUtteranceEndAt || 0);
+                if (sinceEnd >= this.state.minRestartSilenceMs) {
+                    this.state.isSpeechActive = true;
+                    if (this.callbacks.onSpeechStart) {
+                        try {
+                            this.callbacks.onSpeechStart();
+                        } catch (_) {}
+                    }
                 }
             }
             this.onSpeechDetected();
@@ -169,6 +175,7 @@ export class EndpointDetectionService {
             }
             // Reset speech active flag on utterance end
             this.state.isSpeechActive = false;
+            this.state.lastUtteranceEndAt = Date.now();
         } catch (_) {}
     }
 
