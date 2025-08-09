@@ -29,10 +29,6 @@ export class StreamingLogger {
         this.statusInterval = setInterval(() => {
             this.logStatus();
         }, 5000);
-
-        console.log(
-            "🎤📹 AUDIO & VIDEO STREAMS STARTED - Status updates every 5s"
-        );
     }
 
     stop() {
@@ -45,7 +41,6 @@ export class StreamingLogger {
         }
 
         this.logStatus();
-        console.log("🎤📹 AUDIO & VIDEO STREAMS STOPPED");
     }
 
     logAudioChunk(bytes) {
@@ -82,7 +77,7 @@ export class StreamingLogger {
               }/s (${this.formatBytes(this.videoStats.totalBytes)})`
             : "📹 VIDEO: inactive";
 
-        console.log(`📊 STREAMS | ${audioStatus} | ${videoStatus}`);
+        // Suppressed periodic stream status logs to reduce console noise
 
         // Reset counters for next interval
         this.audioStats.chunksSent = 0;
@@ -101,9 +96,7 @@ export class StreamingLogger {
         console.error(`❌ ${type} error:`, error?.message || error);
     }
 
-    logInfo(message) {
-        console.log(`ℹ️ ${message}`);
-    }
+    logInfo(message) {}
 
     // Manual trigger for testing
     forceStatusUpdate() {

@@ -109,15 +109,13 @@ export class LifecycleManager {
     async checkAndClearChatHistoryOnReload() {
         try {
             const extensionReloaded = await this.getExtensionReloadedMarker();
-            const lastChatSaved = this.getLastChatSavedTime();
-
-            if (
-                extensionReloaded &&
-                lastChatSaved &&
-                extensionReloaded > lastChatSaved
-            ) {
+            if (extensionReloaded) {
+                // Extension actually reloaded: start a new chat
                 await UnifiedConversationManager.clearConversation();
                 await this.clearExtensionReloadedMarker();
+                console.debug(
+                    "[Lifecycle] Extension reloaded -> cleared conversation"
+                );
             }
         } catch (error) {
             // Ignore errors

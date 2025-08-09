@@ -221,20 +221,7 @@ export class TurnView {
             // Then explicitly set scrollTop on the chosen scroller
             scroller.scrollTop = targetTop;
             const after = scroller.scrollTop;
-            // Debug logs to verify behavior
-            try {
-                console.debug(
-                    "[Snap] scroller=",
-                    scroller === container ? "#messages" : "document",
-                    {
-                        canScroll:
-                            scroller.scrollHeight - scroller.clientHeight,
-                        before,
-                        targetTop,
-                        after,
-                    }
-                );
-            } catch (_) {}
+            // Suppress Snap debug logs
             // Re-assert shortly after in case of late reflow
             setTimeout(() => {
                 scroller.scrollTop = targetTop;

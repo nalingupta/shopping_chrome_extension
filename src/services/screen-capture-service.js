@@ -32,7 +32,6 @@ export class ScreenCaptureService {
 
     async captureFrame() {
         const tabId = this.tabManager.getCurrentTabId();
-        console.log(`[ScreenCapture] captureFrame currentTabId=${tabId}`);
         return this.screenshotService.captureFrame();
     }
 

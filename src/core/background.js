@@ -1,6 +1,6 @@
 import { MESSAGE_TYPES } from "../utils/constants.js";
 import { StorageManager, clearChatStorageOnReload } from "../utils/storage.js";
-import { ShoppingAssistant } from "../services/shopping-assistant.js";
+import { GeminiTextClient } from "../services/gemini-text-client.js";
 import { MicrophoneService } from "../services/microphone-service.js";
 
 class BackgroundService {
@@ -11,16 +11,16 @@ class BackgroundService {
     }
 
     initializeExtension() {
-        // Clear chat history on extension reload/install
-        this.clearChatHistoryOnReload();
+        // Mark extension reload; LifecycleManager will clear conversation when side panel loads
+        this.markExtensionReloaded();
 
         chrome.runtime.onInstalled.addListener(() => {
             chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
-            clearChatStorageOnReload();
+            this.markExtensionReloaded();
         });
 
         chrome.runtime.onStartup.addListener(() => {
-            clearChatStorageOnReload();
+            this.markExtensionReloaded();
         });
 
         chrome.action.onClicked.addListener(async (tab) => {
@@ -38,9 +38,8 @@ class BackgroundService {
         // Hot reload functionality removed
     }
 
-    async clearChatHistoryOnReload() {
+    async markExtensionReloaded() {
         try {
-            clearChatStorageOnReload();
             await StorageManager.set("extensionReloaded", Date.now());
         } catch (error) {
             // Ignore errors
@@ -118,7 +117,7 @@ class BackgroundService {
 
     async handleProcessUserQuery(request, sender, sendResponse) {
         try {
-            const response = await ShoppingAssistant.processQuery(request.data);
+            const response = await GeminiTextClient.processQuery(request.data);
             sendResponse(response);
         } catch (error) {
             sendResponse({

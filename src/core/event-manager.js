@@ -96,6 +96,12 @@ export class EventManager {
 
     updatePageInfo(pageInfo) {
         this.currentPageInfo = pageInfo;
+        // Share page info with AI so it can include it in context assembly
+        try {
+            this.multimediaOrchestrator?.aiHandler?.setCurrentPageInfo(
+                pageInfo
+            );
+        } catch (_) {}
     }
 
     async handleSendMessage() {
@@ -260,6 +266,12 @@ export class EventManager {
 
     handleTranscriptionReceived(transcription) {
         if (transcription) {
+            try {
+                // Store the finalized transcript for AIHandler to send as the user message
+                this.multimediaOrchestrator?.aiHandler?.setLastUserMessage?.(
+                    transcription
+                );
+            } catch (_) {}
             // Finalize the current user interim into a finalized bubble, snap to top
             // and prepare assistant pending state
 
