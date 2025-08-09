@@ -193,6 +193,14 @@ export class AIHandler {
         }
     }
 
+    // ADK helper for video chunk forwarding (used by VideoHandler)
+    sendAdkVideoChunk(blob, header) {
+        if (!this.isAdkMode || !this.adkClient || !this.isAdkConnected) return;
+        try {
+            this.adkClient.sendVideoChunk(blob, header || {});
+        } catch (_) {}
+    }
+
     // Utterance boundary helpers
     startUtterance() {
         try {

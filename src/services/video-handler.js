@@ -1,5 +1,7 @@
 import { ScreenCaptureService } from "./screen-capture-service.js";
 import { LivePreviewManager } from "./live-preview-manager.js";
+import { API_CONFIG } from "../config/api-keys.js";
+import { CanvasWebmMuxer } from "./video/canvas-webm-muxer.js";
 import { streamingLogger } from "../utils/streaming-logger.js";
 
 export class VideoHandler {
@@ -16,6 +18,12 @@ export class VideoHandler {
         this.screenCaptureFailureCount = 0;
         this.isTabSwitching = false;
         this.speechActive = false; // gate sending by speech activity
+
+        // ADK muxer setup (lazy)
+        this.isAdkMode = !!API_CONFIG?.ADK_MODE_ENABLED;
+        this.muxer = this.isAdkMode ? new CanvasWebmMuxer() : null;
+        this._muxerInitialized = false;
+        this._micStream = null;
     }
 
     async setupScreenCapture() {
@@ -213,15 +221,34 @@ export class VideoHandler {
         return { shouldStop: false };
     }
 
-    startScreenshotStreaming() {
+    async startScreenshotStreaming() {
         if (
             !this.screenCapture.hasStream() ||
-            !this.aiHandler.isGeminiConnectionActive()
+            (!this.isAdkMode && !this.aiHandler.isGeminiConnectionActive())
         ) {
             return;
         }
 
         this.previewManager.startPreview();
+
+        // Initialize muxer once in ADK mode
+        if (this.isAdkMode && this.muxer && !this._muxerInitialized) {
+            try {
+                this.muxer.init(1280, 720, 1_000_000);
+                // Simple mic capture for initial integration
+                const mic = await navigator.mediaDevices.getUserMedia({
+                    audio: { echoCancellation: true, noiseSuppression: true },
+                });
+                this._micStream = mic;
+                this.muxer.attachAudioTrack(mic);
+                this._muxerInitialized = true;
+            } catch (err) {
+                console.warn(
+                    "Muxer init failed; continuing without A/V mux:",
+                    err
+                );
+            }
+        }
         this.screenCapture.startRecording();
         streamingLogger.logInfo("📹 Video stream started (10 FPS)");
 
@@ -280,25 +307,36 @@ export class VideoHandler {
                     streamingLogger.logInfo(
                         "RESUME video sending after stable frame"
                     );
+                    if (this.isAdkMode && this.muxer) {
+                        try {
+                            // Start muxer with callback that forwards chunks via AIHandler
+                            this.muxer.start(200, (blob, header) => {
+                                this.aiHandler.sendAdkVideoChunk(blob, header);
+                            });
+                        } catch (err) {
+                            console.warn("Failed to start muxer:", err);
+                        }
+                    }
                 }
 
-                if (
-                    this.videoStreamingStarted &&
-                    this.speechActive &&
-                    this.aiHandler.isGeminiConnectionActive()
-                ) {
-                    // Only send when Gemini is fully setup to avoid buffering stale frames
-                    const status =
-                        this.aiHandler.geminiAPI?.getConnectionStatus?.();
-                    streamingLogger.logInfo(
-                        `FRAME ready tab=${this.screenCapture.getCurrentTabId()} setup=${!!status?.isSetupComplete}`
-                    );
-                    if (status?.isSetupComplete) {
-                        this.aiHandler.sendVideoData(frameData);
-                    } else {
+                if (this.videoStreamingStarted && this.speechActive) {
+                    if (this.isAdkMode && this.muxer) {
+                        // Draw incoming frame to canvas; MediaRecorder will emit chunks periodically
+                        this.muxer.pushFrame(frameData, Date.now());
+                    } else if (this.aiHandler.isGeminiConnectionActive()) {
+                        // Legacy Gemini path
+                        const status =
+                            this.aiHandler.geminiAPI?.getConnectionStatus?.();
                         streamingLogger.logInfo(
-                            `FRAME skipped (setup incomplete) tab=${this.screenCapture.getCurrentTabId()}`
+                            `FRAME ready tab=${this.screenCapture.getCurrentTabId()} setup=${!!status?.isSetupComplete}`
                         );
+                        if (status?.isSetupComplete) {
+                            this.aiHandler.sendVideoData(frameData);
+                        } else {
+                            streamingLogger.logInfo(
+                                `FRAME skipped (setup incomplete) tab=${this.screenCapture.getCurrentTabId()}`
+                            );
+                        }
                     }
                 }
             } catch (error) {
@@ -350,6 +388,13 @@ export class VideoHandler {
 
         if (this.screenCapture.isActive()) {
             this.screenCapture.stopRecording();
+        }
+
+        // Stop muxer if running
+        if (this.isAdkMode && this.muxer) {
+            try {
+                this.muxer.stop();
+            } catch (_) {}
         }
 
         this.previewManager.stopPreview();
@@ -414,6 +459,13 @@ export class VideoHandler {
     // State management
     setVideoStreamingStarted(started) {
         this.videoStreamingStarted = started;
+        if (this.isAdkMode && this.muxer) {
+            try {
+                if (!started) {
+                    this.muxer.stop();
+                }
+            } catch (_) {}
+        }
     }
 
     isVideoStreamingStarted() {
