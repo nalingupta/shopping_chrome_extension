@@ -25,6 +25,12 @@ export class SpeechRecognitionService {
             interimText: "",
             lastWebSpeechUpdate: 0,
         };
+
+        // Resilient auto-restart state
+        this._lastError = null;
+        this._retryCount = 0;
+        this._maxRetries = 5;
+        this._backoffBaseMs = 300;
     }
 
     setCallbacks(callbacks) {
@@ -113,32 +119,54 @@ export class SpeechRecognitionService {
         };
 
         this.speechRecognition.onerror = (event) => {
-            console.warn("[SpeechRec] error:", event.error);
-
+            this._lastError = event?.error || null;
             const timeoutErrors = ["no-speech", "network"];
-            if (this.state.isListening && timeoutErrors.includes(event.error)) {
+            if (
+                this.state.isListening &&
+                timeoutErrors.includes(this._lastError)
+            ) {
+                const backoff = Math.min(
+                    this._backoffBaseMs * Math.pow(2, this._retryCount),
+                    4000
+                );
+                console.warn(
+                    `[SpeechRec] error: ${
+                        this._lastError
+                    } → retry in ${backoff}ms (attempt ${
+                        this._retryCount + 1
+                    }/${this._maxRetries})`
+                );
+                if (this._retryCount < this._maxRetries) {
+                    this._retryCount += 1;
+                    setTimeout(() => {
+                        if (this.state.isListening) {
+                            this.restartSpeechRecognition();
+                        }
+                    }, backoff);
+                }
+                return;
+            }
+            console.warn("[SpeechRec] error:", this._lastError);
+        };
+
+        this.speechRecognition.onend = () => {
+            if (!this.state.isListening) return;
+            const now = Date.now();
+            const timeSinceLastActivity =
+                now - (this.lastSpeechActivity || now);
+            if (
+                this._lastError === "network" ||
+                this._lastError === "no-speech"
+            ) {
+                // resume with backoff (handled by onerror path already)
+                return;
+            }
+            if (timeSinceLastActivity < 30000) {
                 setTimeout(() => {
                     if (this.state.isListening) {
                         this.restartSpeechRecognition();
                     }
-                }, 1000);
-            }
-        };
-
-        this.speechRecognition.onend = () => {
-            if (this.state.isListening) {
-                const now = Date.now();
-                const timeSinceLastActivity =
-                    now - (this.lastSpeechActivity || now);
-                // Suppress SpeechRec onend debug log
-                if (timeSinceLastActivity < 30000) {
-                    setTimeout(() => {
-                        if (this.state.isListening) {
-                            // Suppress SpeechRec restart debug log
-                            this.restartSpeechRecognition();
-                        }
-                    }, 100);
-                }
+                }, 100);
             }
         };
 
@@ -158,6 +186,13 @@ export class SpeechRecognitionService {
             setTimeout(() => {
                 if (this.state.isListening) {
                     this.startLocalSpeechRecognition();
+                    if (this._lastError) {
+                        console.debug(
+                            `[SpeechRec] recovered from ${this._lastError} (retries=${this._retryCount})`
+                        );
+                    }
+                    this._lastError = null;
+                    this._retryCount = 0;
                 }
             }, 200);
         } catch (error) {

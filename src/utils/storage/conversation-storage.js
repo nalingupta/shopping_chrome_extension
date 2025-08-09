@@ -56,6 +56,9 @@ export class UnifiedConversationManager {
                 };
             }
 
+            // Sanitize stored conversation into final-only paired turns
+            conversation = await this.#sanitizeConversation(conversation);
+
             return conversation;
         } catch (error) {
             console.error("Error getting conversation:", error);
@@ -198,6 +201,102 @@ export class UnifiedConversationManager {
         } catch (error) {
             console.error("Error clearing conversation:", error);
             return false;
+        }
+    }
+
+    // Normalize conversation: merge assistant continuations, remove duplicate chunk turns,
+    // and rebuild messages from paired, final-only turns.
+    static async #sanitizeConversation(conversation) {
+        try {
+            const messages = Array.isArray(conversation?.messages)
+                ? conversation.messages
+                : [];
+            if (messages.length === 0) return conversation;
+
+            const norm = (s) => (s || "").replace(/[\s\u00A0]+/g, " ").trim();
+
+            const turns = [];
+            let pendingUser = null;
+            for (const m of messages) {
+                const role = m.role === "model" ? "assistant" : m.role;
+                const text = norm(m.content || "");
+                if (!text) continue;
+                if (role === "user") {
+                    if (pendingUser !== null) {
+                        turns.push({ user: pendingUser, assistant: null });
+                    }
+                    pendingUser = text;
+                } else if (role === "assistant") {
+                    if (pendingUser !== null) {
+                        turns.push({ user: pendingUser, assistant: text });
+                        pendingUser = null;
+                    } else if (turns.length > 0) {
+                        const last = turns[turns.length - 1];
+                        if (last.assistant == null) {
+                            last.assistant = text;
+                        } else {
+                            // merge assistant continuation into last turn
+                            const merged = `${last.assistant} ${text}`.trim();
+                            last.assistant = merged;
+                        }
+                    } else {
+                        // leading assistant with no user
+                        turns.push({ user: "", assistant: text });
+                    }
+                }
+            }
+            if (pendingUser !== null) {
+                turns.push({ user: pendingUser, assistant: null });
+            }
+
+            // Rebuild messages list from turns
+            const rebuilt = [];
+            for (const t of turns) {
+                const u = norm(t.user || "");
+                const a = norm(t.assistant || "");
+                if (u)
+                    rebuilt.push({
+                        role: "user",
+                        content: u,
+                        timestamp: Date.now(),
+                    });
+                if (a)
+                    rebuilt.push({
+                        role: "assistant",
+                        content: a,
+                        timestamp: Date.now(),
+                    });
+            }
+
+            // If no changes, return as-is
+            const sameLength = rebuilt.length === messages.length;
+            const sameAll =
+                sameLength &&
+                rebuilt.every(
+                    (r, i) =>
+                        r.role === messages[i].role &&
+                        norm(r.content) === norm(messages[i].content)
+                );
+            if (sameAll) return conversation;
+
+            const sanitized = {
+                messages: rebuilt,
+                lastUpdated: Date.now(),
+                isWelcomeVisible: conversation?.isWelcomeVisible ?? true,
+            };
+            await chrome.storage.local.set({
+                [this.CONVERSATION_KEY]: sanitized,
+            });
+            this.broadcastConversationUpdate();
+            return sanitized;
+        } catch (e) {
+            return (
+                conversation || {
+                    messages: [],
+                    lastUpdated: Date.now(),
+                    isWelcomeVisible: true,
+                }
+            );
         }
     }
 

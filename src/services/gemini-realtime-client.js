@@ -581,7 +581,8 @@ export class GeminiRealtimeClient {
                         } else {
                             try {
                                 console.debug(
-                                    "[RealtimeClient] History | empty"
+                                    "%c[RealtimeClient] History | empty",
+                                    "color:#6a1b9a;font-weight:bold"
                                 );
                             } catch (_) {}
                         }
