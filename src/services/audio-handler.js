@@ -68,10 +68,14 @@ export class AudioHandler {
                     );
                 } catch (_) {}
                 try {
-                    this.aiHandler?.setLastUserMessage(finalText);
+                    const newText = typeof finalText === "string" ? finalText : "";
+                    if (!this._dgFinalBest || newText.length >= this._dgFinalBest.length) {
+                        this._dgFinalBest = newText;
+                    }
+                    this.aiHandler?.setLastUserMessage(this._dgFinalBest);
                     const callbacks = this.stateManager.getCallbacks();
                     if (callbacks.transcription)
-                        callbacks.transcription(finalText);
+                        callbacks.transcription(this._dgFinalBest);
                 } catch (_) {}
             },
             onDeepgramUtteranceEnd: () => {
@@ -94,6 +98,12 @@ export class AudioHandler {
                     console.debug(
                         "[Deepgram→AudioHandler] onExplicitUtteranceEnd() → endUtterance"
                     );
+                    // Ensure we send the best accumulated final
+                    try {
+                        if (this._dgFinalBest) {
+                            this.aiHandler.setLastUserMessage(this._dgFinalBest);
+                        }
+                    } catch (_) {}
                     this.onExplicitUtteranceEnd();
                     console.debug(
                         "[Deepgram→AudioHandler] handleWebSpeechFinalResult() → endpoint detection path"
@@ -105,6 +115,8 @@ export class AudioHandler {
                     console.debug("[Deepgram→AudioHandler] pause Deepgram WS");
                     this.deepgram.pause();
                 } catch (_) {}
+                // Clear accumulator for next utterance
+                this._dgFinalBest = "";
             },
             onDeepgramStateChange: (state) => {
                 // Optional: map to status callback if needed
@@ -124,6 +136,7 @@ export class AudioHandler {
         // Audio state
         this.audioStreamingStarted = false;
         this._utteranceOpen = false; // guards duplicate endUtterance
+        this._dgFinalBest = ""; // accumulate best Deepgram final per utterance
 
         this.setupAudioCallbacks();
     }
