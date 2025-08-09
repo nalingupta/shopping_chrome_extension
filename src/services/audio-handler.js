@@ -27,16 +27,7 @@ export class AudioHandler {
                         } streamingStarted=${this.audioStreamingStarted}`
                     );
                 } catch (_) {}
-                // Update speech buffer for orphaned flush fallback
-                try {
-                    if (this.speechBuffer) {
-                        this.speechBuffer.interimText = text || "";
-                        this.speechBuffer.lastWebSpeechUpdate = Date.now();
-                    }
-                } catch (_) {}
-
-                const callbacks = this.stateManager.getCallbacks();
-                if (callbacks.interim) callbacks.interim(text);
+                // Do not set interim text chunks to UI or speech buffer
 
                 // On first interim, ensure audio/video streaming starts (utterance start is driven by local VAD)
                 if (!this.audioStreamingStarted) {
