@@ -1,5 +1,5 @@
 import { AudioCaptureService } from "./audio/audio-capture-service.js";
-import { SpeechRecognitionService } from "./audio/speech-recognition-service.js";
+import DeepgramTranscriptionService from "./audio/deepgram-transcription-service.js";
 import { EndpointDetectionService } from "./audio/endpoint-detection-service.js";
 import { AudioStateManager } from "./audio/audio-state-manager.js";
 
@@ -10,7 +10,78 @@ export class AudioHandler {
 
         // Audio services
         this.audioCapture = new AudioCaptureService(this.aiHandler);
-        this.speechRecognition = new SpeechRecognitionService();
+        this.deepgram = new DeepgramTranscriptionService({
+            // Defaults will be refined at start based on actual AudioContext
+            sampleRate:
+                (this.aiHandler &&
+                    this.aiHandler.geminiAPI &&
+                    this.aiHandler.geminiAPI.audioContext &&
+                    this.aiHandler.geminiAPI.audioContext.sampleRate) ||
+                48000,
+            onDeepgramInterim: (text) => {
+                // Update speech buffer for orphaned flush fallback
+                try {
+                    if (this.speechBuffer) {
+                        this.speechBuffer.interimText = text || "";
+                        this.speechBuffer.lastWebSpeechUpdate = Date.now();
+                    }
+                } catch (_) {}
+
+                const callbacks = this.stateManager.getCallbacks();
+                if (callbacks.interim) callbacks.interim(text);
+
+                // On first interim, trigger audio/video streaming and start utterance
+                if (!this.audioStreamingStarted) {
+                    this.startAudioStreaming()
+                        .then(() => {
+                            this.audioStreamingStarted = true;
+                            try {
+                                if (this.videoHandler) {
+                                    this.videoHandler.speechActive = true;
+                                    this.videoHandler.setVideoStreamingStarted(
+                                        true
+                                    );
+                                }
+                            } catch (_) {}
+                            try {
+                                if (this.aiHandler) {
+                                    this.aiHandler.startUtterance();
+                                }
+                            } catch (_) {}
+                        })
+                        .catch(() => {});
+                }
+            },
+            onDeepgramFinal: (finalText, payload) => {
+                try {
+                    this.aiHandler?.setLastUserMessage(finalText);
+                    const callbacks = this.stateManager.getCallbacks();
+                    if (callbacks.transcription)
+                        callbacks.transcription(finalText);
+                } catch (_) {}
+            },
+            onDeepgramUtteranceEnd: () => {
+                // Mirror existing Web Speech finalization flow
+                try {
+                    this.handleWebSpeechFinalResult();
+                } catch (_) {}
+                // Pause audio to Deepgram but keep socket alive
+                try {
+                    this.deepgram.pause();
+                } catch (_) {}
+            },
+            onDeepgramStateChange: (state) => {
+                // Optional: map to status callback if needed
+                // const cb = this.stateManager.getCallbacks().status; if (cb) cb(`Deepgram: ${state}`, 'info');
+            },
+            onDeepgramError: (err) => {
+                const callbacks = this.stateManager.getCallbacks();
+                if (callbacks.status) {
+                    callbacks.status("Deepgram error", "error", 4000);
+                }
+                // Keep endpoint detection active for resilience
+            },
+        });
         this.endpointDetection = new EndpointDetectionService();
         this.stateManager = new AudioStateManager();
 
@@ -26,48 +97,11 @@ export class AudioHandler {
             this.onAudioLevelDetected(level);
         });
 
-        // Set up speech recognition callbacks
-        this.speechRecognition.setCallbacks({
-            onSpeechDetected: () => this.onSpeechDetected(),
-            onInterimResult: (text) => {
-                const callbacks = this.stateManager.getCallbacks();
-                if (callbacks.interim) {
-                    callbacks.interim(text);
-                }
-            },
-            onFinalResult: (finalText) => {
-                try {
-                    // Ensure finalized transcript is available to AIHandler before endUtterance
-                    this.aiHandler?.setLastUserMessage(finalText);
-                    // Keep UI in sync using existing pipeline
-                    const callbacks = this.stateManager.getCallbacks();
-                    if (callbacks.transcription)
-                        callbacks.transcription(finalText);
-                } catch (_) {}
-            },
-            onAudioStreamingStart: async () => {
-                await this.startAudioStreaming();
-                this.audioStreamingStarted = true;
-                // Start sending video frames only while speaking
-                try {
-                    if (this.videoHandler) {
-                        this.videoHandler.speechActive = true;
-                        this.videoHandler.setVideoStreamingStarted(true);
-                    }
-                } catch (_) {}
-                // Explicit utterance start: enable audio and inform Gemini
-                try {
-                    if (this.aiHandler) {
-                        this.aiHandler.startUtterance();
-                    }
-                } catch (_) {}
-            },
-            onVideoStreamingStart: () => {
-                // This will be handled by VideoHandler
-            },
-            onEndpointDetectionStart: () => this.startEndpointDetection(),
-            onWebSpeechFinalResult: () => this.handleWebSpeechFinalResult(),
-            onCheckOrphanedSpeech: () => this.checkForOrphanedSpeech(),
+        // Mirror PCM frames to Deepgram when available
+        this.audioCapture.setPcmFrameCallback((int16) => {
+            try {
+                this.deepgram.sendPcmFrame(int16);
+            } catch (_) {}
         });
 
         // Set up endpoint detection callbacks
@@ -128,26 +162,41 @@ export class AudioHandler {
     }
 
     startLocalSpeechRecognition() {
+        // Start Deepgram instead of Web Speech
         this.resetInactivityTimer();
-        this.speechRecognition.setState({
-            isListening: this.stateManager.isListening(),
-            audioStreamingStarted: this.audioStreamingStarted,
-            videoStreamingStarted: false, // This will be managed by VideoHandler
-        });
-        this.speechRecognition.setSpeechBuffer(this.speechBuffer);
-        this.speechRecognition.startLocalSpeechRecognition();
+        try {
+            // Refresh Deepgram sample rate from active AudioContext if present
+            const sr =
+                (this.aiHandler &&
+                    this.aiHandler.geminiAPI &&
+                    this.aiHandler.geminiAPI.audioContext &&
+                    this.aiHandler.geminiAPI.audioContext.sampleRate) ||
+                48000;
+            this.deepgram.options.sampleRate = sr;
+        } catch (_) {}
+
+        this.deepgram.start();
     }
 
     restartSpeechRecognition() {
-        this.speechRecognition.restartSpeechRecognition();
+        // No-op with Deepgram (auto-managed). Could implement reconnect/backoff if needed.
     }
 
     startSpeechKeepAlive() {
-        this.speechRecognition.startSpeechKeepAlive();
+        // No-op: Deepgram keepalive is handled internally on pause()
     }
 
     clearSpeechKeepAlive() {
-        this.speechRecognition.clearSpeechKeepAlive();
+        // No-op for Deepgram
+    }
+
+    stopTranscription() {
+        try {
+            this.deepgram.stop();
+        } catch (_) {}
+        try {
+            this.audioCapture.setPcmFrameCallback(null);
+        } catch (_) {}
     }
 
     resetInactivityTimer() {
@@ -229,14 +278,7 @@ export class AudioHandler {
             }
         } catch (_) {}
         // Reset speech-recognition start flags so the next utterance re-triggers start
-        try {
-            if (this.speechRecognition) {
-                this.speechRecognition.setState({
-                    audioStreamingStarted: false,
-                    videoStreamingStarted: false,
-                });
-            }
-        } catch (_) {}
+        // With Deepgram, flags are internal; nothing to reset here
         try {
             if (this.aiHandler) {
                 this.aiHandler.endUtterance();

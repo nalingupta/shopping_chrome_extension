@@ -54,7 +54,7 @@ export class MultimediaOrchestrator {
             await this.audioHandler.setupAudioCapture();
             await this.startMediaStreaming();
 
-            // Start audio processing
+            // Start audio processing (Deepgram replaces Web Speech)
             this.audioHandler.startLocalSpeechRecognition();
             this.audioHandler.startEndpointDetection();
             this.audioHandler.startSpeechKeepAlive();
@@ -100,8 +100,8 @@ export class MultimediaOrchestrator {
 
             // Stop audio processing
             this.audioHandler.stopEndpointDetection();
-            if (this.audioHandler.speechRecognition) {
-                this.audioHandler.speechRecognition.stopSpeechRecognition();
+            if (this.audioHandler.stopTranscription) {
+                this.audioHandler.stopTranscription();
             }
             this.audioHandler.stopAudioProcessing();
             this.audioHandler.clearInactivityTimer();

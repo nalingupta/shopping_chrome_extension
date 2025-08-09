@@ -7,6 +7,7 @@ export class AudioCaptureService {
         this.audioWorkletNode = null;
         this.audioSource = null;
         this.onAudioLevelCallback = null;
+        this.onPcmFrameCallback = null; // optional sink for mirrored PCM frames (e.g., Deepgram)
     }
 
     async setupAudioCapture() {
@@ -112,6 +113,17 @@ export class AudioCaptureService {
                     this.onAudioLevelDetected(maxAmplitude);
                 }
             }
+
+            // Mirror PCM frames to optional external consumer (e.g., Deepgram)
+            if (type === "audioData" && this.onPcmFrameCallback && pcmData) {
+                try {
+                    const int16 =
+                        pcmData instanceof Int16Array
+                            ? pcmData
+                            : new Int16Array(pcmData.buffer);
+                    this.onPcmFrameCallback(int16);
+                } catch (_) {}
+            }
         };
 
         this.audioSource =
@@ -164,6 +176,13 @@ export class AudioCaptureService {
             const uint8Array = new Uint8Array(pcmData.buffer);
             const base64 = btoa(String.fromCharCode(...uint8Array));
             this.geminiAPI.sendAudioData(base64);
+
+            // Mirror PCM frames to optional external consumer (e.g., Deepgram)
+            if (this.onPcmFrameCallback) {
+                try {
+                    this.onPcmFrameCallback(pcmData);
+                } catch (_) {}
+            }
         };
 
         this.audioSource.connect(audioProcessor);
@@ -186,6 +205,10 @@ export class AudioCaptureService {
 
     setAudioLevelCallback(callback) {
         this.onAudioLevelCallback = callback;
+    }
+
+    setPcmFrameCallback(callback) {
+        this.onPcmFrameCallback = callback;
     }
 
     hasAudioStream() {
