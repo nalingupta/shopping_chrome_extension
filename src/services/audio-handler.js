@@ -123,6 +123,7 @@ export class AudioHandler {
 
         // Audio state
         this.audioStreamingStarted = false;
+        this._utteranceOpen = false; // guards duplicate endUtterance
 
         this.setupAudioCallbacks();
     }
@@ -304,6 +305,7 @@ export class AudioHandler {
         try {
             if (this.aiHandler) {
                 this.aiHandler.startUtterance();
+                this._utteranceOpen = true;
             }
         } catch (_) {}
         // Ensure endpoint detection state reflects streaming started
@@ -341,6 +343,10 @@ export class AudioHandler {
 
     onExplicitUtteranceEnd() {
         // Freeze both streams and send activityEnd
+        if (!this._utteranceOpen) {
+            // Already ended; avoid duplicate Gemini end
+            return;
+        }
         try {
             if (this.videoHandler) {
                 this.videoHandler.speechActive = false;
@@ -354,6 +360,7 @@ export class AudioHandler {
                 this.aiHandler.endUtterance();
             }
         } catch (_) {}
+        this._utteranceOpen = false;
     }
 
     triggerResponseGeneration(source) {
