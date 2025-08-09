@@ -108,17 +108,19 @@ export class AudioCaptureService {
         this.audioWorkletNode.port.onmessage = (event) => {
             const { type, pcmData, maxAmplitude } = event.data;
 
-            if (
-                type === "audioData" &&
-                this.geminiAPI.isGeminiConnectionActive() &&
-                this.geminiAPI.geminiAPI.isAudioInputEnabled()
-            ) {
-                const uint8Array = new Uint8Array(pcmData.buffer);
-                const base64 = btoa(String.fromCharCode(...uint8Array));
-                this.geminiAPI.sendAudioData(base64);
-
+            if (type === "audioData") {
+                // Always feed local VAD even before Gemini is enabled
                 if (maxAmplitude !== undefined) {
                     this.onAudioLevelDetected(maxAmplitude);
+                }
+                // Send to Gemini only if connection & audio input are enabled
+                if (
+                    this.geminiAPI.isGeminiConnectionActive() &&
+                    this.geminiAPI.geminiAPI.isAudioInputEnabled()
+                ) {
+                    const uint8Array = new Uint8Array(pcmData.buffer);
+                    const base64 = btoa(String.fromCharCode(...uint8Array));
+                    this.geminiAPI.sendAudioData(base64);
                 }
             }
 
