@@ -19,6 +19,7 @@ export class AudioHandler {
                     this.aiHandler.geminiAPI.audioContext.sampleRate) ||
                 48000,
             onDeepgramInterim: (text) => {
+                this._dgSawInterim = true;
                 try {
                     console.debug(
                         `[Deepgram→AudioHandler] interim len=${
@@ -96,6 +97,15 @@ export class AudioHandler {
                         `[Deepgram→AudioHandler] speech_final pendingLen=${pendingLen} hasFinal=${hasFinal}`
                     );
                 } catch (_) {}
+                // If no interim was seen in this utterance, ignore this end signal
+                if (!this._dgSawInterim) {
+                    try {
+                        console.debug(
+                            "[Deepgram→AudioHandler] ignore speech_final (no interim seen)"
+                        );
+                    } catch (_) {}
+                    return;
+                }
                 // Mirror existing Web Speech finalization flow
                 try {
                     // Ensure Gemini receives activityEnd regardless of endpoint state
@@ -108,6 +118,19 @@ export class AudioHandler {
                             this.aiHandler.setLastUserMessage(
                                 this._dgFinalBest
                             );
+                        } else {
+                            // If no Deepgram final arrived, but we have interim text, use it
+                            const interim = (
+                                this.speechBuffer?.interimText || ""
+                            ).trim();
+                            if (interim) {
+                                const callbacks =
+                                    this.stateManager.getCallbacks();
+                                if (callbacks.transcription) {
+                                    callbacks.transcription(interim);
+                                }
+                                this.aiHandler.setLastUserMessage(interim);
+                            }
                         }
                     } catch (_) {}
                     this.onExplicitUtteranceEnd();
@@ -123,6 +146,7 @@ export class AudioHandler {
                 } catch (_) {}
                 // Clear accumulator for next utterance
                 this._dgFinalBest = "";
+                this._dgSawInterim = false;
             },
             onDeepgramStateChange: (state) => {
                 // Optional: map to status callback if needed
@@ -143,6 +167,7 @@ export class AudioHandler {
         this.audioStreamingStarted = false;
         this._utteranceOpen = false; // guards duplicate endUtterance
         this._dgFinalBest = ""; // accumulate best Deepgram final per utterance
+        this._dgSawInterim = false; // track if any interim arrived
 
         this.setupAudioCallbacks();
     }
@@ -327,6 +352,21 @@ export class AudioHandler {
                 })
                 .catch(() => {});
         }
+        // Ensure the video screenshot loop is running when speech begins
+        try {
+            if (
+                this.videoHandler &&
+                typeof this.videoHandler.startScreenshotStreaming === "function"
+            ) {
+                if (!this.videoHandler.isVideoStreamingStarted?.()) {
+                    this.videoHandler.startScreenshotStreaming();
+                }
+                // Gate ON: allow loop to resume sending when stable frame captured
+                try {
+                    this.videoHandler.speechActive = true;
+                } catch (_) {}
+            }
+        } catch (_) {}
         // Resume Deepgram sending if it was paused after previous utterance
         try {
             if (this.deepgram) {

@@ -104,6 +104,12 @@ export class AIHandler {
     startUtterance() {
         try {
             this._utteranceStartTs = Date.now();
+            if (this.geminiAPI.isAudioInputEnabled()) {
+                console.debug(
+                    "[AIHandler] startUtterance noop (already enabled)"
+                );
+                return;
+            }
             console.debug(
                 "[AIHandler] startUtterance → enableAudioInput + markUtteranceStart + activityStart"
             );

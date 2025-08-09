@@ -179,12 +179,11 @@ export class VideoHandler {
     async handleScreenCaptureFailure() {
         this.screenCaptureFailureCount++;
 
-        if (this.screenCaptureFailureCount >= 3) {
+        // Soften stop criteria: while speech is active, prefer to continue trying
+        if (this.screenCaptureFailureCount >= 3 && !this.speechActive) {
             console.error(
                 "Multiple screen capture failures detected, stopping video streaming"
             );
-
-            // This will be handled by MultimediaOrchestrator
             return { shouldStop: true, reason: "screen_capture_failed" };
         }
 
@@ -278,7 +277,7 @@ export class VideoHandler {
                 if (this.speechActive && !this.videoStreamingStarted) {
                     this.videoStreamingStarted = true;
                     streamingLogger.logInfo(
-                        "RESUME video sending after stable frame"
+                        "📹 RESUME video sending after stable frame"
                     );
                 }
 
@@ -295,6 +294,9 @@ export class VideoHandler {
                     );
                     if (status?.isSetupComplete) {
                         this.aiHandler.sendVideoData(frameData);
+                        streamingLogger.logInfo(
+                            `📹 FRAME sent tab=${this.screenCapture.getCurrentTabId()}`
+                        );
                     } else {
                         streamingLogger.logInfo(
                             `FRAME skipped (setup incomplete) tab=${this.screenCapture.getCurrentTabId()}`

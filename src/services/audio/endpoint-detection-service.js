@@ -6,7 +6,7 @@ export class EndpointDetectionService {
             isActive: false,
             lastSpeechTime: null,
             silenceThreshold: 2000, // 2 seconds of silence as fallback
-            audioLevelThreshold: 0.01, // Minimum audio level to consider as speech
+            audioLevelThreshold: 0.02, // Minimum audio level to consider as speech (tuned)
             silenceTimer: null,
             audioLevelHistory: [], // Track recent audio levels
             audioLevelWindow: 10, // Number of samples to average
@@ -28,7 +28,7 @@ export class EndpointDetectionService {
             audioStreamingStarted: false,
             isSpeechActive: false,
             lastUtteranceEndAt: 0,
-            minRestartSilenceMs: 350,
+            minRestartSilenceMs: 800,
         };
 
         this.speechBuffer = {

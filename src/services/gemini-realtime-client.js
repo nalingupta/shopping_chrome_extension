@@ -985,7 +985,11 @@ export class GeminiRealtimeClient {
                     await this.#persistSessionUtterances();
                 }
             } catch (_) {}
-            this.ws.close();
+            try {
+                if (this.ws && this.ws.readyState !== undefined) {
+                    this.ws.close();
+                }
+            } catch (_) {}
             this.ws = null;
         }
 
