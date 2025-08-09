@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+websockets
+pydantic
+python-jose
+# ADK + Vertex AI (wire later)
+google-adk
+google-genai
+

@@ -1,6 +1,8 @@
 import { GeminiRealtimeClient } from "./gemini-realtime-client.js";
 import { GeminiTextClient } from "./gemini-text-client.js";
 import { ContextAssembler } from "./prompt/context-assembler.js";
+import { API_CONFIG } from "../config/api-keys.js";
+import { ADKClient } from "./adk-client.js";
 
 export class AIHandler {
     constructor() {
@@ -8,8 +10,23 @@ export class AIHandler {
         this.isGeminiConnected = false;
         this.currentPageInfo = null;
         this._lastUserMessage = null; // finalized user text or transcript
+        this._utteranceStartTs = null;
+
+        // ADK mode toggle (independent functionality)
+        this.isAdkMode = !!API_CONFIG?.ADK_MODE_ENABLED;
+        this.adkClient = this.isAdkMode ? new ADKClient() : null;
+        this.isAdkConnected = false;
+
+        // UI callback references (used by both Gemini and ADK paths)
+        this._onBotResponse = null;
+        this._onStreamingUpdate = null;
+        this._onConnectionStateChange = null;
+        this._onError = null;
 
         this.setupGeminiCallbacks();
+        if (this.isAdkMode) {
+            this.setupAdkCallbacks();
+        }
         this.initializeGemini();
     }
 
@@ -46,8 +63,73 @@ export class AIHandler {
         });
     }
 
+    setupAdkCallbacks() {
+        if (!this.adkClient) return;
+        this._adkStreamingBuffer = "";
+        this.adkClient.setHandlers({
+            onOpen: () => {
+                this.isAdkConnected = true;
+                if (this._onConnectionStateChange)
+                    this._onConnectionStateChange("connected");
+            },
+            onClose: () => {
+                this.isAdkConnected = false;
+                if (this._onConnectionStateChange)
+                    this._onConnectionStateChange("disconnected");
+            },
+            onTextDelta: (msg) => {
+                const delta = typeof msg?.text === "string" ? msg.text : "";
+                if (!delta) return;
+                this._adkStreamingBuffer += delta;
+                if (this._onStreamingUpdate) {
+                    this._onStreamingUpdate({
+                        text: this._adkStreamingBuffer,
+                        isStreaming: true,
+                        isComplete: false,
+                        timestamp: Date.now(),
+                    });
+                }
+            },
+            onTurnComplete: () => {
+                const finalText = this._adkStreamingBuffer || "";
+                if (finalText && this._onBotResponse) {
+                    this._onBotResponse({
+                        text: finalText,
+                        isStreaming: false,
+                        timestamp: Date.now(),
+                    });
+                }
+                this._adkStreamingBuffer = "";
+            },
+            onError: (err) => {
+                if (this._onError) this._onError(err);
+            },
+        });
+    }
+
     // Gemini Methods
     async connectToGemini() {
+        // Maintain existing method name for orchestrator compatibility
+        if (this.isAdkMode) {
+            if (this.isAdkConnected) return { success: true };
+            try {
+                const url = API_CONFIG?.ADK_WS_URL;
+                const token = API_CONFIG?.ADK_TOKEN || "";
+                const res = await this.adkClient.connect(url, token);
+                if (!res?.success) throw new Error("ADK connect failed");
+                const model = API_CONFIG?.ADK_MODEL || "gemini-1.5-pro";
+                this.adkClient.sendSessionStart(model, {
+                    response_modalities: ["TEXT"],
+                });
+                this.isAdkConnected = true;
+                return { success: true };
+            } catch (error) {
+                console.error("Failed to connect to ADK WS:", error);
+                return { success: false, error: error.message };
+            }
+        }
+
+        // Default: Gemini
         if (this.isGeminiConnected) {
             return { success: true };
         }
@@ -67,16 +149,24 @@ export class AIHandler {
 
     async disconnectFromGemini() {
         try {
+            if (this.isAdkMode && this.adkClient) {
+                this.adkClient.close();
+                this.isAdkConnected = false;
+                return { success: true };
+            }
             await this.geminiAPI.disconnect();
             this.isGeminiConnected = false;
             return { success: true };
         } catch (error) {
-            console.error("Failed to disconnect from Gemini:", error);
+            console.error("Failed to disconnect:", error);
             return { success: false, error: error.message };
         }
     }
 
     isGeminiConnectionActive() {
+        if (this.isAdkMode) {
+            return !!(this.isAdkConnected && this.adkClient);
+        }
         return (
             this.isGeminiConnected &&
             this.geminiAPI.getConnectionStatus().isConnected
@@ -84,12 +174,20 @@ export class AIHandler {
     }
 
     sendAudioData(audioData) {
+        if (this.isAdkMode) {
+            // Phase: text-only ADK wiring; audio not streamed here
+            return;
+        }
         if (this.isGeminiConnectionActive()) {
             this.geminiAPI.sendAudioChunk(audioData);
         }
     }
 
     sendVideoData(videoData) {
+        if (this.isAdkMode) {
+            // Phase: text-only ADK wiring; video not streamed here
+            return;
+        }
         if (this.isGeminiConnectionActive()) {
             this.geminiAPI.sendVideoFrame(videoData);
         }
@@ -99,6 +197,10 @@ export class AIHandler {
     startUtterance() {
         try {
             this._utteranceStartTs = Date.now();
+            if (this.isAdkMode) {
+                this.adkClient?.sendActivityStart();
+                return;
+            }
             this.geminiAPI.enableAudioInput();
             try {
                 this.geminiAPI.markUtteranceStart();
@@ -110,23 +212,29 @@ export class AIHandler {
     endUtterance() {
         (async () => {
             try {
+                if (this.isAdkMode) {
+                    const text = (this._lastUserMessage || "").trim();
+                    if (text) this.adkClient?.sendTextInput(text);
+                    this.adkClient?.sendActivityEnd();
+                    return;
+                }
                 // Send only the finalized user message as a clientContent user turn
                 if (this._lastUserMessage && this._lastUserMessage.trim()) {
                     const text = this._lastUserMessage.trim();
                     this.geminiAPI.sendUserMessage(text);
-                } else {
-                    // No finalized user message to send
                 }
             } catch (_) {}
             try {
-                this.geminiAPI.sendActivityEnd();
-                const elapsed = this._utteranceStartTs
-                    ? Date.now() - this._utteranceStartTs
-                    : 0;
-                this.geminiAPI.logUtteranceEnd?.(elapsed);
+                if (!this.isAdkMode) {
+                    this.geminiAPI.sendActivityEnd();
+                    const elapsed = this._utteranceStartTs
+                        ? Date.now() - this._utteranceStartTs
+                        : 0;
+                    this.geminiAPI.logUtteranceEnd?.(elapsed);
+                }
             } catch (_) {}
             try {
-                this.geminiAPI.disableAudioInput();
+                if (!this.isAdkMode) this.geminiAPI.disableAudioInput();
             } catch (_) {}
         })();
     }
@@ -141,6 +249,18 @@ export class AIHandler {
 
     // REST API Methods (for text messages)
     async sendTextMessage(message) {
+        if (this.isAdkMode) {
+            try {
+                const text = (message || "").toString();
+                if (text.trim()) {
+                    this.adkClient?.sendTextInput(text.trim());
+                }
+                return { success: true };
+            } catch (error) {
+                console.error("Failed to send text message via ADK WS:", error);
+                return { success: false, error: error.message };
+            }
+        }
         // Use REST API flow for text input
         try {
             console.debug("[AIHandler] sendTextMessage start");
@@ -151,8 +271,14 @@ export class AIHandler {
             );
 
             // Forward as if it were a final bot response
-            if (responseText && this.geminiAPI && this.geminiAPI.callbacks) {
-                const onBotResponse = this.geminiAPI.callbacks.onBotResponse;
+            if (
+                responseText &&
+                (this._onBotResponse ||
+                    (this.geminiAPI && this.geminiAPI.callbacks))
+            ) {
+                const onBotResponse =
+                    this._onBotResponse ||
+                    this.geminiAPI.callbacks.onBotResponse;
                 if (onBotResponse) {
                     console.debug(
                         `[AIHandler] sendTextMessage success, textLen=${
@@ -202,18 +328,22 @@ export class AIHandler {
 
     // Callback setters for coordination with other handlers
     setBotResponseCallback(callback) {
+        this._onBotResponse = callback;
         this.geminiAPI.setBotResponseCallback(callback);
     }
 
     setStreamingUpdateCallback(callback) {
+        this._onStreamingUpdate = callback;
         this.geminiAPI.setStreamingUpdateCallback(callback);
     }
 
     setConnectionStateCallback(callback) {
+        this._onConnectionStateChange = callback;
         this.geminiAPI.setConnectionStateCallback(callback);
     }
 
     setErrorCallback(callback) {
+        this._onError = callback;
         this.geminiAPI.setErrorCallback(callback);
     }
 }

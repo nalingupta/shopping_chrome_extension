@@ -1,12 +1,15 @@
 {
-  "name": "shopping-chrome-extension",
-  "version": "0.18.0",
-  "scripts": {
-    "build": "echo 'No build process needed for this extension'",
-    "lint": "echo 'Linting completed - no linter configured'"
-  },
-
-  "type": "module",
-  "dependencies": {
-  }
+    "name": "shopping-chrome-extension",
+    "version": "0.18.0",
+    "scripts": {
+        "build": "echo 'No build process needed for this extension'",
+        "lint": "echo 'Linting completed - no linter configured'",
+        "server:dev": "conda run -n shopping-chrome-ext uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload --app-dir server",
+        "verify:adk": "node scripts/verify_adk_e2e.js"
+    },
+    "type": "module",
+    "dependencies": {},
+    "devDependencies": {
+        "ws": "^8.18.0"
+    }
 }
