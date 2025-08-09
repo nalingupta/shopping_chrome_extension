@@ -90,6 +90,11 @@ export class AudioHandler {
                 } catch (_) {}
                 // Mirror existing Web Speech finalization flow
                 try {
+                    // Ensure Gemini receives activityEnd regardless of endpoint state
+                    console.debug(
+                        "[Deepgram→AudioHandler] onExplicitUtteranceEnd() → endUtterance"
+                    );
+                    this.onExplicitUtteranceEnd();
                     console.debug(
                         "[Deepgram→AudioHandler] handleWebSpeechFinalResult() → endpoint detection path"
                     );
