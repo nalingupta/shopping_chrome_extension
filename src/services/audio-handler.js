@@ -77,10 +77,8 @@ export class AudioHandler {
                     ) {
                         this._dgFinalBest = newText;
                     }
+                    // Keep AI handler in sync for endUtterance, but do not finalize UI here
                     this.aiHandler?.setLastUserMessage(this._dgFinalBest);
-                    const callbacks = this.stateManager.getCallbacks();
-                    if (callbacks.transcription)
-                        callbacks.transcription(this._dgFinalBest);
                 } catch (_) {}
             },
             onDeepgramUtteranceEnd: () => {
@@ -147,6 +145,14 @@ export class AudioHandler {
                 // Clear accumulator for next utterance
                 this._dgFinalBest = "";
                 this._dgSawInterim = false;
+                // Clear speech buffer to avoid stale carryover into next turn or stop flow
+                try {
+                    if (this.speechBuffer) {
+                        this.speechBuffer.interimText = "";
+                        this.speechBuffer.lastWebSpeechUpdate = 0;
+                        this.speechBuffer.isGeminiProcessing = false;
+                    }
+                } catch (_) {}
             },
             onDeepgramStateChange: (state) => {
                 // Optional: map to status callback if needed

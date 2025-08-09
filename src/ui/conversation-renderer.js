@@ -114,6 +114,15 @@ export class ConversationRenderer {
             this.userInterim = { textNode, text: "", lastLength: 0 };
         }
 
+        // Dedupe: if the last finalized user message equals this text, skip
+        if (
+            this.history.length > 0 &&
+            this.history[this.history.length - 1].type === "user" &&
+            this.history[this.history.length - 1].content === finalText
+        ) {
+            return;
+        }
+
         this.#appendDelta(this.userInterim, finalText);
 
         // Convert to finalized user message in history
