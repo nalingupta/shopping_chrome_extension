@@ -89,19 +89,21 @@ export class DeepgramTranscriptionService {
             interim_results: String(this.config.interimResults),
             smart_format: String(this.config.smartFormat),
             endpointing: String(this.config.endpointMs),
-            access_token: this.config.apiKey,
         });
 
         const wsUrl = `wss://api.deepgram.com/v1/listen?${params.toString()}`;
 
         return new Promise((resolve) => {
             try {
-                this.deepgramWs = new WebSocket(wsUrl);
+        // Authenticate via WebSocket subprotocol: ['token', API_KEY]
+        this.deepgramWs = new WebSocket(wsUrl, ["token", this.config.apiKey]);
                 this.deepgramWs.binaryType = "arraybuffer";
 
                 this.deepgramWs.onopen = () => {
                     this.isConnected = true;
                     this._startKeepAlive();
+              // eslint-disable-next-line no-console
+              console.log("Deepgram WebSocket connected successfully");
                     if (this.callbacks.onOpen) this.callbacks.onOpen();
                     resolve({ success: true });
                 };
@@ -109,14 +111,18 @@ export class DeepgramTranscriptionService {
                 this.deepgramWs.onmessage = (event) =>
                     this._handleDeepgramMessage(event);
 
-                this.deepgramWs.onerror = (event) => {
-                    const error = new Error("Deepgram WebSocket error");
-                    this._emitError(error, event);
-                };
+            this.deepgramWs.onerror = (event) => {
+              const error = new Error("Deepgram WebSocket error");
+              // eslint-disable-next-line no-console
+              console.error("Deepgram WS error event:", event);
+              this._emitError(error, event);
+            };
 
                 this.deepgramWs.onclose = () => {
                     this.isConnected = false;
                     this._stopKeepAlive();
+              // eslint-disable-next-line no-console
+              console.log("Deepgram WebSocket closed");
                     if (this.callbacks.onClose) this.callbacks.onClose();
                 };
             } catch (err) {
