@@ -1,4 +1,6 @@
 import { GeminiLiveAPI } from "./gemini-api.js";
+import { DeepgramTranscriptionService } from "./audio/deepgram-transcription-service.js";
+import { API_CONFIG } from "../config/api-keys.js";
 import { DebuggerScreenCapture } from "./debugger-screen-capture.js";
 import { LivePreviewManager } from "./live-preview-manager.js";
 import { streamingLogger } from "../utils/streaming-logger.js";
@@ -41,7 +43,8 @@ export class AudioHandler {
         this.geminiAPI = new GeminiLiveAPI();
         this.screenCapture = new DebuggerScreenCapture();
         this.previewManager = new LivePreviewManager();
-        this.speechRecognition = null;
+        this.speechRecognition = null; // Deprecated: replaced by Deepgram
+        this.deepgram = new DeepgramTranscriptionService();
         this.audioStream = null;
         this.audioWorkletNode = null;
         this.audioSource = null;
@@ -56,6 +59,7 @@ export class AudioHandler {
         this.cleanupTimer = null; // Timer for periodic cleanup
 
         this.setupGeminiCallbacks();
+        this.setupDeepgramCallbacks();
         this.initializeGemini();
     }
 
@@ -64,6 +68,17 @@ export class AudioHandler {
             const result = await this.geminiAPI.initialize();
             if (!result.success) {
                 console.error("Gemini initialization failed:", result.error);
+            }
+            // Initialize Deepgram with defaults
+            try {
+                await this.deepgram.initialize({
+                    sampleRate: 16000,
+                    language: "en-US",
+                    endpointMs: 500,
+                    smartFormat: true,
+                });
+            } catch (dgErr) {
+                console.error("Deepgram initialization failed:", dgErr);
             }
         } catch (error) {
             console.error("Error initializing Gemini:", error);
@@ -98,6 +113,57 @@ export class AudioHandler {
             if (this.callbacks.status) {
                 this.callbacks.status("Connection error", "error", 3000);
             }
+        });
+    }
+
+    setupDeepgramCallbacks() {
+        this.deepgram.setCallbacks({
+            onOpen: () => {
+                if (this.callbacks.status) {
+                    this.callbacks.status("Connected to Deepgram", "success", 2000);
+                }
+            },
+            onError: (err) => {
+                console.error("Deepgram error:", err);
+                if (this.callbacks.status) {
+                    this.callbacks.status("Deepgram error", "error", 3000);
+                }
+            },
+            onInterim: async (transcript) => {
+                // Reset inactivity timer and mark last speech activity
+                this.resetInactivityTimer();
+                this.lastSpeechActivity = Date.now();
+
+                // Start audio/video streaming to Gemini on first speech
+                if (!this.audioStreamingStarted) {
+                    streamingLogger.logInfo(
+                        "🎤 Speech detected (Deepgram) - starting AUDIO & VIDEO streams"
+                    );
+                    this.audioStreamingStarted = true;
+                    this.videoStreamingStarted = true;
+                    await this.startAudioStreaming();
+                    this.startEndpointDetection();
+                }
+
+                // Signal speech activity
+                this.onSpeechDetected();
+
+                // Update interim buffer/UI
+                this.speechBuffer.interimText = transcript;
+                this.speechBuffer.lastWebSpeechUpdate = Date.now();
+                if (this.callbacks.interim) {
+                    this.callbacks.interim(transcript);
+                }
+            },
+            onFinal: (transcript) => {
+                // Keep latest transcript in buffer; UI interim already updated
+                this.speechBuffer.interimText = transcript || this.speechBuffer.interimText;
+                this.speechBuffer.lastWebSpeechUpdate = Date.now();
+            },
+            onUtteranceEnd: () => {
+                // Mirror Web Speech final handler to trigger Gemini response
+                this.handleWebSpeechFinalResult();
+            },
         });
     }
 
@@ -235,8 +301,17 @@ export class AudioHandler {
             // Start media streaming
             await this.startMediaStreaming();
 
-            // Start speech recognition
-            this.startLocalSpeechRecognition();
+            // Connect Deepgram and start streaming (replace Web Speech API)
+            try {
+                const dgResult = await this.deepgram.connect(API_CONFIG.DEEPGRAM_API_KEY);
+                if (!dgResult.success) {
+                    console.error("Failed to connect to Deepgram:", dgResult.error);
+                } else {
+                    await this.deepgram.start({ mediaStream: this.audioStream });
+                }
+            } catch (dgErr) {
+                console.error("Deepgram setup failed:", dgErr);
+            }
 
             // Start endpoint detection
             this.startEndpointDetection();
@@ -420,7 +495,12 @@ export class AudioHandler {
             // Stop endpoint detection
             this.stopEndpointDetection();
 
-            // Stop local speech recognition
+            // Stop Deepgram (and local speech recognition if any)
+            try {
+                await this.deepgram.stop();
+            } catch (e) {
+                console.warn("Error stopping Deepgram:", e);
+            }
             if (this.speechRecognition) {
                 try {
                     this.speechRecognition.stop();

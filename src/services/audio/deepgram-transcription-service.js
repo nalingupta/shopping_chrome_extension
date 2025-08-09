@@ -126,11 +126,18 @@ export class DeepgramTranscriptionService {
         });
     }
 
-    async start() {
+    async start(options = {}) {
         if (!this.isConnected) {
             return { success: false, error: "Deepgram not connected" };
         }
 
+        // Use provided MediaStream if available to avoid double mic capture
+        if (options.mediaStream instanceof MediaStream) {
+            this.mediaStream = options.mediaStream;
+            this._isExternalMediaStream = true;
+        } else {
+            this._isExternalMediaStream = false;
+        }
         if (!this.mediaStream) {
             this.mediaStream = await navigator.mediaDevices.getUserMedia({
                 audio: {
@@ -190,7 +197,7 @@ export class DeepgramTranscriptionService {
             this.audioSourceNode = null;
         }
 
-        if (this.mediaStream) {
+        if (this.mediaStream && !this._isExternalMediaStream) {
             try {
                 this.mediaStream.getTracks().forEach((t) => t.stop());
             } catch (_) {}
