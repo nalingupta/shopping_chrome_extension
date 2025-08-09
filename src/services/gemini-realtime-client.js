@@ -357,6 +357,11 @@ export class GeminiRealtimeClient {
         ) {
             return;
         }
+        try {
+            console.debug(
+                `[RealtimeClient] sendUserMessage len=${trimmed.length}`
+            );
+        } catch (_) {}
         const message = {
             clientContent: {
                 turns: [

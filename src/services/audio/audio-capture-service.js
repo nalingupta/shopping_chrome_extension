@@ -8,6 +8,13 @@ export class AudioCaptureService {
         this.audioSource = null;
         this.onAudioLevelCallback = null;
         this.onPcmFrameCallback = null; // optional sink for mirrored PCM frames (e.g., Deepgram)
+
+        // Gemini pre-roll buffer (approx 200–300ms)
+        this.preRollFrames = []; // Array<{ pcm: Int16Array, ms: number }>
+        this.preRollTargetMs = 250;
+        this.preRollTotalMs = 0;
+        this.lastAudioInputEnabled = false;
+        this.captureSampleRate = null;
     }
 
     async setupAudioCapture() {
@@ -95,6 +102,8 @@ export class AudioCaptureService {
             this.geminiAPI.geminiAPI.audioContext,
             "pcm-processor"
         );
+
+        // No pre-roll: skip sample rate cache
 
         this.audioWorkletNode.port.onmessage = (event) => {
             const { type, pcmData, maxAmplitude } = event.data;
@@ -209,6 +218,8 @@ export class AudioCaptureService {
     setPcmFrameCallback(callback) {
         this.onPcmFrameCallback = callback;
     }
+
+    // No pre-roll helpers
 
     hasAudioStream() {
         return this.audioStream !== null;

@@ -85,6 +85,11 @@ export class AIHandler {
 
     sendAudioData(audioData) {
         if (this.isGeminiConnectionActive()) {
+            try {
+                console.debug(
+                    `[AIHandler] sendAudioData len=${(audioData || "").length}`
+                );
+            } catch (_) {}
             this.geminiAPI.sendAudioChunk(audioData);
         }
     }
@@ -99,6 +104,9 @@ export class AIHandler {
     startUtterance() {
         try {
             this._utteranceStartTs = Date.now();
+            console.debug(
+                "[AIHandler] startUtterance → enableAudioInput + markUtteranceStart + activityStart"
+            );
             this.geminiAPI.enableAudioInput();
             try {
                 this.geminiAPI.markUtteranceStart();
@@ -110,16 +118,28 @@ export class AIHandler {
     endUtterance() {
         (async () => {
             try {
+                console.debug(
+                    `[AIHandler] endUtterance begin; lastUserMessage len=${
+                        (this._lastUserMessage || "").trim().length
+                    }`
+                );
                 // Send only the finalized user message as a clientContent user turn
                 if (this._lastUserMessage && this._lastUserMessage.trim()) {
                     const text = this._lastUserMessage.trim();
+                    console.debug(
+                        `[AIHandler] sendUserMessage len=${text.length}`
+                    );
                     this.geminiAPI.sendUserMessage(text);
                 } else {
+                    console.debug(
+                        "[AIHandler] no finalized user message to send"
+                    );
                     // No finalized user message to send
                 }
             } catch (_) {}
             try {
                 this.geminiAPI.sendActivityEnd();
+                console.debug("[AIHandler] sent activityEnd");
                 const elapsed = this._utteranceStartTs
                     ? Date.now() - this._utteranceStartTs
                     : 0;
@@ -127,6 +147,7 @@ export class AIHandler {
             } catch (_) {}
             try {
                 this.geminiAPI.disableAudioInput();
+                console.debug("[AIHandler] disableAudioInput");
             } catch (_) {}
         })();
     }

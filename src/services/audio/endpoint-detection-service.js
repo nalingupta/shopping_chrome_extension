@@ -20,11 +20,13 @@ export class EndpointDetectionService {
             onResponseGeneration: null,
             onStatus: null,
             onEndpointDetectionStart: null,
+            onSpeechStart: null,
         };
 
         this.state = {
             isListening: false,
             audioStreamingStarted: false,
+            isSpeechActive: false,
         };
 
         this.speechBuffer = {
@@ -97,6 +99,15 @@ export class EndpointDetectionService {
             ) / this.endpointDetection.audioLevelHistory.length;
 
         if (averageLevel > this.endpointDetection.audioLevelThreshold) {
+            // Rising above threshold indicates speech activity; only fire once per utterance
+            if (!this.state.isSpeechActive) {
+                this.state.isSpeechActive = true;
+                if (this.callbacks.onSpeechStart) {
+                    try {
+                        this.callbacks.onSpeechStart();
+                    } catch (_) {}
+                }
+            }
             this.onSpeechDetected();
         }
     }
@@ -156,6 +167,8 @@ export class EndpointDetectionService {
             if (this.callbacks?.onUtteranceEnded) {
                 this.callbacks.onUtteranceEnded(source);
             }
+            // Reset speech active flag on utterance end
+            this.state.isSpeechActive = false;
         } catch (_) {}
     }
 

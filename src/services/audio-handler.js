@@ -19,6 +19,13 @@ export class AudioHandler {
                     this.aiHandler.geminiAPI.audioContext.sampleRate) ||
                 48000,
             onDeepgramInterim: (text) => {
+                try {
+                    console.debug(
+                        `[Deepgram→AudioHandler] interim len=${
+                            (text || "").length
+                        } streamingStarted=${this.audioStreamingStarted}`
+                    );
+                } catch (_) {}
                 // Update speech buffer for orphaned flush fallback
                 try {
                     if (this.speechBuffer) {
@@ -32,6 +39,11 @@ export class AudioHandler {
 
                 // On first interim, trigger audio/video streaming and start utterance
                 if (!this.audioStreamingStarted) {
+                    try {
+                        console.debug(
+                            "[Deepgram→AudioHandler] first interim → startAudioStreaming + startUtterance"
+                        );
+                    } catch (_) {}
                     this.startAudioStreaming()
                         .then(() => {
                             this.audioStreamingStarted = true;
@@ -54,6 +66,13 @@ export class AudioHandler {
             },
             onDeepgramFinal: (finalText, payload) => {
                 try {
+                    console.debug(
+                        `[Deepgram→AudioHandler] final len=${
+                            (finalText || "").length
+                        }`
+                    );
+                } catch (_) {}
+                try {
                     this.aiHandler?.setLastUserMessage(finalText);
                     const callbacks = this.stateManager.getCallbacks();
                     if (callbacks.transcription)
@@ -61,12 +80,29 @@ export class AudioHandler {
                 } catch (_) {}
             },
             onDeepgramUtteranceEnd: () => {
+                try {
+                    const pendingLen = (
+                        this.speechBuffer?.interimText || ""
+                    ).trim().length;
+                    const hasFinal = !!(
+                        this.aiHandler &&
+                        this.aiHandler._lastUserMessage &&
+                        this.aiHandler._lastUserMessage.trim()
+                    );
+                    console.debug(
+                        `[Deepgram→AudioHandler] speech_final pendingLen=${pendingLen} hasFinal=${hasFinal}`
+                    );
+                } catch (_) {}
                 // Mirror existing Web Speech finalization flow
                 try {
+                    console.debug(
+                        "[Deepgram→AudioHandler] handleWebSpeechFinalResult() → endpoint detection path"
+                    );
                     this.handleWebSpeechFinalResult();
                 } catch (_) {}
                 // Pause audio to Deepgram but keep socket alive
                 try {
+                    console.debug("[Deepgram→AudioHandler] pause Deepgram WS");
                     this.deepgram.pause();
                 } catch (_) {}
             },
@@ -121,6 +157,7 @@ export class AudioHandler {
             },
             onEndpointDetectionStart: () => this.startEndpointDetection(),
             onUtteranceEnded: () => this.onExplicitUtteranceEnd(),
+            onSpeechStart: () => this.onLocalSpeechStart(),
         });
     }
 
@@ -246,6 +283,29 @@ export class AudioHandler {
                 this.videoHandler.speechActive = true;
                 this.videoHandler.setVideoStreamingStarted(true);
             }
+        } catch (_) {}
+    }
+
+    onLocalSpeechStart() {
+        // Start mic if not already; open Gemini audio gate and activityStart ASAP
+        if (!this.audioStreamingStarted) {
+            this.startAudioStreaming()
+                .then(() => {
+                    this.audioStreamingStarted = true;
+                })
+                .catch(() => {});
+        }
+        try {
+            if (this.aiHandler) {
+                this.aiHandler.startUtterance();
+            }
+        } catch (_) {}
+        // Ensure endpoint detection state reflects streaming started
+        try {
+            this.endpointDetection.setState({
+                isListening: this.stateManager.isListening(),
+                audioStreamingStarted: true,
+            });
         } catch (_) {}
     }
 
