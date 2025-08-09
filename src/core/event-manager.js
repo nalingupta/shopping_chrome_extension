@@ -12,9 +12,31 @@ export class EventManager {
         this.uiManager.elements.sendButton.addEventListener("click", () =>
             this.handleSendMessage()
         );
-        this.uiManager.elements.voiceButton.addEventListener("click", () =>
-            this.handleVoiceInput()
-        );
+        // Debounce guard
+        this._lastUtteranceEndAt = 0;
+        this._lastClickAt = 0;
+        this._clickDebounceMs = 1200;
+
+        this.uiManager.elements.voiceButton.addEventListener("click", (e) => {
+            // Debounce: ignore stop clicks immediately after utterance closes or recent click
+            try {
+                const now = Date.now();
+                const sinceLastClick = now - (this._lastClickAt || 0);
+                const sinceUtteranceEnd = now - (this._lastUtteranceEndAt || 0);
+                const isActive =
+                    this.multimediaOrchestrator.isMultimediaSessionActive();
+                if (
+                    isActive &&
+                    (sinceLastClick < this._clickDebounceMs ||
+                        sinceUtteranceEnd < this._clickDebounceMs)
+                ) {
+                    this._lastClickAt = now;
+                    return;
+                }
+                this._lastClickAt = now;
+            } catch (_) {}
+            this.handleVoiceInput();
+        });
         this.uiManager.elements.clearChatButton.addEventListener("click", () =>
             this.handleClearChat()
         );
@@ -176,6 +198,18 @@ export class EventManager {
     }
 
     async handleVoiceInput() {
+        try {
+            const err = new Error("handleVoiceInput entry");
+            const stack = (err && err.stack) || "<no stack>";
+            console.warn(
+                "[EventManager] handleVoiceInput",
+                {
+                    isActive:
+                        this.multimediaOrchestrator.isMultimediaSessionActive(),
+                },
+                stack.split("\n").slice(0, 5).join("\n")
+            );
+        } catch (_) {}
         if (this.multimediaOrchestrator.isMultimediaSessionActive()) {
             await this.stopVoiceInput();
         } else {
@@ -206,6 +240,14 @@ export class EventManager {
     }
 
     async stopVoiceInput() {
+        try {
+            const err = new Error("stopVoiceInput entry");
+            const stack = (err && err.stack) || "<no stack>";
+            console.warn(
+                "[EventManager] stopVoiceInput",
+                stack.split("\n").slice(0, 5).join("\n")
+            );
+        } catch (_) {}
         this.uiManager.elements.voiceButton.classList.remove("listening");
         this.uiManager.elements.voiceButton.title = "";
         await this.multimediaOrchestrator.stopMultimedia();

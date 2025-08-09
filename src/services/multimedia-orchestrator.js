@@ -81,6 +81,14 @@ export class MultimediaOrchestrator {
         }
 
         try {
+            try {
+                const err = new Error("stopMultimedia called");
+                const stack = (err && err.stack) || "<no stack>";
+                console.warn(
+                    "[MultimediaOrchestrator] stopMultimedia()",
+                    stack.split("\n").slice(0, 5).join("\n")
+                );
+            } catch (_) {}
             // Handle any pending transcription
             if (this.speechBuffer.interimText.trim()) {
                 const callbacks = this.audioHandler.stateManager.getCallbacks();

@@ -135,10 +135,9 @@ export class AudioHandler {
                     );
                     this.handleWebSpeechFinalResult();
                 } catch (_) {}
-                // Pause audio to Deepgram but keep socket alive
+                // Utterance closed; keep Deepgram connection alive
                 try {
-                    console.debug("[Deepgram→AudioHandler] pause Deepgram WS");
-                    this.deepgram.pause();
+                    console.debug("[Deepgram→AudioHandler] utterance closed");
                 } catch (_) {}
                 // Clear accumulator for next utterance
                 this._dgFinalBest = "";
@@ -293,6 +292,21 @@ export class AudioHandler {
     }
 
     stopTranscription() {
+        // Diagnostic: capture who is calling stop mid-session
+        try {
+            const err = new Error("stopTranscription called");
+            const stack = (err && err.stack) || "<no stack>";
+            console.warn(
+                "[AudioHandler] stopTranscription()",
+                stack.split("\n").slice(0, 5).join("\n")
+            );
+        } catch (_) {}
+        // On explicit mic stop, request a flush from Deepgram before closing
+        try {
+            if (this.deepgram && typeof this.deepgram.finalize === "function") {
+                this.deepgram.finalize();
+            }
+        } catch (_) {}
         try {
             this.deepgram.stop();
         } catch (_) {}
@@ -353,6 +367,22 @@ export class AudioHandler {
         this._dgFinalBest = "";
         this._dgSawInterim = false;
         this._dgFinalEmitted = false;
+        // Ensure Deepgram is connected (it may have been finalized/closed previously)
+        try {
+            if (this.deepgram && !this.deepgram.isConnected) {
+                try {
+                    console.debug(
+                        "[AudioHandler] Deepgram not connected at speech start → restarting"
+                    );
+                } catch (_) {}
+                try {
+                    this.deepgram._shouldReconnect = true;
+                } catch (_) {}
+                try {
+                    this.deepgram.start();
+                } catch (_) {}
+            }
+        } catch (_) {}
         if (!this.audioStreamingStarted) {
             this.startAudioStreaming()
                 .then(() => {

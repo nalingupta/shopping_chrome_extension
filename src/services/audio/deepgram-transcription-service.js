@@ -12,7 +12,8 @@ const DEFAULT_DEEPGRAM_OPTIONS = {
     channels: 1,
     interimResults: true,
     smartFormat: true,
-    endpointingMs: 350,
+    endpointingMs: 900,
+    vadEvents: true,
     keepaliveIntervalMs: 4000,
 };
 
@@ -36,6 +37,9 @@ export class DeepgramTranscriptionService {
         this.lastAudioSentAt = 0;
         this._reconnectAttempts = 0;
         this._shouldReconnect = true;
+
+        // Simple observability counters
+        this._stats = { interims: 0, finals: 0, speechFinals: 0 };
     }
 
     get isConnected() {
@@ -57,6 +61,7 @@ export class DeepgramTranscriptionService {
             interimResults,
             smartFormat,
             endpointingMs,
+            vadEvents,
         } = this.options;
 
         // Build Deepgram listen URL with query params
@@ -69,9 +74,15 @@ export class DeepgramTranscriptionService {
             interim_results: String(Boolean(interimResults)),
             smart_format: String(Boolean(smartFormat)),
             endpointing: String(endpointingMs),
+            vad_events: String(Boolean(vadEvents)),
         });
 
         const finalUrl = `wss://api.deepgram.com/v1/listen?${params.toString()}`;
+
+        // One-time helpful debug: show URL params (no token shown here)
+        try {
+            this._log("Connecting to:", finalUrl);
+        } catch (_) {}
 
         try {
             // In browsers, authenticate using Sec-WebSocket-Protocol subprotocol: ['token', <API_KEY>]
@@ -128,6 +139,18 @@ export class DeepgramTranscriptionService {
         }
     }
 
+    // Request Deepgram to flush any buffered audio and deliver final results
+    finalize() {
+        if (!this.isConnected) return;
+        try {
+            const msg = JSON.stringify({ type: "Finalize" });
+            this.deepgramWebSocket.send(msg);
+            this._log("Sent Finalize");
+        } catch (error) {
+            this._log("Failed to send Finalize", error);
+        }
+    }
+
     async stop() {
         this._emitState("stopping");
         this._clearKeepalive();
@@ -144,26 +167,13 @@ export class DeepgramTranscriptionService {
         this._emitState("closed");
     }
 
-    pause() {
-        if (!this.isConnected) return;
-        if (this.isPaused) return;
-        this.isPaused = true;
-        this._emitState("paused");
-        this._startKeepalive();
-    }
-
-    resume() {
-        if (!this.isConnected) return;
-        if (!this.isPaused) return;
-        this.isPaused = false;
-        this._emitState("connected");
-        // Keep keepalive running; it self-throttles when audio is flowing
-    }
+    // Continuous streaming model: keep socket open and stream audio for entire session
+    pause() {}
+    resume() {}
 
     // Send Int16Array PCM frame (mono, 16-bit, LE) sized ~10-20ms for low latency
     sendPcmFrame(int16PcmFrame) {
         if (!this.isConnected) return;
-        if (this.isPaused) return; // do not send audio while paused
         if (!(int16PcmFrame instanceof Int16Array)) {
             this._log("Ignoring non-Int16Array audio frame");
             return;
@@ -204,15 +214,35 @@ export class DeepgramTranscriptionService {
 
             if (transcript) {
                 if (isFinal) {
+                    this._stats.finals += 1;
                     this.onDeepgramFinal(transcript, payload);
                 } else {
+                    this._stats.interims += 1;
                     this.onDeepgramInterim(transcript, payload);
                 }
             }
 
             if (isSpeechFinal) {
+                this._stats.speechFinals += 1;
+                try {
+                    this._log(
+                        `Results: interims=${this._stats.interims} finals=${this._stats.finals} speech_final=${this._stats.speechFinals}`
+                    );
+                } catch (_) {}
                 this.onDeepgramUtteranceEnd(payload);
             }
+            return;
+        }
+
+        // Explicit VAD boundary message
+        if (payload && payload.type === "UtteranceEnd") {
+            try {
+                this._stats.speechFinals += 1;
+                this._log(
+                    `UtteranceEnd: interims=${this._stats.interims} finals=${this._stats.finals} speech_final=${this._stats.speechFinals}`
+                );
+            } catch (_) {}
+            this.onDeepgramUtteranceEnd(payload);
             return;
         }
 
