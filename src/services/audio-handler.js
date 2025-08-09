@@ -101,25 +101,32 @@ export class AudioHandler {
                     console.debug(
                         "[Deepgram→AudioHandler] onExplicitUtteranceEnd() → endUtterance"
                     );
-                    // Ensure we send the best accumulated final
+                    // Ensure we send the best accumulated final and emit to UI once
                     try {
+                        let toEmit = "";
                         if (this._dgFinalBest) {
                             this.aiHandler.setLastUserMessage(
                                 this._dgFinalBest
                             );
+                            toEmit = this._dgFinalBest;
                         } else {
-                            // If no Deepgram final arrived, but we have interim text, use it
                             const interim = (
                                 this.speechBuffer?.interimText || ""
                             ).trim();
                             if (interim) {
-                                const callbacks =
-                                    this.stateManager.getCallbacks();
-                                if (callbacks.transcription) {
-                                    callbacks.transcription(interim);
-                                }
                                 this.aiHandler.setLastUserMessage(interim);
+                                toEmit = interim;
                             }
+                        }
+                        if (toEmit) {
+                            try {
+                                console.debug(
+                                    `[AudioHandler] emit user final len=${toEmit.length}`
+                                );
+                            } catch (_) {}
+                            const callbacks = this.stateManager.getCallbacks();
+                            if (callbacks.transcription)
+                                callbacks.transcription(toEmit);
                         }
                     } catch (_) {}
                     this.onExplicitUtteranceEnd();
@@ -342,6 +349,10 @@ export class AudioHandler {
 
     onLocalSpeechStart() {
         // Start mic if not already; open Gemini audio gate and activityStart ASAP
+        // Reset utterance accumulators at the very start of a new utterance
+        this._dgFinalBest = "";
+        this._dgSawInterim = false;
+        this._dgFinalEmitted = false;
         if (!this.audioStreamingStarted) {
             this.startAudioStreaming()
                 .then(() => {

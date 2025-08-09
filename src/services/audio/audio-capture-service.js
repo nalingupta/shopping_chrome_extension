@@ -118,8 +118,7 @@ export class AudioCaptureService {
                     this.geminiAPI.isGeminiConnectionActive() &&
                     this.geminiAPI.geminiAPI.isAudioInputEnabled()
                 ) {
-                    const uint8Array = new Uint8Array(pcmData.buffer);
-                    const base64 = btoa(String.fromCharCode(...uint8Array));
+                    const base64 = this._int16ToBase64Chunked(pcmData);
                     this.geminiAPI.sendAudioData(base64);
                 }
             }
@@ -219,6 +218,28 @@ export class AudioCaptureService {
 
     setPcmFrameCallback(callback) {
         this.onPcmFrameCallback = callback;
+    }
+
+    // Efficient Int16Array -> base64 without blocking the main thread with huge spreads
+    _int16ToBase64Chunked(int16) {
+        try {
+            const uint8 = new Uint8Array(int16.buffer);
+            const chunkSize = 16384; // 16KB chunks
+            let binary = "";
+            for (let i = 0; i < uint8.length; i += chunkSize) {
+                const sub = uint8.subarray(i, i + chunkSize);
+                binary += String.fromCharCode.apply(null, sub);
+            }
+            return btoa(binary);
+        } catch (_) {
+            // Fallback: small arrays
+            try {
+                const uint8 = new Uint8Array(int16.buffer);
+                return btoa(String.fromCharCode(...uint8));
+            } catch (e) {
+                return "";
+            }
+        }
     }
 
     // No pre-roll helpers

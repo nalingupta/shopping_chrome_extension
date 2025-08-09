@@ -34,6 +34,8 @@ export class DeepgramTranscriptionService {
         this.isPaused = false;
         this.keepaliveTimer = null;
         this.lastAudioSentAt = 0;
+        this._reconnectAttempts = 0;
+        this._shouldReconnect = true;
     }
 
     get isConnected() {
@@ -94,10 +96,29 @@ export class DeepgramTranscriptionService {
                 this.onDeepgramError(err);
             };
 
-            this.deepgramWebSocket.onclose = () => {
-                this._log("WebSocket closed");
+            this.deepgramWebSocket.onclose = (evt) => {
+                this._log(
+                    "WebSocket closed",
+                    `code=${evt?.code} reason=${evt?.reason} clean=${evt?.wasClean}`
+                );
                 this._clearKeepalive();
                 this._emitState("closed");
+                // Auto-reconnect with capped backoff if allowed
+                if (this._shouldReconnect) {
+                    const delay = Math.min(
+                        1000,
+                        200 * Math.pow(2, this._reconnectAttempts)
+                    );
+                    this._reconnectAttempts += 1;
+                    setTimeout(() => {
+                        // Do not reconnect if already connected or explicitly stopped
+                        if (!this.isConnected && this._shouldReconnect) {
+                            try {
+                                this.start();
+                            } catch (_) {}
+                        }
+                    }, delay);
+                }
             };
         } catch (error) {
             this._log("Failed to open WebSocket", error);
@@ -110,6 +131,8 @@ export class DeepgramTranscriptionService {
     async stop() {
         this._emitState("stopping");
         this._clearKeepalive();
+        this._shouldReconnect = false;
+        this._reconnectAttempts = 0;
         if (this.deepgramWebSocket) {
             try {
                 this.deepgramWebSocket.close();
@@ -203,7 +226,7 @@ export class DeepgramTranscriptionService {
         this._clearKeepalive();
         const interval = Math.max(
             2000,
-            Number(this.options.keepaliveIntervalMs) || 4000
+            Number(this.options.keepaliveIntervalMs) || 2000
         );
         this.keepaliveTimer = setInterval(() => {
             if (!this.isConnected) return;
