@@ -33,6 +33,7 @@ export class DeepgramTranscriptionService {
         this.deepgramWebSocket = null;
         this.isPaused = false;
         this.keepaliveTimer = null;
+        this.lastAudioSentAt = 0;
     }
 
     get isConnected() {
@@ -80,6 +81,8 @@ export class DeepgramTranscriptionService {
             this.deepgramWebSocket.onopen = () => {
                 this._log("WebSocket connected");
                 this._emitState("connected");
+                // Start keepalive to avoid idle close until first audio arrives
+                this._startKeepalive();
             };
 
             this.deepgramWebSocket.onmessage = (event) => {
@@ -131,7 +134,7 @@ export class DeepgramTranscriptionService {
         if (!this.isPaused) return;
         this.isPaused = false;
         this._emitState("connected");
-        this._clearKeepalive();
+        // Keep keepalive running; it self-throttles when audio is flowing
     }
 
     // Send Int16Array PCM frame (mono, 16-bit, LE) sized ~10-20ms for low latency
@@ -144,6 +147,7 @@ export class DeepgramTranscriptionService {
         }
         try {
             this.deepgramWebSocket.send(int16PcmFrame.buffer);
+            this.lastAudioSentAt = Date.now();
         } catch (error) {
             this._log("Failed to send audio frame", error);
             this.onDeepgramError(error);
@@ -202,14 +206,16 @@ export class DeepgramTranscriptionService {
             Number(this.options.keepaliveIntervalMs) || 4000
         );
         this.keepaliveTimer = setInterval(() => {
-            if (this.isConnected && this.isPaused) {
-                try {
-                    // Application-level keepalive while paused
-                    const msg = JSON.stringify({ type: "KeepAlive" });
-                    this.deepgramWebSocket.send(msg);
-                } catch (error) {
-                    this._log("Keepalive send failed", error);
-                }
+            if (!this.isConnected) return;
+            const now = Date.now();
+            const idleMs = now - (this.lastAudioSentAt || 0);
+            const shouldSend = this.isPaused || idleMs > 1500;
+            if (!shouldSend) return;
+            try {
+                const msg = JSON.stringify({ type: "KeepAlive" });
+                this.deepgramWebSocket.send(msg);
+            } catch (error) {
+                this._log("Keepalive send failed", error);
             }
         }, interval);
     }

@@ -34,9 +34,8 @@ export class AudioCaptureService {
     }
 
     async startAudioStreaming() {
-        if (!this.geminiAPI.isGeminiConnectionActive()) {
-            return;
-        }
+        // Start audio streaming regardless of Gemini state so other
+        // consumers (e.g., Deepgram, endpoint detection) can receive PCM.
 
         try {
             // Ensure AudioContext is active before starting processing
@@ -146,12 +145,6 @@ export class AudioCaptureService {
             );
 
         audioProcessor.onaudioprocess = (event) => {
-            if (
-                !this.geminiAPI.isGeminiConnectionActive() ||
-                !this.geminiAPI.geminiAPI.isAudioInputEnabled()
-            )
-                return;
-
             const inputData = event.inputBuffer.getChannelData(0);
             const outputData = event.outputBuffer.getChannelData(0);
 
@@ -173,9 +166,15 @@ export class AudioCaptureService {
                 pcmData[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
             }
 
-            const uint8Array = new Uint8Array(pcmData.buffer);
-            const base64 = btoa(String.fromCharCode(...uint8Array));
-            this.geminiAPI.sendAudioData(base64);
+            // Send to Gemini only if connection & audio input are enabled
+            if (
+                this.geminiAPI.isGeminiConnectionActive() &&
+                this.geminiAPI.geminiAPI.isAudioInputEnabled()
+            ) {
+                const uint8Array = new Uint8Array(pcmData.buffer);
+                const base64 = btoa(String.fromCharCode(...uint8Array));
+                this.geminiAPI.sendAudioData(base64);
+            }
 
             // Mirror PCM frames to optional external consumer (e.g., Deepgram)
             if (this.onPcmFrameCallback) {

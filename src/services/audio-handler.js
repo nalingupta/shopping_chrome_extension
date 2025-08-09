@@ -176,6 +176,10 @@ export class AudioHandler {
         } catch (_) {}
 
         this.deepgram.start();
+        // Ensure audio capture starts immediately so Deepgram receives PCM frames
+        try {
+            this.startAudioStreaming();
+        } catch (_) {}
     }
 
     restartSpeechRecognition() {
