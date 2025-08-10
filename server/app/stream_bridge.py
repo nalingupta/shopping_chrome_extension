@@ -3,6 +3,7 @@ import json
 from typing import Any, Dict, Optional
 
 from fastapi import WebSocket
+from .adk_session import ADKSessionFactory, RunConfig
 
 
 class LiveStreamBridge:
@@ -26,6 +27,9 @@ class LiveStreamBridge:
         self._turn_seq: int = 0
         self._turn_start_at_ms: Optional[int] = None
         self._first_token_at_ms: Optional[int] = None
+        # ADK session bridge
+        self._adk_session = None
+        self._bridge = None
 
     async def run(self) -> None:
         while True:
@@ -35,7 +39,7 @@ class LiveStreamBridge:
                 break
 
             if "bytes" in message and message["bytes"] is not None:
-                # Binary video chunk; Phase 1: accept and drop
+                # Binary video chunk
                 data: bytes = message["bytes"]  # type: ignore[assignment]
                 self._chunk_count += 1
                 self._chunk_bytes += len(data)
@@ -44,9 +48,12 @@ class LiveStreamBridge:
                     print(
                         f"[WS] video_chunk recv seq={header.get('seq')} size={len(data)} bytes mime={header.get('mime')}"
                     )
+                    # Forward to ADK bridge if available
+                    if self._bridge is not None:
+                        mime = str(header.get("mime") or "video/webm;codecs=vp8,opus")
+                        await self._bridge.ingest_blob(mime=mime, data=data)
                 except Exception:
                     pass
-                # Future: forward to ADK via LiveRequestQueue as Blob
                 self._expecting_video_header = None
                 continue
 
@@ -65,9 +72,16 @@ class LiveStreamBridge:
         msg_type = payload.get("type")
 
         if msg_type == "session_start":
-            # Phase 1: mark session; future: create ADK session
+            # Create ADK session/bridge
             self.session_open = True
-            print(f"[WS] session_start model={payload.get('model')}")
+            model = str(payload.get("model") or "models/gemini-live-2.5-flash-preview")
+            print(f"[WS] session_start model={model}")
+            self._adk_session = ADKSessionFactory.create_session(model=model, config=RunConfig())
+            self._bridge = self._adk_session.bridge
+            try:
+                await self._bridge.start()
+            except Exception as exc:
+                await self._send_error("adk_start_failed", str(exc))
             await self._send_ok()
             return
 
@@ -79,6 +93,11 @@ class LiveStreamBridge:
             self._turn_start_at_ms = self._now_ms()
             self._first_token_at_ms = None
             print("[WS] activity_start")
+            try:
+                if self._bridge is not None:
+                    await self._bridge.start_turn()
+            except Exception:
+                pass
             await self._send_ok()
             return
 
@@ -86,13 +105,12 @@ class LiveStreamBridge:
             text = str(payload.get("text", ""))
             self._last_text = text
             print(f"[WS] text_input len={len(text)}")
-            # Phase 1: immediately echo as a single delta and complete turn
-            # Future: stream ADK deltas
-            if text:
-                if self._first_token_at_ms is None and self._turn_start_at_ms is not None:
-                    self._first_token_at_ms = self._now_ms()
-                await self._send({"type": "text_delta", "text": text, "isPartial": False})
-            await self._send({"type": "turn_complete"})
+            # Forward user text to ADK bridge; streaming will occur on activity_end
+            try:
+                if self._bridge is not None and text:
+                    await self._bridge.ingest_user_text(text)
+            except Exception:
+                pass
             return
 
         if msg_type == "activity_end":
@@ -108,6 +126,17 @@ class LiveStreamBridge:
                 f"[TURN] id={self._turn_seq} chunks={self._chunk_count} bytes={self._chunk_bytes} "
                 f"first_token_ms={first_ms if first_ms is not None else 'n/a'} total_ms={total_ms}"
             )
+            # Signal ADK turn end and stream deltas back to client
+            try:
+                if self._bridge is not None:
+                    await self._bridge.end_turn()
+                    async for piece in self._bridge.stream_deltas():
+                        if piece:
+                            if self._first_token_at_ms is None and self._turn_start_at_ms is not None:
+                                self._first_token_at_ms = self._now_ms()
+                            await self._send({"type": "text_delta", "text": piece, "isPartial": True})
+            except Exception:
+                pass
             await self._send({"type": "turn_complete"})
             await self._send_ok()
             # Reset per-turn metrics
@@ -121,6 +150,11 @@ class LiveStreamBridge:
             # Graceful close without raising to avoid noisy server error logs
             try:
                 await self.ws.close()
+            except Exception:
+                pass
+            try:
+                if self._bridge is not None:
+                    await self._bridge.close()
             except Exception:
                 pass
             self._closing = True

@@ -5,7 +5,9 @@
         "build": "echo 'No build process needed for this extension'",
         "lint": "echo 'Linting completed - no linter configured'",
         "server:dev": "conda run -n shopping-chrome-ext uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload --app-dir server",
-        "verify:adk": "node scripts/verify_adk_e2e.js"
+        "verify:adk": "node scripts/verify_adk_e2e.js",
+        "preserve": "kill -TERM $(lsof -ti tcp:8080) 2>/dev/null || true; sleep 1; kill -KILL $(lsof -ti tcp:8080) 2>/dev/null || true",
+        "serve": "bash -lc 'source ~/.zshrc >/dev/null 2>&1 || true; conda activate shopping-chrome-ext && uvicorn app.main:app --app-dir server --host 0.0.0.0 --port 8080 --reload --log-level info --access-log'"
     },
     "type": "module",
     "dependencies": {},
