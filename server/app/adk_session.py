@@ -252,6 +252,22 @@ class ADKLiveBridge(BaseLiveBridge):
             type(self._live_q).__name__ if self._live_q is not None else "None",
             type(self._runner).__name__ if self._runner is not None else "None",
         )
+        # Log live queue capabilities (methods) once
+        try:
+            if self._live_q is not None:
+                candidate_methods = [
+                    "send_realtime", "send", "enqueue", "put", "write",
+                    "start_request", "begin_input", "open_input", "open_request", "start_input",
+                    "close_request", "end_input", "finish_input", "close_input",
+                ]
+                available = [m for m in candidate_methods if hasattr(self._live_q, m)]
+                logging.getLogger("adk.bridge").info(
+                    "live_queue_capabilities type=%s methods=%s",
+                    type(self._live_q).__name__,
+                    ",".join(available) if available else "none",
+                )
+        except Exception:
+            pass
         logging.getLogger("adk.bridge").info(
             "adk_start model=%s streaming_mode=%s modalities=%s",
             self.model,
@@ -286,7 +302,7 @@ class ADKLiveBridge(BaseLiveBridge):
                     if hasattr(self._live_q, name):
                         try:
                             await self._maybe_await(getattr(self._live_q, name)())
-                            bridge_log.debug("start_turn signaled via %s", name)
+                            bridge_log.info("start_turn signaled via %s", name)
                             break
                         except Exception:
                             continue
@@ -298,6 +314,12 @@ class ADKLiveBridge(BaseLiveBridge):
         if not self._adk_ok or self._closed:
             return
         try:
+            # Prefer ADK types for live queue, fallback to genai types
+            adk_types = None
+            try:
+                from google.adk import types as adk_types  # type: ignore
+            except Exception:
+                adk_types = None
             from google.genai import types as genai_types  # type: ignore
             import base64
             if self._live_q is not None:
@@ -310,13 +332,37 @@ class ADKLiveBridge(BaseLiveBridge):
                     b64 = ""
                 if not b64:
                     return
-                blob = genai_types.Blob(data=b64, mime_type=safe_mime)
-                # Wrap as Part + Content for ADK Live
-                part = genai_types.Part(blob=blob)
-                content = genai_types.Content(role="user", parts=[part])
-                await self._maybe_await(self._live_q.send_realtime(content))
-                logging.getLogger("adk.bridge").debug(
-                    "ingest_blob bytes=%s mime=%s", len(data), safe_mime
+                content = None
+                if adk_types is not None:
+                    try:
+                        blob = adk_types.Blob(data=b64, mime_type=safe_mime)
+                        part = adk_types.Part(blob=blob)
+                        content = adk_types.Content(role="user", parts=[part])
+                    except Exception:
+                        content = None
+                if content is None:
+                    try:
+                        blob = genai_types.Blob(data=b64, mime_type=safe_mime)
+                        part = genai_types.Part(blob=blob)
+                        content = genai_types.Content(role="user", parts=[part])
+                    except Exception:
+                        content = None
+                if content is None:
+                    return
+                # Try multiple method names and log which succeeded
+                used_method = None
+                for name in ("send_realtime", "send", "enqueue", "put", "write"):
+                    fn = getattr(self._live_q, name, None)
+                    if not callable(fn):
+                        continue
+                    try:
+                        await self._maybe_await(fn(content))  # type: ignore[misc]
+                        used_method = name
+                        break
+                    except Exception:
+                        continue
+                logging.getLogger("adk.bridge").info(
+                    "ingest_blob bytes=%s mime=%s method=%s", len(data), safe_mime, used_method or "unknown"
                 )
         except Exception:
             # Swallow to keep session resilient
@@ -326,10 +372,26 @@ class ADKLiveBridge(BaseLiveBridge):
         if not self._adk_ok or self._closed:
             return
         try:
+            # Prefer ADK types for live queue, fallback to genai types
+            adk_types = None
+            try:
+                from google.adk import types as adk_types  # type: ignore
+            except Exception:
+                adk_types = None
             from google.genai import types as genai_types  # type: ignore
             if self._live_q is not None and text:
                 # Build a Content object and try multiple enqueue method names for compatibility
-                content = genai_types.Content(role="user", parts=[genai_types.Part(text=str(text))])
+                content = None
+                if adk_types is not None:
+                    try:
+                        content = adk_types.Content(role="user", parts=[adk_types.Part(text=str(text))])
+                    except Exception:
+                        content = None
+                if content is None:
+                    try:
+                        content = genai_types.Content(role="user", parts=[genai_types.Part(text=str(text))])
+                    except Exception:
+                        content = None
                 log = logging.getLogger("adk.bridge")
                 used_method = None
                 # Preferred method names
@@ -345,12 +407,12 @@ class ADKLiveBridge(BaseLiveBridge):
                     if not callable(fn):
                         continue
                     try:
-                        await self._maybe_await(fn(content))  # type: ignore[misc]
+                        await self._maybe_await(fn(content if content is not None else str(text)))  # type: ignore[misc]
                         used_method = name
                         break
                     except Exception:
                         continue
-                # If all failed with Content, try again with raw text
+                # If all failed with structured Content, try again with raw text
                 if used_method is None:
                     for name in candidate_methods:
                         fn = getattr(self._live_q, name, None)
@@ -363,7 +425,7 @@ class ADKLiveBridge(BaseLiveBridge):
                         except Exception:
                             continue
                 preview = (text or "")[:80].replace("\n", " ")
-                log.debug(
+                log.info(
                     "ingest_user_text len=%s preview=%s method=%s",
                     len(text),
                     preview,
@@ -387,7 +449,7 @@ class ADKLiveBridge(BaseLiveBridge):
                     if hasattr(self._live_q, name):
                         try:
                             await self._maybe_await(getattr(self._live_q, name)())
-                            logging.getLogger("adk.bridge").debug("end_turn signaled via %s", name)
+                            logging.getLogger("adk.bridge").info("end_turn signaled via %s", name)
                             break
                         except Exception:
                             continue
@@ -407,7 +469,7 @@ class ADKLiveBridge(BaseLiveBridge):
                 if self._awaiting_turn_end:
                     idle_ticks += 1
                     # If live is attached but quiet, fall back after a few idle windows
-                    if idle_ticks >= 3:  # ~1.5s of silence
+                    if idle_ticks >= 5:  # ~2.5s of silence before fallback
                         try:
                             fb_text = await self._run_text_fallback()
                             if fb_text:
@@ -485,8 +547,10 @@ class ADKLiveBridge(BaseLiveBridge):
             # Prepare ADK-native RunConfig with BIDI streaming and TEXT output
             adk_run_config = None
             try:
-                from google.adk.runners import RunConfig as ADK_RunConfig  # type: ignore
-                from google.adk.runners import StreamingMode as ADK_StreamingMode  # type: ignore
+                from google.adk.agents.run_config import (
+                    RunConfig as ADK_RunConfig,
+                    StreamingMode as ADK_StreamingMode,
+                )  # type: ignore
                 try:
                     adk_run_config = ADK_RunConfig(
                         streaming_mode=ADK_StreamingMode.BIDI,
@@ -500,8 +564,16 @@ class ADKLiveBridge(BaseLiveBridge):
                         streaming_mode=ADK_StreamingMode.BIDI,
                         response_modalities=["TEXT"],
                     )
+                try:
+                    bridge_log.info("run_config_constructed provider=google.adk.agents.run_config")
+                except Exception:
+                    pass
             except Exception:
                 adk_run_config = None
+                try:
+                    bridge_log.info("run_config_unavailable: using defaults for live attach")
+                except Exception:
+                    pass
 
             # First: explicit attach to run_live using exact signature from logs
             events_iter: Optional[AsyncIterator[Any]] = None
@@ -700,21 +772,48 @@ class ADKLiveBridge(BaseLiveBridge):
                 # After successful attach, send one-time system message via live queue
                 try:
                     if getattr(self, "_sent_system_message", False) is False and self._live_q is not None:
+                        # Prefer ADK types; fallback to genai types
+                        adk_types = None
+                        try:
+                            from google.adk import types as adk_types  # type: ignore
+                        except Exception:
+                            adk_types = None
                         from google.genai import types as genai_types  # type: ignore
                         sys_text = (
                             "You are a helpful shopping assistant. "
                             "Describe what you can infer from incoming screen frames and "
                             "answer the user's question clearly in text."
                         )
-                        sys_content = genai_types.Content(role="system", parts=[genai_types.Part(text=sys_text)])
-                        await self._maybe_await(self._live_q.send_realtime(sys_content))
-                        bridge_log.info("system_instruction_sent len=%s", len(sys_text))
-                        self._sent_system_message = True  # type: ignore[attr-defined]
-                except Exception as exc:
-                    try:
-                        bridge_log.warning("system_instruction_failed err=%s", str(exc))
-                    except Exception:
-                        pass
+                        sys_content = None
+                        if adk_types is not None:
+                            try:
+                                sys_content = adk_types.Content(role="system", parts=[adk_types.Part(text=sys_text)])
+                            except Exception:
+                                sys_content = None
+                        if sys_content is None:
+                            try:
+                                sys_content = genai_types.Content(role="system", parts=[genai_types.Part(text=sys_text)])
+                            except Exception:
+                                sys_content = None
+                        if sys_content is not None:
+                            # Prefer send_realtime; fallback to other method names
+                            sent = False
+                            for name in ("send_realtime", "send", "enqueue", "put", "write"):
+                                fn = getattr(self._live_q, name, None)
+                                if not callable(fn):
+                                    continue
+                                try:
+                                    await self._maybe_await(fn(sys_content))  # type: ignore[misc]
+                                    bridge_log.info("system_instruction_sent len=%s via=%s", len(sys_text), name)
+                                    sent = True
+                                    break
+                                except Exception:
+                                    continue
+                            if not sent:
+                                bridge_log.warning("system_instruction_send_failed: no compatible live queue method")
+                            self._sent_system_message = True  # type: ignore[attr-defined]
+                except Exception:
+                    pass
 
             first_event_logged = False
             async for event in events_iter:
