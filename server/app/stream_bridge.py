@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 from typing import Any, Dict, Optional
 
 from fastapi import WebSocket
@@ -27,6 +28,8 @@ class LiveStreamBridge:
         self._turn_seq: int = 0
         self._turn_start_at_ms: Optional[int] = None
         self._first_token_at_ms: Optional[int] = None
+        # Logger
+        self._log = logging.getLogger("adk.ws")
         # ADK session bridge
         self._adk_session = None
         self._bridge = None
@@ -45,8 +48,11 @@ class LiveStreamBridge:
                 self._chunk_bytes += len(data)
                 try:
                     header = self._expecting_video_header or {}
-                    print(
-                        f"[WS] video_chunk recv seq={header.get('seq')} size={len(data)} bytes mime={header.get('mime')}"
+                    self._log.debug(
+                        "video_chunk recv seq=%s size=%s mime=%s",
+                        header.get("seq"),
+                        len(data),
+                        header.get("mime"),
                     )
                     # Forward to ADK bridge if available
                     if self._bridge is not None:
@@ -75,7 +81,7 @@ class LiveStreamBridge:
             # Create ADK session/bridge
             self.session_open = True
             model = str(payload.get("model") or "models/gemini-live-2.5-flash-preview")
-            print(f"[WS] session_start model={model}")
+            self._log.info("session_start model=%s", model)
             self._adk_session = ADKSessionFactory.create_session(model=model, config=RunConfig())
             self._bridge = self._adk_session.bridge
             try:
@@ -92,7 +98,7 @@ class LiveStreamBridge:
             self._turn_seq += 1
             self._turn_start_at_ms = self._now_ms()
             self._first_token_at_ms = None
-            print("[WS] activity_start")
+            self._log.info("activity_start turn=%s", self._turn_seq)
             try:
                 if self._bridge is not None:
                     await self._bridge.start_turn()
@@ -104,7 +110,7 @@ class LiveStreamBridge:
         if msg_type == "text_input":
             text = str(payload.get("text", ""))
             self._last_text = text
-            print(f"[WS] text_input len={len(text)}")
+            self._log.debug("text_input len=%s preview=%s", len(text), json.dumps(text[:80]))
             # Forward user text to ADK bridge; streaming will occur on activity_end
             try:
                 if self._bridge is not None and text:
@@ -122,9 +128,13 @@ class LiveStreamBridge:
                 total_ms = max(0, now_ms - self._turn_start_at_ms)
             if self._first_token_at_ms is not None and self._turn_start_at_ms is not None:
                 first_ms = max(0, self._first_token_at_ms - self._turn_start_at_ms)
-            print(
-                f"[TURN] id={self._turn_seq} chunks={self._chunk_count} bytes={self._chunk_bytes} "
-                f"first_token_ms={first_ms if first_ms is not None else 'n/a'} total_ms={total_ms}"
+            self._log.info(
+                "TurnSummary turn=%s chunks=%s bytes=%s firstTokenMs=%s totalMs=%s",
+                self._turn_seq,
+                self._chunk_count,
+                self._chunk_bytes,
+                (first_ms if first_ms is not None else "n/a"),
+                total_ms,
             )
             # Signal ADK turn end and stream deltas back to client
             try:
@@ -134,6 +144,7 @@ class LiveStreamBridge:
                         if piece:
                             if self._first_token_at_ms is None and self._turn_start_at_ms is not None:
                                 self._first_token_at_ms = self._now_ms()
+                            self._log.debug("delta len=%s preview=%s", len(piece), json.dumps(piece[:120]))
                             await self._send({"type": "text_delta", "text": piece, "isPartial": True})
             except Exception:
                 pass
@@ -163,8 +174,11 @@ class LiveStreamBridge:
         if msg_type == "video_chunk_header":
             # Optional header preceding a binary frame
             self._expecting_video_header = payload
-            print(
-                f"[WS] video_chunk_header seq={payload.get('seq')} durMs={payload.get('durMs')} mime={payload.get('mime')}"
+            self._log.debug(
+                "video_chunk_header seq=%s durMs=%s mime=%s",
+                payload.get("seq"),
+                payload.get("durMs"),
+                payload.get("mime"),
             )
             return
 

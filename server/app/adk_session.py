@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import Any, AsyncGenerator, Optional
 import asyncio
 import os
+import logging
 
 
 @dataclass
@@ -90,57 +91,235 @@ class ADKLiveBridge(BaseLiveBridge):
         self.config = config
         self._api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
         self._adk_ok = False
-        self._queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
         self._closed = False
+
+        # Live ingestion/output structures
+        self._live_q = None  # ADK LiveRequestQueue (set when ADK is available)
+        self._runner = None  # ADK Runner
+        self._agent = None   # ADK Agent
+        self._consumer_task: Optional[asyncio.Task] = None
+        self._out_q: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
+        self._awaiting_turn_end: bool = False
 
         try:
             # Lazy import so environments without ADK still run
             from google_adk import types as adk_types  # noqa: F401
-            # Placeholders for actual Agent/Runner wiring
-            self._adk_ok = bool(self._api_key)
+            from google_adk import live as adk_live  # type: ignore
+            from google_adk import agent as adk_agent  # type: ignore
+            from google_adk import runner as adk_runner  # type: ignore
+
+            if not self._api_key:
+                # No API key → not OK; fallback will be used by factory
+                self._adk_ok = False
+                return
+
+            # Construct Agent/Runner and LiveRequestQueue
+            # Note: Exact constructor signatures may evolve; guard with try/except
+            try:
+                # Some ADK builds use environment variable discovery for the key
+                # We still pass it explicitly when supported
+                self._agent = adk_agent.Agent(
+                    model=self.model,
+                    api_key=self._api_key,
+                )
+            except Exception:
+                # Fallback: try without explicit api_key (env-only)
+                self._agent = adk_agent.Agent(model=self.model)
+
+            self._runner = adk_runner.Runner(self._agent)
+            self._live_q = adk_live.LiveRequestQueue()
+            self._adk_ok = True
         except Exception:
+            # Any import or construction failure disables ADK
             self._adk_ok = False
 
     async def start(self) -> None:
-        # In a real implementation, construct Agent/Runner and a LiveRequestQueue here
-        return
+        if not self._adk_ok or self._closed:
+            return
+        # Start background consumer to drain ADK live events and push text deltas
+        if self._consumer_task is None or self._consumer_task.done():
+            self._consumer_task = asyncio.create_task(self._consume_live_events())
+        logging.getLogger("adk.bridge").info(
+            "adk_start model=%s streaming_mode=%s modalities=%s",
+            self.model,
+            self.config.streaming_mode,
+            ",".join(self.config.response_modalities or []),
+        )
 
     async def start_turn(self) -> None:
-        # Marker for turn start; could enqueue a control event
-        return
+        # Mark a new turn boundary
+        self._awaiting_turn_end = False
+        logging.getLogger("adk.bridge").debug("start_turn")
 
     async def ingest_blob(self, mime: str, data: bytes) -> None:
-        # In a real ADK integration, forward as types.Blob to the LiveRequestQueue
-        await self._queue.put(("blob", {"mime": mime, "bytes": data}))
+        if not self._adk_ok or self._closed:
+            return
+        try:
+            from google_adk import types as adk_types  # type: ignore
+            if self._live_q is not None:
+                blob = adk_types.Blob(data=data, mime_type=str(mime))
+                # The ADK queue is usually sync; call accordingly in a thread-safe way
+                await self._maybe_await(self._live_q.send_realtime(blob))
+                logging.getLogger("adk.bridge").debug(
+                    "ingest_blob bytes=%s mime=%s", len(data), mime
+                )
+        except Exception:
+            # Swallow to keep session resilient
+            pass
 
     async def ingest_user_text(self, text: str) -> None:
-        await self._queue.put(("text", text))
+        if not self._adk_ok or self._closed:
+            return
+        try:
+            from google_adk import types as adk_types  # type: ignore
+            if self._live_q is not None and text:
+                msg = adk_types.Text(text=str(text))
+                await self._maybe_await(self._live_q.send_realtime(msg))
+                preview = (text or "")[:80].replace("\n", " ")
+                logging.getLogger("adk.bridge").debug(
+                    "ingest_user_text len=%s preview=%s", len(text), preview
+                )
+        except Exception:
+            pass
 
     async def end_turn(self) -> None:
-        await self._queue.put(("turn_end", None))
+        # Signal to ADK that this turn's inputs are done (best-effort; API varies)
+        self._awaiting_turn_end = True
+        try:
+            if self._live_q is not None:
+                end_methods = [
+                    getattr(self._live_q, name)
+                    for name in ("end_input", "finish_input", "close_input")
+                    if hasattr(self._live_q, name)
+                ]
+                for m in end_methods:
+                    try:
+                        await self._maybe_await(m())
+                        logging.getLogger("adk.bridge").debug("end_turn signaled")
+                        break
+                    except Exception:
+                        continue
+        except Exception:
+            pass
 
     async def stream_deltas(self) -> AsyncGenerator[str, None]:
-        """
-        Placeholder streaming: if ADK is available this would forward ADK deltas.
-        For now, emit simple echoes of the last text event encountered before turn_end.
-        """
-        last_text: str = ""
-        # Drain until turn_end
+        if not self._adk_ok or self._closed:
+            # No ADK available → no deltas
+            return
+        # Drain output queue until we see a turn boundary or silence while awaiting turn end
+        idle_ticks = 0
         while True:
-            kind, payload = await self._queue.get()
-            if kind == "text":
-                last_text = str(payload or "")
+            try:
+                kind, payload = await asyncio.wait_for(self._out_q.get(), timeout=0.5)
+            except asyncio.TimeoutError:
+                if self._awaiting_turn_end:
+                    # Treat quiet period after end_turn as completion
+                    break
+                continue
+
+            if kind == "text" and payload:
+                yield str(payload)
+                idle_ticks = 0
             elif kind == "turn_end":
                 break
-        if last_text:
-            # Stream in two chunks to simulate
-            mid = max(1, len(last_text) // 2)
-            yield last_text[:mid]
-            await asyncio.sleep(0.05)
-            yield last_text[mid:]
+            elif kind == "error":
+                # Stop the turn on error
+                break
 
     async def close(self) -> None:
         self._closed = True
+        try:
+            if self._consumer_task is not None:
+                self._consumer_task.cancel()
+        except Exception:
+            pass
+
+    async def _consume_live_events(self) -> None:
+        """Continuously consume ADK live events and push text deltas to _out_q."""
+        try:
+            if self._runner is None or self._live_q is None:
+                return
+            async for event in self._runner.run_live(self._live_q):
+                # Extract any text pieces and enqueue them
+                for piece in self._extract_text(event):
+                    if piece:
+                        await self._out_q.put(("text", piece))
+                        logging.getLogger("adk.bridge").debug(
+                            "delta len=%s preview=%s", len(piece), (piece or "")[:120].replace("\n", " ")
+                        )
+                # Heuristics for turn completion markers
+                if self._is_turn_complete_event(event):
+                    await self._out_q.put(("turn_end", None))
+                    logging.getLogger("adk.bridge").info("turn_complete from ADK")
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            # On any error, unblock any waiting streams for the current turn
+            try:
+                await self._out_q.put(("error", "live_consumer_failed"))
+                await self._out_q.put(("turn_end", None))
+                logging.getLogger("adk.bridge").warning("live_consumer_failed", exc_info=True)
+            except Exception:
+                pass
+
+    def _extract_text(self, event: Any) -> list[str]:
+        """Best-effort extraction of text deltas from ADK live events."""
+        chunks: list[str] = []
+        try:
+            # Dict-like events
+            if isinstance(event, dict):
+                # Common shapes: {"text": "..."} or nested parts
+                if isinstance(event.get("text"), str):
+                    chunks.append(str(event["text"]))
+                sc = event.get("serverContent") or event.get("server_content")
+                if sc:
+                    parts = sc.get("modelTurn", {}).get("parts") or sc.get("parts")
+                    if isinstance(parts, list):
+                        for p in parts:
+                            t = (p or {}).get("text")
+                            if isinstance(t, str):
+                                chunks.append(t)
+            else:
+                # Object-like events: try attributes
+                t = getattr(event, "text", None)
+                if isinstance(t, str):
+                    chunks.append(t)
+                output = getattr(event, "output", None)
+                if output is not None:
+                    parts = getattr(output, "parts", None) or getattr(output, "contents", None)
+                    if isinstance(parts, list):
+                        for p in parts:
+                            pt = getattr(p, "text", None) if hasattr(p, "text") else None
+                            if isinstance(pt, str):
+                                chunks.append(pt)
+        except Exception:
+            pass
+        return chunks
+
+    def _is_turn_complete_event(self, event: Any) -> bool:
+        """Heuristic to detect a turn completion event from ADK."""
+        try:
+            if isinstance(event, dict):
+                return bool(
+                    event.get("turnComplete")
+                    or event.get("turn_complete")
+                    or (event.get("serverContent") or {}).get("turnComplete") is True
+                    or (event.get("server_content") or {}).get("turn_complete") is True
+                )
+            # Attribute-based detection
+            return bool(
+                getattr(event, "turnComplete", False)
+                or getattr(event, "turn_complete", False)
+                or getattr(getattr(event, "serverContent", object()), "turnComplete", False)
+                or getattr(getattr(event, "server_content", object()), "turn_complete", False)
+            )
+        except Exception:
+            return False
+
+    async def _maybe_await(self, value: Any) -> Any:
+        if asyncio.iscoroutine(value) or isinstance(value, asyncio.Future):
+            return await value
+        return value
 
 
 @dataclass
@@ -154,11 +333,14 @@ class ADKSessionFactory:
     @staticmethod
     def create_session(model: str, config: Optional[RunConfig] = None) -> ADKSession:
         cfg = config or RunConfig()
-        bridge: BaseLiveBridge
+        # Prefer real ADK bridge when available
         try:
-            bridge = ADKLiveBridge(model=model, config=cfg)
+            adk_bridge = ADKLiveBridge(model=model, config=cfg)
+            if getattr(adk_bridge, "_adk_ok", False):
+                return ADKSession(model=model, config=cfg, bridge=adk_bridge)
         except Exception:
-            bridge = FallbackEchoBridge()
-        return ADKSession(model=model, config=cfg, bridge=bridge)
+            pass
+        # Fallback echo bridge to keep the flow working during dev
+        return ADKSession(model=model, config=cfg, bridge=FallbackEchoBridge())
 
 
