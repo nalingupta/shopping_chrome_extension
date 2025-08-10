@@ -1,8 +1,11 @@
 from dataclasses import dataclass
 from typing import Any, AsyncGenerator, Optional
+import inspect
+from collections.abc import AsyncIterator, AsyncIterable
 import asyncio
 import os
 import logging
+import uuid
 
 
 @dataclass
@@ -100,6 +103,13 @@ class ADKLiveBridge(BaseLiveBridge):
         self._consumer_task: Optional[asyncio.Task] = None
         self._out_q: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
         self._awaiting_turn_end: bool = False
+        self._capabilities_logged: bool = False
+        # Live attach + text fallback helpers
+        self._live_attached: bool = False
+        self._last_user_text: str = ""
+        self._user_id: str = "extension"
+        self._session_id: str = uuid.uuid4().hex
+        self._session_obj: Any = None
 
         _log = logging.getLogger("adk.bridge")
         try:
@@ -131,11 +141,13 @@ class ADKLiveBridge(BaseLiveBridge):
                 _log.warning("adk_init_skipped: missing API key in env (GEMINI_API_KEY/GOOGLE_API_KEY)")
                 return
 
-            # Construct Agent (latest ADK requires a name)
+            # Construct Agent (latest ADK requires a name). Normalize model id (strip optional "models/")
+            effective_model = (self.model or "").replace("models/", "", 1)
+            _log.info("adk_agent_model=%s", effective_model)
             try:
-                self._agent = ADK_Agent(name="adk_bridge", model=self.model, api_key=self._api_key)  # type: ignore
+                self._agent = ADK_Agent(name="adk_bridge", model=effective_model, api_key=self._api_key)  # type: ignore
             except Exception:
-                self._agent = ADK_Agent(name="adk_bridge", model=self.model)  # type: ignore
+                self._agent = ADK_Agent(name="adk_bridge", model=effective_model)  # type: ignore
 
             # Construct LiveRequestQueue and Runner
             self._live_q = ADK_LiveRequestQueue()  # type: ignore
@@ -194,6 +206,19 @@ class ADKLiveBridge(BaseLiveBridge):
             return
         # Start background consumer to drain ADK live events and push text deltas
         if self._consumer_task is None or self._consumer_task.done():
+            # Best-effort: create a session up front if the runner exposes a session service
+            try:
+                svc = getattr(self, "_session_service", None)
+                create_fn = getattr(svc, "create_session", None) if svc else None
+                if callable(create_fn):
+                    # Capture the returned Session object if provided by this ADK version
+                    self._session_obj = await create_fn(
+                        app_name="adk_bridge",
+                        user_id=self._user_id,
+                        session_id=self._session_id,
+                    )
+            except Exception:
+                self._session_obj = None
             self._consumer_task = asyncio.create_task(self._consume_live_events())
         logging.getLogger("adk.bridge").info(
             "adk_start model=%s streaming_mode=%s modalities=%s",
@@ -235,6 +260,8 @@ class ADKLiveBridge(BaseLiveBridge):
                 logging.getLogger("adk.bridge").debug(
                     "ingest_user_text len=%s preview=%s", len(text), preview
                 )
+                # Save last user text for optional non-live fallback
+                self._last_user_text = text
         except Exception:
             pass
 
@@ -266,6 +293,15 @@ class ADKLiveBridge(BaseLiveBridge):
                 kind, payload = await asyncio.wait_for(self._out_q.get(), timeout=0.5)
             except asyncio.TimeoutError:
                 if self._awaiting_turn_end:
+                    # If we never attached to live, try a non-live one-shot to avoid UI hang
+                    if not self._live_attached:
+                        try:
+                            fb_text = await self._run_text_fallback()
+                            if fb_text:
+                                yield fb_text
+                                break
+                        except Exception:
+                            pass
                     # Treat quiet period after end_turn as completion
                     break
                 continue
@@ -293,33 +329,246 @@ class ADKLiveBridge(BaseLiveBridge):
             if self._runner is None or self._live_q is None:
                 return
 
-            # Obtain a live-events async iterator using best-effort compatibility across ADK versions
-            events_iter = None
             bridge_log = logging.getLogger("adk.bridge")
-            try:
-                # Prefer bound method if present
-                run_live = getattr(self._runner, "run_live", None)
-                if callable(run_live):
-                    # Try (agent, queue) first, then (queue)
+
+            # One-time capability dump for diagnostics
+            if not self._capabilities_logged:
+                candidate_names = [
+                    "run_live",
+                    "run_async",
+                    "run",
+                    "live",
+                    "stream",
+                    "events",
+                    "__aiter__",
+                ]
+                available = [
+                    name for name in candidate_names if hasattr(self._runner, name)
+                ]
+                try:
+                    ver = None
                     try:
-                        events_iter = run_live(self._agent, self._live_q)  # type: ignore[misc]
-                    except TypeError:
-                        events_iter = run_live(self._live_q)  # type: ignore[misc]
-                else:
-                    # Fallback: classmethod or module-level
-                    run_live_cls = getattr(self._runner.__class__, "run_live", None)
-                    if callable(run_live_cls):
-                        try:
-                            events_iter = run_live_cls(self._agent, self._live_q)  # type: ignore[misc]
-                        except TypeError:
-                            events_iter = run_live_cls(self._live_q)  # type: ignore[misc]
+                        ver = __import__("google.adk").__version__  # type: ignore[attr-defined]
+                    except Exception:
+                        ver = "unknown"
+                    bridge_log.info(
+                        "runner_capabilities adk_version=%s available=%s",
+                        ver,
+                        ",".join(available) if available else "none",
+                    )
+                    # Log method signatures for run_live/run_async if available
+                    for nm in ("run_live", "run_async"):
+                        fn = getattr(self._runner, nm, None)
+                        if callable(fn):
+                            try:
+                                sig = str(inspect.signature(fn))
+                                bridge_log.info("runner_signature %s%s", nm, sig)
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+                self._capabilities_logged = True
+
+            # Try to obtain an async-iterable of events from the runner using common entrypoints
+            # Prepare ADK-native RunConfig with BIDI streaming and TEXT output
+            adk_run_config = None
+            try:
+                from google.adk.runners import RunConfig as ADK_RunConfig  # type: ignore
+                from google.adk.runners import StreamingMode as ADK_StreamingMode  # type: ignore
+                adk_run_config = ADK_RunConfig(
+                    streaming_mode=ADK_StreamingMode.BIDI,
+                    response_modalities=["TEXT"],
+                )
             except Exception:
-                # Will be handled below as no iterator
-                pass
+                adk_run_config = None
+
+            # First: explicit attach to run_live using exact signature from logs
+            events_iter: Optional[AsyncIterator[Any]] = None
+            try:
+                run_live_fn = getattr(self._runner, "run_live", None)
+                if callable(run_live_fn):
+                    explicit_kwargs = {"live_request_queue": self._live_q}
+                    if adk_run_config is not None:
+                        explicit_kwargs["run_config"] = adk_run_config
+                    if self._session_obj is not None:
+                        explicit_kwargs["session"] = self._session_obj
+                    else:
+                        explicit_kwargs["user_id"] = self._user_id
+                        explicit_kwargs["session_id"] = self._session_id
+                    result = run_live_fn(**explicit_kwargs)  # type: ignore[misc]
+                    if inspect.isawaitable(result):
+                        result = await result  # type: ignore[assignment]
+                    # Accept async iterables only
+                    if isinstance(result, (AsyncIterator, AsyncIterable)) or hasattr(result, "__aiter__"):
+                        try:
+                            bridge_log.info(
+                                "live_attach method=run_live args=0 kwargs=%s",
+                                list(explicit_kwargs.keys()),
+                            )
+                        except Exception:
+                            pass
+                        events_iter = result  # type: ignore[assignment]
+            except Exception as exc:
+                try:
+                    bridge_log.warning("live_explicit_attach_failed err=%s", str(exc))
+                except Exception:
+                    pass
+
+            async def _resolve_events_iter() -> Optional[AsyncIterator[Any]]:
+                method_candidates = [
+                    "run_live",
+                    "run_async",
+                    "live",
+                    "stream",
+                    "events",
+                ]
+
+                def _is_async_iter(obj: Any) -> bool:
+                    try:
+                        return isinstance(obj, (AsyncIterator, AsyncIterable)) or hasattr(obj, "__aiter__")
+                    except Exception:
+                        return hasattr(obj, "__aiter__")
+
+                # Try bound methods first
+                for name in method_candidates:
+                    func = getattr(self._runner, name, None)
+                    if not callable(func):
+                        continue
+                    # Try a sequence of signatures
+                    call_attempts = []
+                    # Positional
+                    call_attempts.append({"args": (self._agent, self._live_q), "kwargs": {}})
+                    call_attempts.append({"args": (self._live_q,), "kwargs": {}})
+                    # Keyword permutations
+                    queue_kw_names = ["queue", "live_queue", "request_queue", "live_request_queue", "input_queue"]
+                    agent_kw_names = ["agent", "llm_agent", "runner_agent"]
+                    # Strongly-preferred exact signature from runner_signature: live_request_queue + run_config + ids
+                    if adk_run_config is not None:
+                        # Use Session object if available from session_service, it can replace ids
+                        if self._session_obj is not None:
+                            call_attempts.insert(0, {
+                                "args": (),
+                                "kwargs": {
+                                    "live_request_queue": self._live_q,
+                                    "run_config": adk_run_config,
+                                    "session": self._session_obj,
+                                },
+                            })
+                        call_attempts.insert(0, {
+                            "args": (),
+                            "kwargs": {
+                                "live_request_queue": self._live_q,
+                                "run_config": adk_run_config,
+                                "user_id": self._user_id,
+                                "session_id": self._session_id,
+                            },
+                        })
+                        # Also allow without run_config (defaults) but with ids
+                        call_attempts.insert(1, {
+                            "args": (),
+                            "kwargs": {
+                                "live_request_queue": self._live_q,
+                                "user_id": self._user_id,
+                                "session_id": self._session_id,
+                            },
+                        })
+                    for qn in queue_kw_names:
+                        call_attempts.append({"args": (), "kwargs": {qn: self._live_q}})
+                        for an in agent_kw_names:
+                            call_attempts.append({"args": (), "kwargs": {an: self._agent, qn: self._live_q}})
+                    # Bare call
+                    call_attempts.append({"args": (), "kwargs": {}})
+                    for attempt in call_attempts:
+                        try:
+                            result = func(*attempt["args"], **attempt["kwargs"])  # type: ignore[misc]
+                        except TypeError:
+                            continue
+                        except Exception as exc:
+                            try:
+                                bridge_log.warning(
+                                    "live_call_failed method=%s args=%s kwargs=%s err=%s",
+                                    name,
+                                    len(attempt["args"]),
+                                    list(attempt["kwargs"].keys()),
+                                    str(exc),
+                                )
+                            except Exception:
+                                pass
+                            # Non-signature errors: try next attempt as well
+                            continue
+                        # Await coroutines to get the iterator
+                        if inspect.isawaitable(result):
+                            try:
+                                result = await result  # type: ignore[assignment]
+                            except Exception as exc:
+                                try:
+                                    bridge_log.warning(
+                                        "live_call_await_failed method=%s err=%s",
+                                        name,
+                                        str(exc),
+                                    )
+                                except Exception:
+                                    pass
+                                continue
+                        # Accept async iterables
+                        if _is_async_iter(result):
+                            # For run_live specifically, ensure we included identity (session or ids)
+                            if name == "run_live":
+                                kw = attempt.get("kwargs", {})
+                                has_ids = ("user_id" in kw and "session_id" in kw)
+                                has_session = ("session" in kw)
+                                if not (has_ids or has_session):
+                                    # Skip iterators that will error due to missing identity
+                                    try:
+                                        bridge_log.info(
+                                            "skip_attach_incomplete method=run_live reason=missing_ids_or_session"
+                                        )
+                                    except Exception:
+                                        pass
+                                    continue
+                            try:
+                                bridge_log.info(
+                                    "live_attach method=%s args=%s kwargs=%s",
+                                    name,
+                                    len(attempt["args"]),
+                                    list(attempt["kwargs"].keys()),
+                                )
+                            except Exception:
+                                pass
+                            return result  # type: ignore[return-value]
+                        # If result object exposes an async-iterable sub-attribute, use it
+                        for attr in ("events", "stream", "responses", "outputs"):
+                            try:
+                                candidate = getattr(result, attr, None)
+                            except Exception:
+                                candidate = None
+                            if candidate is not None and _is_async_iter(candidate):
+                                try:
+                                    bridge_log.info("live_attach method=%s via_attr=%s", name, attr)
+                                except Exception:
+                                    pass
+                                return candidate  # type: ignore[return-value]
+
+                # As a last resort, if the runner itself is async-iterable, iterate it
+                if hasattr(self._runner, "__aiter__"):
+                    try:
+                        bridge_log.info("live_attach method=__aiter__ on runner instance")
+                    except Exception:
+                        pass
+                    return self._runner  # type: ignore[return-value]
+
+                return None
 
             if events_iter is None:
-                bridge_log.warning("run_live_unavailable: no compatible run_live signature found on Runner")
+                events_iter = await _resolve_events_iter()
+            if events_iter is None:
+                bridge_log.warning(
+                    "run_live_unavailable: no compatible live entrypoint found on Runner"
+                )
+                self._live_attached = False
                 return
+            else:
+                self._live_attached = True
 
             async for event in events_iter:
                 # Extract any text pieces and enqueue them
@@ -343,6 +592,59 @@ class ADKLiveBridge(BaseLiveBridge):
                 logging.getLogger("adk.bridge").warning("live_consumer_failed", exc_info=True)
             except Exception:
                 pass
+
+    async def _run_text_fallback(self) -> Optional[str]:
+        """Best-effort non-live single-turn generation using runner.run_async/run."""
+        try:
+            if not self._last_user_text or self._runner is None:
+                return None
+            # Try async run first
+            run_async = getattr(self._runner, "run_async", None)
+            if callable(run_async):
+                try:
+                    # Build types.Content(new_message) per signature in logs
+                    from google.genai import types as genai_types  # type: ignore
+                    new_message = genai_types.Content(parts=[genai_types.Part(text=self._last_user_text)])
+                    # Prefer providing run_config to enforce TEXT output and BIDI (even though it's non-live)
+                    run_cfg = None
+                    try:
+                        from google.adk.runners import RunConfig as ADK_RunConfig  # type: ignore
+                        from google.adk.runners import StreamingMode as ADK_StreamingMode  # type: ignore
+                        run_cfg = ADK_RunConfig(
+                            streaming_mode=ADK_StreamingMode.NONE,
+                            response_modalities=["TEXT"],
+                        )
+                    except Exception:
+                        run_cfg = None
+
+                    kwargs = {"user_id": self._user_id, "session_id": self._session_id, "new_message": new_message}
+                    if run_cfg is not None:
+                        kwargs["run_config"] = run_cfg
+                    res = run_async(**kwargs)
+                    if inspect.isawaitable(res):
+                        res = await res  # type: ignore[assignment]
+                    pieces = self._extract_text(res)
+                    text = "".join(pieces).strip()
+                    if text:
+                        return text
+                except Exception:
+                    pass
+            # Fallback to sync run
+            run_sync = getattr(self._runner, "run", None)
+            if callable(run_sync):
+                try:
+                    from google.genai import types as genai_types  # type: ignore
+                    new_message = genai_types.Content(parts=[genai_types.Part(text=self._last_user_text)])
+                    res = run_sync(user_id=self._user_id, session_id=self._session_id, new_message=new_message)
+                    pieces = self._extract_text(res)
+                    text = "".join(pieces).strip()
+                    if text:
+                        return text
+                except Exception:
+                    pass
+        except Exception:
+            return None
+        return None
 
     def _extract_text(self, event: Any) -> list[str]:
         """Best-effort extraction of text deltas from ADK live events."""
