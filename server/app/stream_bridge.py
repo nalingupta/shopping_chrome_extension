@@ -103,7 +103,7 @@ class LiveStreamBridge:
         if msg_type == "session_start":
             # Create ADK session/bridge
             self.session_open = True
-            model = str(payload.get("model") or "models/gemini-live-2.5-flash-preview")
+            model = str(payload.get("model") or "gemini-live-2.5-flash-preview")
             self._log.info("session_start model=%s", model)
             self._adk_session = ADKSessionFactory.create_session(model=model, config=RunConfig())
             self._bridge = self._adk_session.bridge
@@ -114,6 +114,19 @@ class LiveStreamBridge:
                 pass
             try:
                 await self._bridge.start()
+                # Send a system instruction to the live queue if supported
+                try:
+                    from google.genai import types as genai_types  # type: ignore
+                    system_text = (
+                        "You are a helpful shopping assistant. "
+                        "Describe what you can infer from incoming screen frames and "
+                        "answer the user's question clearly in text."
+                    )
+                    content = genai_types.Content(role="system", parts=[genai_types.Part(text=system_text)])
+                    if getattr(self._bridge, "_live_q", None) is not None:
+                        await getattr(self._bridge, "_maybe_await")(self._bridge._live_q.send_realtime(content))  # type: ignore[attr-defined]
+                except Exception:
+                    pass
             except Exception as exc:
                 await self._send_error("adk_start_failed", str(exc))
             await self._send_ok()

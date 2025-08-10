@@ -1,4 +1,4 @@
-import { MESSAGE_TYPES } from "../utils/constants.js";
+// Avoid top-level ESM imports; content scripts may be executed as classic scripts.
 
 // Minimal inlined PageAnalyzer since external module was removed
 class PageAnalyzer {
@@ -21,7 +21,8 @@ class MicPermissionHandler {
     initializeMessageListener() {
         chrome.runtime.onMessage.addListener(
             (request, sender, sendResponse) => {
-                if (request.type === MESSAGE_TYPES.REQUEST_MIC_PERMISSION) {
+                const TYPES = window.__SA_MESSAGE_TYPES__ || {};
+                if (request.type === TYPES.REQUEST_MIC_PERMISSION) {
                     this.requestMicPermission().then(sendResponse);
                     return true;
                 }
@@ -57,7 +58,8 @@ class MicPermissionHandler {
                     return;
                 }
 
-                if (event.data.type === MESSAGE_TYPES.MIC_PERMISSION_RESULT) {
+                const TYPES = window.__SA_MESSAGE_TYPES__ || {};
+                if (event.data.type === TYPES.MIC_PERMISSION_RESULT) {
                     this.cleanupPermissionRequest(messageHandler);
                     this.permissionGranted = event.data.granted;
 
@@ -105,8 +107,9 @@ class ContentScript {
     sendPageInfoToSidebar() {
         const pageInfo = PageAnalyzer.getCompletePageInfo();
 
+        const TYPES = window.__SA_MESSAGE_TYPES__ || {};
         chrome.runtime.sendMessage({
-            type: MESSAGE_TYPES.PAGE_INFO_UPDATE,
+            type: TYPES.PAGE_INFO_UPDATE,
             data: pageInfo,
         });
     }
@@ -118,12 +121,13 @@ class ContentScript {
 
         chrome.runtime.onMessage.addListener(
             (request, sender, sendResponse) => {
-                if (request.type === MESSAGE_TYPES.GET_PAGE_INFO) {
+                const TYPES = window.__SA_MESSAGE_TYPES__ || {};
+                if (request.type === TYPES.GET_PAGE_INFO) {
                     const pageInfo = PageAnalyzer.getCompletePageInfo();
                     sendResponse(pageInfo);
                 }
 
-                if (request.type === MESSAGE_TYPES.REQUEST_MIC_PERMISSION) {
+                if (request.type === TYPES.REQUEST_MIC_PERMISSION) {
                     this.handleMicrophoneRequest(sendResponse);
                     return true;
                 }
@@ -201,8 +205,9 @@ class ContentScript {
                 const audioBlob = new Blob(audioChunks, { type: mimeType });
                 const audioUrl = URL.createObjectURL(audioBlob);
 
+                const TYPES = window.__SA_MESSAGE_TYPES__ || {};
                 chrome.runtime.sendMessage({
-                    type: MESSAGE_TYPES.AUDIO_RECORDED,
+                    type: TYPES.AUDIO_RECORDED,
                     data: {
                         audioUrl: audioUrl,
                         blob: audioBlob,
@@ -243,5 +248,14 @@ class ContentScript {
     }
 }
 
-// Initialize the content script when it loads
-new ContentScript();
+// Bootstrap constants dynamically and initialize content script
+(async () => {
+    try {
+        const url = chrome.runtime.getURL("src/utils/constants.js");
+        const mod = await import(url);
+        window.__SA_MESSAGE_TYPES__ = mod.MESSAGE_TYPES || {};
+    } catch (_) {
+        window.__SA_MESSAGE_TYPES__ = window.__SA_MESSAGE_TYPES__ || {};
+    }
+    new ContentScript();
+})();

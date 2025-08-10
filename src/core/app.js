@@ -111,6 +111,12 @@ export class ShoppingAssistant {
                 3000
             );
         });
+
+        // Reflect ADK per-turn status in the UI (Pending ADK…, Thinking…, etc.)
+        this.aiHandler.setStatusCallback((text) => {
+            if (!text) return;
+            this.uiManager.uiState.showStatus(text, "info");
+        });
     }
 
     async getCurrentPageInfo() {

@@ -223,6 +223,13 @@ class ADKLiveBridge(BaseLiveBridge):
                 self._session_obj = None
             self._consumer_task = asyncio.create_task(self._consume_live_events())
         logging.getLogger("adk.bridge").info(
+            "adk_session_started user_id=%s session_id=%s live_q=%s runner=%s",
+            self._user_id,
+            self._session_id,
+            type(self._live_q).__name__ if self._live_q is not None else "None",
+            type(self._runner).__name__ if self._runner is not None else "None",
+        )
+        logging.getLogger("adk.bridge").info(
             "adk_start model=%s streaming_mode=%s modalities=%s",
             self.model,
             self.config.streaming_mode,
@@ -230,9 +237,39 @@ class ADKLiveBridge(BaseLiveBridge):
         )
 
     async def start_turn(self) -> None:
-        # Mark a new turn boundary
+        # Mark a new turn boundary and open a request on the live queue if required
         self._awaiting_turn_end = False
-        logging.getLogger("adk.bridge").debug("start_turn")
+        bridge_log = logging.getLogger("adk.bridge")
+        bridge_log.debug("start_turn")
+        # If consumer task died earlier (e.g., model error), try to restart it lazily
+        try:
+            if self._adk_ok and not self._closed:
+                if self._consumer_task is None or self._consumer_task.done():
+                    bridge_log.info("live_consumer_restart")
+                    self._consumer_task = asyncio.create_task(self._consume_live_events())
+        except Exception:
+            pass
+        try:
+            if self._live_q is not None:
+                # Some ADK builds require explicitly opening an input request
+                open_methods = (
+                    "start_request",
+                    "begin_input",
+                    "open_input",
+                    "open_request",
+                    "start_input",
+                )
+                for name in open_methods:
+                    if hasattr(self._live_q, name):
+                        try:
+                            await self._maybe_await(getattr(self._live_q, name)())
+                            bridge_log.debug("start_turn signaled via %s", name)
+                            break
+                        except Exception:
+                            continue
+        except Exception:
+            # Non-fatal; continue without explicit open
+            pass
 
     async def ingest_blob(self, mime: str, data: bytes) -> None:
         if not self._adk_ok or self._closed:
@@ -240,8 +277,6 @@ class ADKLiveBridge(BaseLiveBridge):
         try:
             from google.genai import types as genai_types  # type: ignore
             import base64
-            # TEMP: disable video/media ingestion to validate text-only streaming path
-            return
             if self._live_q is not None:
                 # Best-effort normalization: Gemini Live expects base64 data strings
                 safe_mime = str(mime or "").strip() or "video/webm;codecs=vp8,opus"
@@ -253,7 +288,10 @@ class ADKLiveBridge(BaseLiveBridge):
                 if not b64:
                     return
                 blob = genai_types.Blob(data=b64, mime_type=safe_mime)
-                await self._maybe_await(self._live_q.send_realtime(blob))
+                # Wrap as Part + Content for ADK Live
+                part = genai_types.Part(blob=blob)
+                content = genai_types.Content(role="user", parts=[part])
+                await self._maybe_await(self._live_q.send_realtime(content))
                 logging.getLogger("adk.bridge").debug(
                     "ingest_blob bytes=%s mime=%s", len(data), safe_mime
                 )
@@ -267,12 +305,46 @@ class ADKLiveBridge(BaseLiveBridge):
         try:
             from google.genai import types as genai_types  # type: ignore
             if self._live_q is not None and text:
-                # Send a Content with a single Part(text=...), which is accepted by more ADK builds
-                content = genai_types.Content(parts=[genai_types.Part(text=str(text))])
-                await self._maybe_await(self._live_q.send_realtime(content))
+                # Build a Content object and try multiple enqueue method names for compatibility
+                content = genai_types.Content(role="user", parts=[genai_types.Part(text=str(text))])
+                log = logging.getLogger("adk.bridge")
+                used_method = None
+                # Preferred method names
+                candidate_methods = (
+                    "send_realtime",
+                    "send",
+                    "enqueue",
+                    "put",
+                    "write",
+                )
+                for name in candidate_methods:
+                    fn = getattr(self._live_q, name, None)
+                    if not callable(fn):
+                        continue
+                    try:
+                        await self._maybe_await(fn(content))  # type: ignore[misc]
+                        used_method = name
+                        break
+                    except Exception:
+                        continue
+                # If all failed with Content, try again with raw text
+                if used_method is None:
+                    for name in candidate_methods:
+                        fn = getattr(self._live_q, name, None)
+                        if not callable(fn):
+                            continue
+                        try:
+                            await self._maybe_await(fn(str(text)))  # type: ignore[misc]
+                            used_method = name
+                            break
+                        except Exception:
+                            continue
                 preview = (text or "")[:80].replace("\n", " ")
-                logging.getLogger("adk.bridge").debug(
-                    "ingest_user_text len=%s preview=%s", len(text), preview
+                log.debug(
+                    "ingest_user_text len=%s preview=%s method=%s",
+                    len(text),
+                    preview,
+                    used_method or "unknown",
                 )
                 # Save last user text for optional non-live fallback
                 self._last_user_text = text
@@ -307,17 +379,17 @@ class ADKLiveBridge(BaseLiveBridge):
                 kind, payload = await asyncio.wait_for(self._out_q.get(), timeout=0.5)
             except asyncio.TimeoutError:
                 if self._awaiting_turn_end:
-                    # If we never attached to live, try a non-live one-shot to avoid UI hang
-                    if not self._live_attached:
+                    idle_ticks += 1
+                    # If live is attached but quiet, fall back after a few idle windows
+                    if idle_ticks >= 3:  # ~1.5s of silence
                         try:
                             fb_text = await self._run_text_fallback()
                             if fb_text:
                                 yield fb_text
-                                break
                         except Exception:
                             pass
-                    # Treat quiet period after end_turn as completion
-                    break
+                        # Even if fallback fails, end the turn to prevent UI hang
+                        break
                 continue
 
             if kind == "text" and payload:
@@ -389,10 +461,19 @@ class ADKLiveBridge(BaseLiveBridge):
             try:
                 from google.adk.runners import RunConfig as ADK_RunConfig  # type: ignore
                 from google.adk.runners import StreamingMode as ADK_StreamingMode  # type: ignore
-                adk_run_config = ADK_RunConfig(
-                    streaming_mode=ADK_StreamingMode.BIDI,
-                    response_modalities=["TEXT"],
-                )
+                try:
+                    adk_run_config = ADK_RunConfig(
+                        streaming_mode=ADK_StreamingMode.BIDI,
+                        response_modalities=["TEXT"],
+                        realtime_input_config={
+                            "video": {"mime_type": "video/webm;codecs=vp8,opus"},
+                        },
+                    )
+                except Exception:
+                    adk_run_config = ADK_RunConfig(
+                        streaming_mode=ADK_StreamingMode.BIDI,
+                        response_modalities=["TEXT"],
+                    )
             except Exception:
                 adk_run_config = None
 
@@ -404,6 +485,13 @@ class ADKLiveBridge(BaseLiveBridge):
                     explicit_kwargs = {"live_request_queue": self._live_q}
                     if adk_run_config is not None:
                         explicit_kwargs["run_config"] = adk_run_config
+                        try:
+                            bridge_log.info(
+                                "run_config_applied keys=%s",
+                                list(getattr(adk_run_config, "__dict__", {}).keys()),
+                            )
+                        except Exception:
+                            pass
                     if self._session_obj is not None:
                         explicit_kwargs["session"] = self._session_obj
                     else:
@@ -589,11 +677,18 @@ class ADKLiveBridge(BaseLiveBridge):
                 if self._diag_events_remaining > 0:
                     try:
                         if isinstance(event, dict):
+                            # Lightweight keys and a small preview of likely text fields
+                            preview_text = None
+                            if isinstance(event.get("text"), str):
+                                preview_text = event.get("text")[:40]
+                            elif isinstance(event.get("output_text_delta"), dict):
+                                t = event["output_text_delta"].get("text") or event["output_text_delta"].get("delta")
+                                if isinstance(t, str):
+                                    preview_text = t[:40]
                             bridge_log.debug(
-                                "event_diag dict_keys=%s has_output=%s has_serverContent=%s",
+                                "event_diag keys=%s preview=%s",
                                 list(event.keys())[:8],
-                                ("output" in event),
-                                ("serverContent" in event or "server_content" in event),
+                                preview_text,
                             )
                         else:
                             bridge_log.debug(
@@ -605,7 +700,13 @@ class ADKLiveBridge(BaseLiveBridge):
                         pass
                     self._diag_events_remaining -= 1
                 # Extract any text pieces and enqueue them
-                for piece in self._extract_text(event):
+                extracted = self._extract_text(event)
+                if not extracted:
+                    try:
+                        bridge_log.debug("event_no_text_extracted")
+                    except Exception:
+                        pass
+                for piece in extracted:
                     if piece:
                         await self._out_q.put(("text", piece))
                         bridge_log.debug(
@@ -637,7 +738,7 @@ class ADKLiveBridge(BaseLiveBridge):
                 try:
                     # Build types.Content(new_message) per signature in logs
                     from google.genai import types as genai_types  # type: ignore
-                    new_message = genai_types.Content(parts=[genai_types.Part(text=self._last_user_text)])
+                    new_message = genai_types.Content(role="user", parts=[genai_types.Part(text=self._last_user_text)])
                     # Prefer providing run_config to enforce TEXT output and BIDI (even though it's non-live)
                     run_cfg = None
                     try:
@@ -654,10 +755,32 @@ class ADKLiveBridge(BaseLiveBridge):
                     if run_cfg is not None:
                         kwargs["run_config"] = run_cfg
                     res = run_async(**kwargs)
+                    # If the result is an async-iterable (common for ADK run_async), iterate and accumulate
+                    if isinstance(res, (AsyncIterator, AsyncIterable)) or hasattr(res, "__aiter__"):
+                        collected: list[str] = []
+                        async for event in res:  # type: ignore[operator]
+                            try:
+                                pieces = self._extract_text(event)
+                                if pieces:
+                                    collected.extend(pieces)
+                            except Exception:
+                                continue
+                        try:
+                            logging.getLogger("adk.bridge").debug("fallback_run_async_events=%s", len(collected))
+                        except Exception:
+                            pass
+                        text = "".join(collected).strip()
+                        if text:
+                            return text
+                    # Some implementations may return an awaitable or a final object
                     if inspect.isawaitable(res):
                         res = await res  # type: ignore[assignment]
                     pieces = self._extract_text(res)
                     text = "".join(pieces).strip()
+                    try:
+                        logging.getLogger("adk.bridge").debug("fallback_run_async_pieces=%s", len(pieces))
+                    except Exception:
+                        pass
                     if text:
                         return text
                 except Exception:
@@ -667,10 +790,14 @@ class ADKLiveBridge(BaseLiveBridge):
             if callable(run_sync):
                 try:
                     from google.genai import types as genai_types  # type: ignore
-                    new_message = genai_types.Content(parts=[genai_types.Part(text=self._last_user_text)])
+                    new_message = genai_types.Content(role="user", parts=[genai_types.Part(text=self._last_user_text)])
                     res = run_sync(user_id=self._user_id, session_id=self._session_id, new_message=new_message)
                     pieces = self._extract_text(res)
                     text = "".join(pieces).strip()
+                    try:
+                        logging.getLogger("adk.bridge").debug("fallback_run_sync_pieces=%s", len(pieces))
+                    except Exception:
+                        pass
                     if text:
                         return text
                 except Exception:
@@ -688,6 +815,22 @@ class ADKLiveBridge(BaseLiveBridge):
                 # Common shapes: {"text": "..."} or nested parts
                 if isinstance(event.get("text"), str):
                     chunks.append(str(event["text"]))
+                # Popular delta aliases
+                ot = event.get("output_text_delta")
+                if isinstance(ot, dict):
+                    t = ot.get("text") or ot.get("delta")
+                    if isinstance(t, str):
+                        chunks.append(t)
+                td = event.get("textDelta")
+                if isinstance(td, (str, dict)):
+                    t = td if isinstance(td, str) else td.get("text") or td.get("delta")
+                    if isinstance(t, str):
+                        chunks.append(t)
+                d = event.get("delta")
+                if isinstance(d, dict):
+                    t = d.get("text")
+                    if isinstance(t, str):
+                        chunks.append(t)
                 sc = event.get("serverContent") or event.get("server_content")
                 if sc:
                     parts = sc.get("modelTurn", {}).get("parts") or sc.get("parts")
@@ -699,6 +842,8 @@ class ADKLiveBridge(BaseLiveBridge):
                 # ADK output-like shapes
                 out = event.get("output") or event.get("server_output")
                 if out:
+                    if isinstance(out.get("text"), str):
+                        chunks.append(str(out.get("text")))
                     # candidates[].content.parts[].text
                     cands = out.get("candidates") or []
                     for c in cands:
@@ -721,6 +866,14 @@ class ADKLiveBridge(BaseLiveBridge):
                     chunks.append(t)
                 output = getattr(event, "output", None)
                 if output is not None:
+                    ot = getattr(event, "output_text_delta", None)
+                    if ot is not None:
+                        try:
+                            tt = getattr(ot, "text", None) or getattr(ot, "delta", None)
+                            if isinstance(tt, str):
+                                chunks.append(tt)
+                        except Exception:
+                            pass
                     parts = getattr(output, "parts", None) or getattr(output, "contents", None)
                     if isinstance(parts, list):
                         for p in parts:
@@ -733,11 +886,11 @@ class ADKLiveBridge(BaseLiveBridge):
                         for c in candidates:
                             content = getattr(c, "content", None)
                             parts = getattr(content, "parts", None) if content is not None else None
-                            if isinstance(parts, list):
-                                for p in parts:
-                                    pt = getattr(p, "text", None) if hasattr(p, "text") else None
-                                    if isinstance(pt, str):
-                                        chunks.append(pt)
+                    if isinstance(parts, list):
+                        for p in parts:
+                            pt = getattr(p, "text", None) if hasattr(p, "text") else None
+                            if isinstance(pt, str):
+                                chunks.append(pt)
         except Exception:
             pass
         return chunks

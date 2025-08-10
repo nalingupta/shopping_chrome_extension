@@ -313,9 +313,11 @@ export class EventManager {
             // Controller ensures pending on first stream; just update
             this.uiManager.updateAssistantStream(response.text);
         } else {
-            // Finalize assistant stream; if no stream existed, append directly
+            // Finalize assistant stream; if no text, still finalize to prevent UI hang
             if (response.text) {
                 this.uiManager.updateAssistantStream(response.text);
+                this.uiManager.finalizeAssistantStream();
+            } else {
                 this.uiManager.finalizeAssistantStream();
             }
 

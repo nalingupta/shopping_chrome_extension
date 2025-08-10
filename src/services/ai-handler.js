@@ -22,6 +22,8 @@ export class AIHandler {
         this._onStreamingUpdate = null;
         this._onConnectionStateChange = null;
         this._onError = null;
+        this._onStatus = null; // UI status updates (Pending ADK…, Thinking…, etc.)
+        this._adkStreamingStarted = false; // per-turn flag for ADK streaming
 
         this.setupGeminiCallbacks();
         if (this.isAdkMode) {
@@ -74,15 +76,21 @@ export class AIHandler {
                 this.isAdkConnected = true;
                 if (this._onConnectionStateChange)
                     this._onConnectionStateChange("connected");
+                if (this._onStatus) this._onStatus("Ready for next input");
             },
             onClose: () => {
                 this.isAdkConnected = false;
                 if (this._onConnectionStateChange)
                     this._onConnectionStateChange("disconnected");
+                if (this._onStatus) this._onStatus("Disconnected from AI");
             },
             onTextDelta: (msg) => {
                 const delta = typeof msg?.text === "string" ? msg.text : "";
                 if (!delta) return;
+                if (!this._adkStreamingStarted) {
+                    this._adkStreamingStarted = true;
+                    if (this._onStatus) this._onStatus("Thinking…");
+                }
                 this._adkStreamingBuffer += delta;
                 if (this._onStreamingUpdate) {
                     this._onStreamingUpdate({
@@ -95,6 +103,19 @@ export class AIHandler {
             },
             onTurnComplete: () => {
                 const finalText = this._adkStreamingBuffer || "";
+                if (!this._adkStreamingStarted) {
+                    if (this._onStatus) this._onStatus("No response from AI");
+                    // Ensure UI finalizes pending bubble even with no text
+                    if (this._onBotResponse) {
+                        this._onBotResponse({
+                            text: "",
+                            isStreaming: false,
+                            timestamp: Date.now(),
+                        });
+                    }
+                } else {
+                    if (this._onStatus) this._onStatus("Ready for next input");
+                }
                 if (finalText && this._onBotResponse) {
                     this._onBotResponse({
                         text: finalText,
@@ -103,9 +124,11 @@ export class AIHandler {
                     });
                 }
                 this._adkStreamingBuffer = "";
+                this._adkStreamingStarted = false;
             },
             onError: (err) => {
                 if (this._onError) this._onError(err);
+                if (this._onStatus) this._onStatus("AI connection error");
             },
         });
     }
@@ -241,6 +264,9 @@ export class AIHandler {
         try {
             this._utteranceStartTs = Date.now();
             if (this.isAdkMode) {
+                // New turn starting in ADK mode
+                this._adkStreamingStarted = false;
+                if (this._onStatus) this._onStatus("Listening…");
                 this.adkClient?.sendActivityStart();
                 return;
             }
@@ -258,6 +284,8 @@ export class AIHandler {
                 if (this.isAdkMode) {
                     const text = (this._lastUserMessage || "").trim();
                     if (text) this.adkClient?.sendTextInput(text);
+                    // We have sent inputs; awaiting ADK response
+                    if (this._onStatus) this._onStatus("Pending ADK…");
                     this.adkClient?.sendActivityEnd();
                     return;
                 }
@@ -397,5 +425,10 @@ export class AIHandler {
         if (!this.isAdkMode) {
             this.geminiAPI.setErrorCallback(callback);
         }
+    }
+
+    // Status callback for ADK turn lifecycle
+    setStatusCallback(callback) {
+        this._onStatus = callback;
     }
 }

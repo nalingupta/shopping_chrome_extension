@@ -16,6 +16,8 @@ export class ADKClient {
         this._seq = 0;
         this._pingTimer = null;
         this._lastPongAt = 0;
+        this.lastCloseWasClean = null;
+        this._lastCloseLogAt = 0;
     }
 
     async connect(wsUrl, token) {
@@ -42,12 +44,31 @@ export class ADKClient {
                     this.isConnected = false;
                     this.sessionReady = false;
                     this.#stopHeartbeat();
+                    // Persist clean-close flag for retry logic
+                    this.lastCloseWasClean = !!(evt && evt.wasClean);
+                    // Reduce noise in chrome://extensions Errors: downgrade clean/expected closes
                     try {
-                        console.warn("[ADKClient] WS closed", {
+                        const details = {
                             code: evt?.code,
                             reason: evt?.reason,
                             wasClean: evt?.wasClean,
-                        });
+                        };
+                        const now = Date.now();
+                        if (now - this._lastCloseLogAt > 5000) {
+                            this._lastCloseLogAt = now;
+                            if (
+                                evt?.wasClean === true ||
+                                evt?.code === 1000 ||
+                                evt?.code === 1001
+                            ) {
+                                console.debug(
+                                    "[ADKClient] WS closed (clean)",
+                                    details
+                                );
+                            } else {
+                                console.warn("[ADKClient] WS closed", details);
+                            }
+                        }
                     } catch (_) {}
                     if (this.handlers.onClose) this.handlers.onClose();
                 };
