@@ -45,6 +45,10 @@ async def version():
 @app.websocket("/ws/live")
 async def live_ws(websocket: WebSocket):
     await websocket.accept()
+    try:
+        print("[WS] accepted /ws/live")
+    except Exception:
+        pass
 
     # Optional auth placeholder (Phase 5)
     # token = websocket.query_params.get("token")
@@ -54,10 +58,50 @@ async def live_ws(websocket: WebSocket):
     #     return
 
     try:
-        from .stream_bridge import LiveStreamBridge
-
-        bridge = LiveStreamBridge(websocket)
-        await bridge.run()
+        try:
+            # Yield to event loop once, then proceed
+            import asyncio as _asyncio
+            await _asyncio.sleep(0)
+            print("[WS] post-accept entering bridge import")
+        except Exception:
+            pass
+        try:
+            from .stream_bridge import LiveStreamBridge
+            try:
+                print("[WS] bridge import OK")
+            except Exception:
+                pass
+        except Exception as exc:
+            try:
+                import traceback as _tb
+                print("[WS] bridge_import_failed:", str(exc))
+                print(_tb.format_exc())
+            except Exception:
+                pass
+            return
+        try:
+            bridge = LiveStreamBridge(websocket)
+        except Exception as exc:
+            try:
+                print("[WS] bridge_construct_failed:", str(exc))
+            except Exception:
+                pass
+            return
+        try:
+            print("[WS] bridge constructed")
+        except Exception:
+            pass
+        try:
+            print("[WS] bridge.run starting")
+        except Exception:
+            pass
+        try:
+            await bridge.run()
+        except Exception as exc:
+            try:
+                print("[WS] bridge_run_failed:", str(exc))
+            except Exception:
+                pass
     except WebSocketDisconnect:
         # Client disconnected
         pass

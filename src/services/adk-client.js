@@ -2,6 +2,9 @@ export class ADKClient {
     constructor() {
         this.ws = null;
         this.isConnected = false;
+        this.sessionReady = false;
+        this._readyResolve = null;
+        this._readyPromise = new Promise((res) => (this._readyResolve = res));
         this.handlers = {
             onTextDelta: null,
             onTurnComplete: null,
@@ -23,16 +26,29 @@ export class ADKClient {
                     : wsUrl;
                 this.ws = new WebSocket(url);
                 this.ws.binaryType = "blob";
+                this.sessionReady = false;
 
                 this.ws.onopen = () => {
                     this.isConnected = true;
                     if (this.handlers.onOpen) this.handlers.onOpen();
                     this.#startHeartbeat();
+                    // Send an initial ping to keep the connection alive before session_start
+                    try {
+                        this.ping();
+                    } catch (_) {}
                     resolve({ success: true });
                 };
-                this.ws.onclose = () => {
+                this.ws.onclose = (evt) => {
                     this.isConnected = false;
+                    this.sessionReady = false;
                     this.#stopHeartbeat();
+                    try {
+                        console.warn("[ADKClient] WS closed", {
+                            code: evt?.code,
+                            reason: evt?.reason,
+                            wasClean: evt?.wasClean,
+                        });
+                    } catch (_) {}
                     if (this.handlers.onClose) this.handlers.onClose();
                 };
                 this.ws.onerror = (e) => {
@@ -59,6 +75,11 @@ export class ADKClient {
     }
 
     sendSessionStart(model, config = {}) {
+        this.sessionReady = false;
+        this._readyPromise = new Promise((res) => (this._readyResolve = res));
+        try {
+            console.debug("[ADKClient] sending session_start", { model });
+        } catch (_) {}
         this.#sendJSON({ type: "session_start", model, config });
     }
 
@@ -114,6 +135,12 @@ export class ADKClient {
             try {
                 const msg = JSON.parse(evt.data);
                 const t = msg.type;
+                if (msg.ok === true && !t) {
+                    // server session_start ack
+                    this.sessionReady = true;
+                    if (this._readyResolve) this._readyResolve(true);
+                    return;
+                }
                 if (t === "pong") {
                     this._lastPongAt = Date.now();
                     return;
@@ -135,6 +162,43 @@ export class ADKClient {
             }
         }
         // Binary frames are video chunks from server (not expected). Ignore.
+    }
+
+    async waitUntilReady(timeoutMs = 15000) {
+        if (this.sessionReady) return { success: true };
+        return new Promise((resolve) => {
+            const timer = setTimeout(() => {
+                // One automatic reconnect on clean close without session
+                if (this.lastCloseWasClean === true && !this.sessionReady) {
+                    try {
+                        console.warn(
+                            "[ADKClient] retrying connect after clean close before ready"
+                        );
+                    } catch (_) {}
+                    this.connect(this._lastUrl || "", this._lastToken || "")
+                        .then(() => {
+                            this.sendSessionStart(
+                                this._lastModel || "",
+                                this._lastConfig || {}
+                            );
+                            return this.waitUntilReady(timeoutMs);
+                        })
+                        .then((res) => resolve(res))
+                        .catch(() =>
+                            resolve({
+                                success: false,
+                                error: "session_ready_timeout",
+                            })
+                        );
+                    return;
+                }
+                resolve({ success: false, error: "session_ready_timeout" });
+            }, timeoutMs);
+            this._readyPromise.then(() => {
+                clearTimeout(timer);
+                resolve({ success: true });
+            });
+        });
     }
 
     #startHeartbeat() {

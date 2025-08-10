@@ -601,7 +601,7 @@ class ADKLiveBridge(BaseLiveBridge):
                                 type(event).__name__,
                                 hasattr(event, "output"),
                             )
-                    } except Exception:
+                    except Exception:
                         pass
                     self._diag_events_remaining -= 1
                 # Extract any text pieces and enqueue them
@@ -710,10 +710,10 @@ class ADKLiveBridge(BaseLiveBridge):
                                 chunks.append(t)
                     # direct parts[].text
                     parts = out.get("parts") or []
-                        for p in parts:
-                            t = (p or {}).get("text")
-                            if isinstance(t, str):
-                                chunks.append(t)
+                    for p in parts:
+                        t = (p or {}).get("text")
+                        if isinstance(t, str):
+                            chunks.append(t)
             else:
                 # Object-like events: try attributes
                 t = getattr(event, "text", None)
@@ -733,11 +733,11 @@ class ADKLiveBridge(BaseLiveBridge):
                         for c in candidates:
                             content = getattr(c, "content", None)
                             parts = getattr(content, "parts", None) if content is not None else None
-                    if isinstance(parts, list):
-                        for p in parts:
-                            pt = getattr(p, "text", None) if hasattr(p, "text") else None
-                            if isinstance(pt, str):
-                                chunks.append(pt)
+                            if isinstance(parts, list):
+                                for p in parts:
+                                    pt = getattr(p, "text", None) if hasattr(p, "text") else None
+                                    if isinstance(pt, str):
+                                        chunks.append(pt)
         except Exception:
             pass
         return chunks

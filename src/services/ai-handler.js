@@ -114,8 +114,18 @@ export class AIHandler {
     async connectToGemini() {
         // Maintain existing method name for orchestrator compatibility
         if (this.isAdkMode) {
+            if (this._adkConnecting) {
+                // Wait for the current attempt to finish
+                let spins = 0;
+                while (this._adkConnecting && spins < 200) {
+                    await new Promise((r) => setTimeout(r, 50));
+                    spins++;
+                }
+                return { success: this.isAdkConnected };
+            }
             if (this.isAdkConnected) return { success: true };
             try {
+                this._adkConnecting = true;
                 const url = API_CONFIG?.ADK_WS_URL;
                 const token = API_CONFIG?.ADK_TOKEN || "";
                 const res = await this.adkClient.connect(url, token);
@@ -124,16 +134,19 @@ export class AIHandler {
                 this.adkClient.sendSessionStart(model, {
                     response_modalities: ["TEXT"],
                 });
+                // Wait for server ack to mark session ready
+                const ready = await this.adkClient.waitUntilReady(15000);
+                if (!ready.success)
+                    throw new Error("ADK session did not become ready");
                 this.isAdkConnected = true;
-                // Fire connection state to header immediately
-                try {
-                    if (this._onConnectionStateChange)
-                        this._onConnectionStateChange("connected");
-                } catch (_) {}
+                if (this._onConnectionStateChange)
+                    this._onConnectionStateChange("connected");
                 return { success: true };
             } catch (error) {
                 console.error("Failed to connect to ADK WS:", error);
                 return { success: false, error: error.message };
+            } finally {
+                this._adkConnecting = false;
             }
         }
 

@@ -35,8 +35,19 @@ class LiveStreamBridge:
         self._bridge = None
 
     async def run(self) -> None:
+        try:
+            self._log.info("bridge_run_started")
+        except Exception:
+            pass
         while True:
-            message = await self.ws.receive()
+            try:
+                message = await self.ws.receive()
+            except Exception as exc:
+                try:
+                    self._log.warning("receive_failed: %s", str(exc))
+                except Exception:
+                    pass
+                break
 
             if "type" in message and message["type"] == "websocket.disconnect":
                 break
@@ -74,6 +85,13 @@ class LiveStreamBridge:
                 except json.JSONDecodeError:
                     await self._send_error("bad_request", "Invalid JSON message")
                     continue
+
+                try:
+                    # Minimal early log to confirm message arrival
+                    kind = str(payload.get("type"))
+                    self._log.info("recv_json type=%s", kind)
+                except Exception:
+                    pass
 
                 await self._handle_json(payload)
                 if self._closing:
