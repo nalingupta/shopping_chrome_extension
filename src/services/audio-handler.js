@@ -95,6 +95,13 @@ export class AudioHandler {
     }
 
     async startAudioStreaming() {
+        // In ADK mode we do not stream PCM via WebAudio; skip capture entirely
+        try {
+            if (this.aiHandler?.isAdkMode) {
+                return { success: true };
+            }
+        } catch (_) {}
+
         // Defensive: attempt to resume audio context before starting
         try {
             if (
