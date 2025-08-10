@@ -85,6 +85,11 @@ class LiveStreamBridge:
             self._adk_session = ADKSessionFactory.create_session(model=model, config=RunConfig())
             self._bridge = self._adk_session.bridge
             try:
+                bridge_name = self._bridge.__class__.__name__ if self._bridge else "None"
+                self._log.info("bridge_selected=%s", bridge_name)
+            except Exception:
+                pass
+            try:
                 await self._bridge.start()
             except Exception as exc:
                 await self._send_error("adk_start_failed", str(exc))
@@ -121,21 +126,6 @@ class LiveStreamBridge:
 
         if msg_type == "activity_end":
             self.utterance_active = False
-            total_ms = 0
-            first_ms = None
-            now_ms = self._now_ms()
-            if self._turn_start_at_ms is not None:
-                total_ms = max(0, now_ms - self._turn_start_at_ms)
-            if self._first_token_at_ms is not None and self._turn_start_at_ms is not None:
-                first_ms = max(0, self._first_token_at_ms - self._turn_start_at_ms)
-            self._log.info(
-                "TurnSummary turn=%s chunks=%s bytes=%s firstTokenMs=%s totalMs=%s",
-                self._turn_seq,
-                self._chunk_count,
-                self._chunk_bytes,
-                (first_ms if first_ms is not None else "n/a"),
-                total_ms,
-            )
             # Signal ADK turn end and stream deltas back to client
             try:
                 if self._bridge is not None:
@@ -151,6 +141,21 @@ class LiveStreamBridge:
             await self._send({"type": "turn_complete"})
             await self._send_ok()
             # Reset per-turn metrics
+            total_ms = 0
+            first_ms = None
+            now_ms = self._now_ms()
+            if self._turn_start_at_ms is not None:
+                total_ms = max(0, now_ms - self._turn_start_at_ms)
+            if self._first_token_at_ms is not None and self._turn_start_at_ms is not None:
+                first_ms = max(0, self._first_token_at_ms - self._turn_start_at_ms)
+            self._log.info(
+                "TurnSummary turn=%s chunks=%s bytes=%s firstTokenMs=%s totalMs=%s",
+                self._turn_seq,
+                self._chunk_count,
+                self._chunk_bytes,
+                (first_ms if first_ms is not None else "n/a"),
+                total_ms,
+            )
             self._turn_start_at_ms = None
             self._first_token_at_ms = None
             return

@@ -101,37 +101,50 @@ class ADKLiveBridge(BaseLiveBridge):
         self._out_q: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
         self._awaiting_turn_end: bool = False
 
+        _log = logging.getLogger("adk.bridge")
         try:
-            # Lazy import so environments without ADK still run
-            from google_adk import types as adk_types  # noqa: F401
-            from google_adk import live as adk_live  # type: ignore
-            from google_adk import agent as adk_agent  # type: ignore
-            from google_adk import runner as adk_runner  # type: ignore
+            _path = None
+            # Latest layout observed in env: queue under google.adk.agents.live_request_queue, runner in google.adk.runners
+            try:
+                from google.adk.agents.live_request_queue import LiveRequestQueue as ADK_LiveRequestQueue  # type: ignore
+                from google.adk.agents import Agent as ADK_Agent  # type: ignore
+                try:
+                    from google.adk.runners import Runner as ADK_LiveRunner  # type: ignore
+                except Exception:
+                    ADK_LiveRunner = None  # type: ignore
+                _path = "google.adk"
+            except Exception:
+                # Older layout fallback (if present)
+                from google_adk import live as adk_live  # type: ignore
+                from google_adk import agent as adk_agent  # type: ignore
+                from google_adk import runner as adk_runner  # type: ignore
+                ADK_LiveRequestQueue = getattr(adk_live, "LiveRequestQueue", None)  # type: ignore
+                ADK_LiveRunner = getattr(adk_runner, "Runner", None)  # type: ignore
+                ADK_Agent = adk_agent.Agent  # type: ignore
+                _path = "google_adk"
+
+            if not ADK_LiveRequestQueue or not ADK_LiveRunner or not ADK_Agent:
+                raise RuntimeError("Missing ADK classes (LiveRequestQueue/LiveRunner/Agent) in %s" % _path)
 
             if not self._api_key:
-                # No API key → not OK; fallback will be used by factory
                 self._adk_ok = False
+                _log.warning("adk_init_skipped: missing API key in env (GEMINI_API_KEY/GOOGLE_API_KEY)")
                 return
 
-            # Construct Agent/Runner and LiveRequestQueue
-            # Note: Exact constructor signatures may evolve; guard with try/except
+            # Construct Agent (latest ADK requires a name)
             try:
-                # Some ADK builds use environment variable discovery for the key
-                # We still pass it explicitly when supported
-                self._agent = adk_agent.Agent(
-                    model=self.model,
-                    api_key=self._api_key,
-                )
+                self._agent = ADK_Agent(name="adk_bridge", model=self.model, api_key=self._api_key)  # type: ignore
             except Exception:
-                # Fallback: try without explicit api_key (env-only)
-                self._agent = adk_agent.Agent(model=self.model)
+                self._agent = ADK_Agent(name="adk_bridge", model=self.model)  # type: ignore
 
-            self._runner = adk_runner.Runner(self._agent)
-            self._live_q = adk_live.LiveRequestQueue()
+            # Construct LiveRequestQueue and Runner
+            self._live_q = ADK_LiveRequestQueue()  # type: ignore
+            self._runner = ADK_LiveRunner(self._agent)  # type: ignore
             self._adk_ok = True
-        except Exception:
-            # Any import or construction failure disables ADK
+            _log.info("adk_init_ok path=%s model=%s", _path, self.model)
+        except Exception as exc:
             self._adk_ok = False
+            _log.warning("adk_init_failed: %s", str(exc), exc_info=True)
 
     async def start(self) -> None:
         if not self._adk_ok or self._closed:
@@ -155,10 +168,9 @@ class ADKLiveBridge(BaseLiveBridge):
         if not self._adk_ok or self._closed:
             return
         try:
-            from google_adk import types as adk_types  # type: ignore
+            from google.genai import types as genai_types  # type: ignore
             if self._live_q is not None:
-                blob = adk_types.Blob(data=data, mime_type=str(mime))
-                # The ADK queue is usually sync; call accordingly in a thread-safe way
+                blob = genai_types.Blob(data=data, mime_type=str(mime))
                 await self._maybe_await(self._live_q.send_realtime(blob))
                 logging.getLogger("adk.bridge").debug(
                     "ingest_blob bytes=%s mime=%s", len(data), mime
@@ -171,10 +183,11 @@ class ADKLiveBridge(BaseLiveBridge):
         if not self._adk_ok or self._closed:
             return
         try:
-            from google_adk import types as adk_types  # type: ignore
+            from google.genai import types as genai_types  # type: ignore
             if self._live_q is not None and text:
-                msg = adk_types.Text(text=str(text))
-                await self._maybe_await(self._live_q.send_realtime(msg))
+                # Send as a simple text part; runner will assemble into a turn
+                part = genai_types.Part(text=str(text))
+                await self._maybe_await(self._live_q.send_realtime(part))
                 preview = (text or "")[:80].replace("\n", " ")
                 logging.getLogger("adk.bridge").debug(
                     "ingest_user_text len=%s preview=%s", len(text), preview
@@ -187,18 +200,15 @@ class ADKLiveBridge(BaseLiveBridge):
         self._awaiting_turn_end = True
         try:
             if self._live_q is not None:
-                end_methods = [
-                    getattr(self._live_q, name)
-                    for name in ("end_input", "finish_input", "close_input")
-                    if hasattr(self._live_q, name)
-                ]
-                for m in end_methods:
-                    try:
-                        await self._maybe_await(m())
-                        logging.getLogger("adk.bridge").debug("end_turn signaled")
-                        break
-                    except Exception:
-                        continue
+                # Prefer the latest close method name first
+                for name in ("close_request", "end_input", "finish_input", "close_input"):
+                    if hasattr(self._live_q, name):
+                        try:
+                            await self._maybe_await(getattr(self._live_q, name)())
+                            logging.getLogger("adk.bridge").debug("end_turn signaled via %s", name)
+                            break
+                        except Exception:
+                            continue
         except Exception:
             pass
 
@@ -333,14 +343,16 @@ class ADKSessionFactory:
     @staticmethod
     def create_session(model: str, config: Optional[RunConfig] = None) -> ADKSession:
         cfg = config or RunConfig()
-        # Prefer real ADK bridge when available
+        log = logging.getLogger("adk.bridge")
         try:
             adk_bridge = ADKLiveBridge(model=model, config=cfg)
             if getattr(adk_bridge, "_adk_ok", False):
+                log.info("bridge_select using=ADK model=%s", model)
                 return ADKSession(model=model, config=cfg, bridge=adk_bridge)
-        except Exception:
-            pass
-        # Fallback echo bridge to keep the flow working during dev
+            else:
+                log.warning("bridge_select using=Fallback reason=adk_not_ok model=%s", model)
+        except Exception as exc:
+            log.warning("bridge_select using=Fallback reason=exception err=%s", str(exc), exc_info=True)
         return ADKSession(model=model, config=cfg, bridge=FallbackEchoBridge())
 
 
