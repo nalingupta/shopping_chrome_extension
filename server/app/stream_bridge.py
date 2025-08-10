@@ -152,10 +152,40 @@ class LiveStreamBridge:
             text = str(payload.get("text", ""))
             self._last_text = text
             self._log.debug("text_input len=%s preview=%s", len(text), json.dumps(text[:80]))
-            # Forward user text to ADK bridge; streaming will occur on activity_end
+            # If a live turn is open (voice path), just enqueue. Otherwise, open an implicit turn
             try:
                 if self._bridge is not None and text:
-                    await self._bridge.ingest_user_text(text)
+                    if not self.utterance_active:
+                        # Implicit turn for typed/text-only input
+                        try:
+                            self._log.info("implicit_turn_open")
+                        except Exception:
+                            pass
+                        try:
+                            await self._bridge.start_turn()
+                        except Exception:
+                            pass
+                        await self._bridge.ingest_user_text(text)
+                        try:
+                            await self._bridge.end_turn()
+                            # Stream deltas immediately for implicit turn
+                            async for piece in self._bridge.stream_deltas():
+                                if piece:
+                                    if self._first_token_at_ms is None and self._turn_start_at_ms is not None:
+                                        self._first_token_at_ms = self._now_ms()
+                                    self._log.debug("delta len=%s preview=%s", len(piece), json.dumps(piece[:120]))
+                                    await self._send({"type": "text_delta", "text": piece, "isPartial": True})
+                        except Exception:
+                            pass
+                        await self._send({"type": "turn_complete"})
+                        await self._send_ok()
+                        try:
+                            self._log.info("implicit_turn_close")
+                        except Exception:
+                            pass
+                    else:
+                        # Voice turn already open; just enqueue
+                        await self._bridge.ingest_user_text(text)
             except Exception:
                 pass
             return

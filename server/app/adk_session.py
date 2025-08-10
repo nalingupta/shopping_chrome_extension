@@ -146,10 +146,33 @@ class ADKLiveBridge(BaseLiveBridge):
             # Construct Agent (latest ADK requires a name). Normalize model id (strip optional "models/")
             effective_model = (self.model or "").replace("models/", "", 1)
             _log.info("adk_agent_model=%s", effective_model)
+            # Apply agent instructions if supported by this ADK build
+            instruction_text = (
+                "You are a helpful shopping assistant. "
+                "Describe what you can infer from incoming screen frames and "
+                "answer the user's question clearly in text."
+            )
+            agent_constructed = False
             try:
-                self._agent = ADK_Agent(name="adk_bridge", model=effective_model, api_key=self._api_key)  # type: ignore
+                self._agent = ADK_Agent(  # type: ignore
+                    name="adk_bridge",
+                    model=effective_model,
+                    api_key=self._api_key,
+                    instructions=instruction_text,  # some builds support this field
+                )
+                agent_constructed = True
             except Exception:
-                self._agent = ADK_Agent(name="adk_bridge", model=effective_model)  # type: ignore
+                try:
+                    self._agent = ADK_Agent(name="adk_bridge", model=effective_model, api_key=self._api_key)  # type: ignore
+                    agent_constructed = True
+                except Exception:
+                    self._agent = ADK_Agent(name="adk_bridge", model=effective_model)  # type: ignore
+                    agent_constructed = True
+            if agent_constructed:
+                try:
+                    _log.info("adk_agent_instructions_set len=%s", len(instruction_text))
+                except Exception:
+                    pass
 
             # Construct LiveRequestQueue and Runner
             self._live_q = ADK_LiveRequestQueue()  # type: ignore
@@ -348,8 +371,11 @@ class ADKLiveBridge(BaseLiveBridge):
                 )
                 # Save last user text for optional non-live fallback
                 self._last_user_text = text
-        except Exception:
-            pass
+        except Exception as exc:
+            try:
+                logging.getLogger("adk.bridge").warning("user_text_enqueue_failed err=%s", str(exc))
+            except Exception:
+                pass
 
     async def end_turn(self) -> None:
         # Signal to ADK that this turn's inputs are done (best-effort; API varies)
@@ -671,7 +697,26 @@ class ADKLiveBridge(BaseLiveBridge):
                 return
             else:
                 self._live_attached = True
+                # After successful attach, send one-time system message via live queue
+                try:
+                    if getattr(self, "_sent_system_message", False) is False and self._live_q is not None:
+                        from google.genai import types as genai_types  # type: ignore
+                        sys_text = (
+                            "You are a helpful shopping assistant. "
+                            "Describe what you can infer from incoming screen frames and "
+                            "answer the user's question clearly in text."
+                        )
+                        sys_content = genai_types.Content(role="system", parts=[genai_types.Part(text=sys_text)])
+                        await self._maybe_await(self._live_q.send_realtime(sys_content))
+                        bridge_log.info("system_instruction_sent len=%s", len(sys_text))
+                        self._sent_system_message = True  # type: ignore[attr-defined]
+                except Exception as exc:
+                    try:
+                        bridge_log.warning("system_instruction_failed err=%s", str(exc))
+                    except Exception:
+                        pass
 
+            first_event_logged = False
             async for event in events_iter:
                 # Brief diagnostics on first few events to aid shape discovery
                 if self._diag_events_remaining > 0:
@@ -706,6 +751,15 @@ class ADKLiveBridge(BaseLiveBridge):
                         bridge_log.debug("event_no_text_extracted")
                     except Exception:
                         pass
+                if not first_event_logged:
+                    try:
+                        if isinstance(event, dict):
+                            bridge_log.info("first_event keys=%s", list(event.keys())[:8])
+                        else:
+                            bridge_log.info("first_event type=%s", type(event).__name__)
+                    except Exception:
+                        pass
+                    first_event_logged = True
                 for piece in extracted:
                     if piece:
                         await self._out_q.put(("text", piece))
@@ -732,13 +786,27 @@ class ADKLiveBridge(BaseLiveBridge):
         try:
             if not self._last_user_text or self._runner is None:
                 return None
-            # Try async run first
+            # Provide the model clear instructions even in non-live mode
+            instruction_text = (
+                "You are a helpful shopping assistant. "
+                "Describe what you can infer from incoming screen frames and "
+                "answer the user's question clearly in text."
+            )
+            prefixed_text = f"{instruction_text}\n\nUser: {self._last_user_text}"
+            # Prepare message shapes based on ADK docs: prefer a conversation list
             run_async = getattr(self._runner, "run_async", None)
             if callable(run_async):
                 try:
-                    # Build types.Content(new_message) per signature in logs
+                    # Build types.Content messages per ADK signature
                     from google.genai import types as genai_types  # type: ignore
-                    new_message = genai_types.Content(role="user", parts=[genai_types.Part(text=self._last_user_text)])
+                    user_content = genai_types.Content(
+                        role="user",
+                        parts=[genai_types.Part(text=self._last_user_text)],
+                    )
+                    new_message = genai_types.Content(
+                        role="user",
+                        parts=[genai_types.Part(text=prefixed_text)],
+                    )
                     # Prefer providing run_config to enforce TEXT output and BIDI (even though it's non-live)
                     run_cfg = None
                     try:
@@ -750,39 +818,125 @@ class ADKLiveBridge(BaseLiveBridge):
                         )
                     except Exception:
                         run_cfg = None
-
-                    kwargs = {"user_id": self._user_id, "session_id": self._session_id, "new_message": new_message}
-                    if run_cfg is not None:
-                        kwargs["run_config"] = run_cfg
-                    res = run_async(**kwargs)
-                    # If the result is an async-iterable (common for ADK run_async), iterate and accumulate
-                    if isinstance(res, (AsyncIterator, AsyncIterable)) or hasattr(res, "__aiter__"):
-                        collected: list[str] = []
-                        async for event in res:  # type: ignore[operator]
-                            try:
-                                pieces = self._extract_text(event)
-                                if pieces:
-                                    collected.extend(pieces)
-                            except Exception:
-                                continue
+                    # Helper to collect text from various result shapes
+                    async def _collect_text_from_result(result_obj: Any) -> str:
                         try:
-                            logging.getLogger("adk.bridge").debug("fallback_run_async_events=%s", len(collected))
+                            # Direct async-iterable
+                            if isinstance(result_obj, (AsyncIterator, AsyncIterable)) or hasattr(result_obj, "__aiter__"):
+                                collected: list[str] = []
+                                async for event in result_obj:  # type: ignore[operator]
+                                    try:
+                                        pieces = self._extract_text(event)
+                                    except Exception:
+                                        pieces = []
+                                    if pieces:
+                                        collected.extend(pieces)
+                                return "".join(collected).strip()
+                            # Await coroutines to materialize result
+                            if inspect.isawaitable(result_obj):
+                                try:
+                                    result_obj = await result_obj  # type: ignore[assignment]
+                                except Exception:
+                                    return ""
+                            # Try common sub-attributes that are async-iterables
+                            for attr_name in ("events", "stream", "responses", "outputs"):
+                                try:
+                                    candidate = getattr(result_obj, attr_name, None)
+                                except Exception:
+                                    candidate = None
+                                if candidate is not None and (
+                                    isinstance(candidate, (AsyncIterator, AsyncIterable)) or hasattr(candidate, "__aiter__")
+                                ):
+                                    collected_sub: list[str] = []
+                                    try:
+                                        async for event in candidate:  # type: ignore[operator]
+                                            try:
+                                                pieces = self._extract_text(event)
+                                            except Exception:
+                                                pieces = []
+                                            if pieces:
+                                                collected_sub.extend(pieces)
+                                    except Exception:
+                                        pass
+                                    if collected_sub:
+                                        return "".join(collected_sub).strip()
+                            # Finally, attempt direct extraction
+                            pieces = self._extract_text(result_obj)
+                            return "".join(pieces).strip()
                         except Exception:
-                            pass
-                        text = "".join(collected).strip()
-                        if text:
-                            return text
-                    # Some implementations may return an awaitable or a final object
-                    if inspect.isawaitable(res):
-                        res = await res  # type: ignore[assignment]
-                    pieces = self._extract_text(res)
-                    text = "".join(pieces).strip()
+                            return ""
+
+                    # Identity strictly per run_async signature: user_id + session_id
+                    base_identity: dict[str, Any] = {
+                        "user_id": self._user_id,
+                        "session_id": self._session_id,
+                    }
+
+                    # Attempt shapes in order per printed signature: single new_message only
+                    attempts: list[dict[str, Any]] = [
+                        {"payload": {"new_message": user_content}, "label": "single:new_message_user_only"},
+                        {"payload": {"new_message": new_message}, "label": "single:new_message_prefixed"},
+                    ]
+
+                    # Optionally include run_config
+                    if run_cfg is not None:
+                        for attempt in attempts:
+                            attempt["payload"]["run_config"] = run_cfg
+
+                    # Add identity to each attempt
+                    for attempt in attempts:
+                        attempt["payload"].update(base_identity)
+
+                    # Log signature once for diagnostics
                     try:
-                        logging.getLogger("adk.bridge").debug("fallback_run_async_pieces=%s", len(pieces))
+                        sig = None
+                        try:
+                            sig = str(inspect.signature(run_async))
+                        except Exception:
+                            sig = "unknown"
+                        logging.getLogger("adk.bridge").info("runner_signature run_async%s", sig)
                     except Exception:
                         pass
-                    if text:
-                        return text
+
+                    # Execute attempts in order
+                    for attempt in attempts:
+                        try:
+                            logging.getLogger("adk.bridge").info(
+                                "fallback_run_async_started payload_shape=%s",
+                                attempt.get("label"),
+                            )
+                        except Exception:
+                            pass
+                        try:
+                            res = run_async(**attempt["payload"])  # type: ignore[misc]
+                        except TypeError as exc:
+                            try:
+                                logging.getLogger("adk.bridge").info(
+                                    "fallback_call_failed shape=%s err=%s",
+                                    attempt.get("label"),
+                                    str(exc),
+                                )
+                            except Exception:
+                                pass
+                            continue
+                        except Exception as exc:
+                            try:
+                                logging.getLogger("adk.bridge").warning(
+                                    "fallback_call_failed shape=%s err=%s",
+                                    attempt.get("label"),
+                                    str(exc),
+                                )
+                            except Exception:
+                                pass
+                            continue
+
+                        text = await _collect_text_from_result(res)
+                        try:
+                            logging.getLogger("adk.bridge").info("fallback_text_len=%s", len(text))
+                        except Exception:
+                            pass
+                        if text:
+                            return text
                 except Exception:
                     pass
             # Fallback to sync run
@@ -790,16 +944,66 @@ class ADKLiveBridge(BaseLiveBridge):
             if callable(run_sync):
                 try:
                     from google.genai import types as genai_types  # type: ignore
-                    new_message = genai_types.Content(role="user", parts=[genai_types.Part(text=self._last_user_text)])
-                    res = run_sync(user_id=self._user_id, session_id=self._session_id, new_message=new_message)
-                    pieces = self._extract_text(res)
-                    text = "".join(pieces).strip()
-                    try:
-                        logging.getLogger("adk.bridge").debug("fallback_run_sync_pieces=%s", len(pieces))
-                    except Exception:
-                        pass
-                    if text:
-                        return text
+                    user_content = genai_types.Content(
+                        role="user",
+                        parts=[genai_types.Part(text=self._last_user_text)],
+                    )
+                    new_message = genai_types.Content(
+                        role="user",
+                        parts=[genai_types.Part(text=prefixed_text)],
+                    )
+
+                    # Identity strictly per run() common signature: user_id + session_id
+                    base_identity_sync: dict[str, Any] = {
+                        "user_id": self._user_id,
+                        "session_id": self._session_id,
+                    }
+
+                    sync_attempts: list[dict[str, Any]] = [
+                        {"payload": {"new_message": user_content}, "label": "single:new_message_user_only"},
+                        {"payload": {"new_message": new_message}, "label": "single:new_message_prefixed"},
+                    ]
+
+                    for attempt in sync_attempts:
+                        attempt["payload"].update(base_identity_sync)
+                        try:
+                            logging.getLogger("adk.bridge").info(
+                                "fallback_run_sync_started payload_shape=%s",
+                                attempt.get("label"),
+                            )
+                        except Exception:
+                            pass
+                        try:
+                            res = run_sync(**attempt["payload"])  # type: ignore[misc]
+                        except TypeError as exc:
+                            try:
+                                logging.getLogger("adk.bridge").info(
+                                    "fallback_call_failed shape=%s err=%s",
+                                    attempt.get("label"),
+                                    str(exc),
+                                )
+                            except Exception:
+                                pass
+                            continue
+                        except Exception as exc:
+                            try:
+                                logging.getLogger("adk.bridge").warning(
+                                    "fallback_call_failed shape=%s err=%s",
+                                    attempt.get("label"),
+                                    str(exc),
+                                )
+                            except Exception:
+                                pass
+                            continue
+
+                        pieces = self._extract_text(res)
+                        text = "".join(pieces).strip()
+                        try:
+                            logging.getLogger("adk.bridge").info("fallback_text_len=%s", len(text))
+                        except Exception:
+                            pass
+                        if text:
+                            return text
                 except Exception:
                     pass
         except Exception:
@@ -815,6 +1019,14 @@ class ADKLiveBridge(BaseLiveBridge):
                 # Common shapes: {"text": "..."} or nested parts
                 if isinstance(event.get("text"), str):
                     chunks.append(str(event["text"]))
+                # Some builds use alt keys
+                for alt_key in ("outputText", "final_text", "generated_text", "completion"):
+                    try:
+                        val = event.get(alt_key)
+                        if isinstance(val, str):
+                            chunks.append(val)
+                    except Exception:
+                        pass
                 # Popular delta aliases
                 ot = event.get("output_text_delta")
                 if isinstance(ot, dict):
@@ -859,6 +1071,15 @@ class ADKLiveBridge(BaseLiveBridge):
                         t = (p or {}).get("text")
                         if isinstance(t, str):
                             chunks.append(t)
+                # Some responses embed a message/response wrapper
+                msg = event.get("message") or event.get("response")
+                if isinstance(msg, dict):
+                    try:
+                        t = msg.get("text")
+                        if isinstance(t, str):
+                            chunks.append(t)
+                    except Exception:
+                        pass
             else:
                 # Object-like events: try attributes
                 t = getattr(event, "text", None)

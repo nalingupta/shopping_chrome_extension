@@ -5,6 +5,12 @@ from fastapi.responses import JSONResponse
 import os
 import logging
 import sys
+try:
+    from dotenv import load_dotenv  # type: ignore
+    load_dotenv()
+except Exception:
+    # If python-dotenv is not installed, continue without raising
+    pass
 
 app = FastAPI(title="ADK Live Bridge", version="0.1.0")
 
