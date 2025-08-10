@@ -112,6 +112,8 @@ class ADKLiveBridge(BaseLiveBridge):
         self._session_obj: Any = None
         # One-time diagnostics for first few live events
         self._diag_events_remaining: int = 3
+        # Recent event keys (for idle diagnostics)
+        self._recent_event_keys: list[list[str]] = []
 
         _log = logging.getLogger("adk.bridge")
         try:
@@ -321,33 +323,59 @@ class ADKLiveBridge(BaseLiveBridge):
             except Exception:
                 adk_types = None
             from google.genai import types as genai_types  # type: ignore
-            import base64
             if self._live_q is not None:
-                # Best-effort normalization: Gemini Live expects base64 data strings
                 safe_mime = str(mime or "").strip() or "video/webm;codecs=vp8,opus"
-                # Encode as base64 string to avoid None/coercion issues in downstream layers
-                try:
-                    b64 = base64.b64encode(data).decode("ascii")
-                except Exception:
-                    b64 = ""
-                if not b64:
-                    return
                 content = None
+                part_field_used = None
+                # Prefer ADK native types if available
                 if adk_types is not None:
                     try:
-                        blob = adk_types.Blob(data=b64, mime_type=safe_mime)
-                        part = adk_types.Part(blob=blob)
+                        adk_blob = adk_types.Blob(data=data, mime_type=safe_mime)
+                        part = adk_types.Part(blob=adk_blob)
                         content = adk_types.Content(role="user", parts=[part])
+                        part_field_used = "blob"
                     except Exception:
-                        content = None
+                        # Retry with inline_data field
+                        try:
+                            adk_blob = adk_types.Blob(data=data, mime_type=safe_mime)
+                            part = adk_types.Part(inline_data=adk_blob)
+                            content = adk_types.Content(role="user", parts=[part])
+                            part_field_used = "inline_data"
+                        except Exception:
+                            content = None
+                # Fallback to python-genai types
                 if content is None:
                     try:
-                        blob = genai_types.Blob(data=b64, mime_type=safe_mime)
-                        part = genai_types.Part(blob=blob)
+                        g_blob = genai_types.Blob(data=data, mime_type=safe_mime)
+                        part = genai_types.Part(inline_data=g_blob)
                         content = genai_types.Content(role="user", parts=[part])
+                        part_field_used = "inline_data_bytes"
                     except Exception:
-                        content = None
+                        # Retry with base64 inline_data for older genai variants
+                        try:
+                            import base64 as _b64
+                            b64 = _b64.b64encode(data).decode("ascii")
+                        except Exception:
+                            b64 = ""
+                        if b64:
+                            try:
+                                g_blob = genai_types.Blob(data=b64, mime_type=safe_mime)
+                                part = genai_types.Part(inline_data=g_blob)
+                                content = genai_types.Content(role="user", parts=[part])
+                                part_field_used = "inline_data_b64"
+                            except Exception:
+                                content = None
+                        else:
+                            content = None
                 if content is None:
+                    try:
+                        logging.getLogger("adk.bridge").warning(
+                            "content_build_failed mime=%s provider=%s",
+                            safe_mime,
+                            "adk_types" if adk_types is not None else "genai_types",
+                        )
+                    except Exception:
+                        pass
                     return
                 # Try multiple method names and log which succeeded
                 used_method = None
@@ -359,10 +387,20 @@ class ADKLiveBridge(BaseLiveBridge):
                         await self._maybe_await(fn(content))  # type: ignore[misc]
                         used_method = name
                         break
-                    except Exception:
+                    except Exception as exc:
+                        try:
+                            logging.getLogger("adk.bridge").warning(
+                                "ingest_blob_failed method=%s err=%s", name, str(exc)
+                            )
+                        except Exception:
+                            pass
                         continue
                 logging.getLogger("adk.bridge").info(
-                    "ingest_blob bytes=%s mime=%s method=%s", len(data), safe_mime, used_method or "unknown"
+                    "ingest_blob bytes=%s mime=%s method=%s part_field=%s",
+                    len(data),
+                    safe_mime,
+                    used_method or "unknown",
+                    part_field_used or "unknown",
                 )
         except Exception:
             # Swallow to keep session resilient
@@ -471,6 +509,12 @@ class ADKLiveBridge(BaseLiveBridge):
                     # If live is attached but quiet, fall back after a few idle windows
                     if idle_ticks >= 5:  # ~2.5s of silence before fallback
                         try:
+                            logging.getLogger("adk.bridge").warning(
+                                "idle_no_token recent_event_keys=%s", self._recent_event_keys[-3:]
+                            )
+                        except Exception:
+                            pass
+                        try:
                             fb_text = await self._run_text_fallback()
                             if fb_text:
                                 yield fb_text
@@ -551,23 +595,108 @@ class ADKLiveBridge(BaseLiveBridge):
                     RunConfig as ADK_RunConfig,
                     StreamingMode as ADK_StreamingMode,
                 )  # type: ignore
+                # Prefer enum modality if available
+                ADK_ResponseModality = None  # type: ignore
+                GENAI_Live_Modality = None  # type: ignore
+                GOOGLE_GENAI_Live_Modality = None  # type: ignore
+                GENAI_Types_Modality = None  # type: ignore
+                try:
+                    from google.adk.agents.run_config import (
+                        ResponseModality as ADK_ResponseModality,
+                    )  # type: ignore
+                except Exception:
+                    ADK_ResponseModality = None  # type: ignore
+                if ADK_ResponseModality is None:
+                    try:
+                        # python-genai live Modality
+                        from genai.live import Modality as GENAI_Live_Modality  # type: ignore
+                    except Exception:
+                        GENAI_Live_Modality = None  # type: ignore
+                if ADK_ResponseModality is None and GENAI_Live_Modality is None:
+                    try:
+                        # google.genai live Modality fallback
+                        from google.genai.live import Modality as GOOGLE_GENAI_Live_Modality  # type: ignore
+                    except Exception:
+                        GOOGLE_GENAI_Live_Modality = None  # type: ignore
+                if ADK_ResponseModality is None and GENAI_Live_Modality is None:
+                    try:
+                        # google.genai.types Modality (fallback)
+                        from google.genai.types import Modality as GENAI_Types_Modality  # type: ignore
+                    except Exception:
+                        GENAI_Types_Modality = None  # type: ignore
+
+                modalities = None
+                # Choose the first available enum provider
+                if ADK_ResponseModality is not None:
+                    try:
+                        modalities = [ADK_ResponseModality.TEXT]
+                    except Exception:
+                        modalities = None
+                if modalities is None and GENAI_Live_Modality is not None:
+                    try:
+                        modalities = [GENAI_Live_Modality.TEXT]
+                    except Exception:
+                        modalities = None
+                if modalities is None and GOOGLE_GENAI_Live_Modality is not None:
+                    try:
+                        modalities = [GOOGLE_GENAI_Live_Modality.TEXT]
+                    except Exception:
+                        modalities = None
+                if modalities is None and GENAI_Types_Modality is not None:
+                    try:
+                        modalities = [GENAI_Types_Modality.TEXT]
+                    except Exception:
+                        modalities = None
+                # Validate that the modality is a real enum (not a plain string). If not, fallback to string ["TEXT"].
+                modalities_valid = False
+                modalities_source = "enum"
+                if isinstance(modalities, list) and modalities:
+                    m0 = modalities[0]
+                    try:
+                        modalities_valid = hasattr(m0, "name") and not isinstance(m0, str)
+                    except Exception:
+                        modalities_valid = False
+                if not modalities_valid:
+                    modalities = ["TEXT"]
+                    modalities_source = "string"
+                    try:
+                        bridge_log.warning("modality_enum_unavailable; forcing string ['TEXT']")
+                    except Exception:
+                        pass
+
                 try:
                     adk_run_config = ADK_RunConfig(
                         streaming_mode=ADK_StreamingMode.BIDI,
-                        response_modalities=["TEXT"],
+                        response_modalities=modalities,  # type: ignore[arg-type]
                         realtime_input_config={
                             "video": {"mime_type": "video/webm;codecs=vp8,opus"},
                         },
                     )
                 except Exception:
-                    adk_run_config = ADK_RunConfig(
-                        streaming_mode=ADK_StreamingMode.BIDI,
-                        response_modalities=["TEXT"],
-                    )
-                try:
-                    bridge_log.info("run_config_constructed provider=google.adk.agents.run_config")
-                except Exception:
-                    pass
+                    adk_run_config = None
+                if adk_run_config is not None:
+                    try:
+                        bridge_log.info("run_config_constructed provider=google.adk.agents.run_config")
+                        # Also log value names if enums are used
+                        try:
+                            sm_name = getattr(getattr(adk_run_config, "streaming_mode", None), "name", None)
+                            rms = getattr(adk_run_config, "response_modalities", []) or []
+                            rm_names = []
+                            for m in rms:
+                                try:
+                                    rm_names.append(getattr(m, "name", str(m)))
+                                except Exception:
+                                    rm_names.append(str(m))
+                            bridge_log.info(
+                                "run_config_values streaming_mode_name=%s response_modalities_names=%s source=%s",
+                                sm_name if sm_name is not None else "None",
+                                ",".join(rm_names) if rm_names else "<none>",
+                                modalities_source,
+                            )
+                        except Exception:
+                            pass
+                    except Exception:
+                        pass
             except Exception:
                 adk_run_config = None
                 try:
@@ -602,8 +731,9 @@ class ADKLiveBridge(BaseLiveBridge):
                     if isinstance(result, (AsyncIterator, AsyncIterable)) or hasattr(result, "__aiter__"):
                         try:
                             bridge_log.info(
-                                "live_attach method=run_live args=0 kwargs=%s",
+                                "live_attach method=run_live args=0 kwargs=%s iterator_type=%s",
                                 list(explicit_kwargs.keys()),
+                                type(result).__name__,
                             )
                         except Exception:
                             pass
@@ -769,6 +899,24 @@ class ADKLiveBridge(BaseLiveBridge):
                 return
             else:
                 self._live_attached = True
+                # Log concrete RunConfig types for diagnostics
+                try:
+                    if adk_run_config is not None:
+                        sm = getattr(adk_run_config, "streaming_mode", None)
+                        rms = getattr(adk_run_config, "response_modalities", None)
+                        sm_type = type(sm).__name__ if sm is not None else "None"
+                        rm_types = (
+                            [type(x).__name__ for x in (rms or [])]
+                            if isinstance(rms, list)
+                            else []
+                        )
+                        bridge_log.info(
+                            "run_config_types streaming_mode=%s response_modalities_types=%s",
+                            sm_type,
+                            ",".join(rm_types),
+                        )
+                except Exception:
+                    pass
                 # After successful attach, send one-time system message via live queue
                 try:
                     if getattr(self, "_sent_system_message", False) is False and self._live_q is not None:
@@ -829,11 +977,15 @@ class ADKLiveBridge(BaseLiveBridge):
                                 t = event["output_text_delta"].get("text") or event["output_text_delta"].get("delta")
                                 if isinstance(t, str):
                                     preview_text = t[:40]
-                            bridge_log.debug(
-                                "event_diag keys=%s preview=%s",
-                                list(event.keys())[:8],
-                                preview_text,
-                            )
+                            keys_list = list(event.keys())[:8]
+                            bridge_log.debug("event_diag keys=%s preview=%s", keys_list, preview_text)
+                            # Record for idle diagnostics
+                            try:
+                                self._recent_event_keys.append(keys_list)
+                                if len(self._recent_event_keys) > 5:
+                                    self._recent_event_keys = self._recent_event_keys[-5:]
+                            except Exception:
+                                pass
                         else:
                             bridge_log.debug(
                                 "event_diag type=%s has_output=%s",
@@ -906,14 +1058,30 @@ class ADKLiveBridge(BaseLiveBridge):
                         role="user",
                         parts=[genai_types.Part(text=prefixed_text)],
                     )
-                    # Prefer providing run_config to enforce TEXT output and BIDI (even though it's non-live)
+                    # Prefer providing run_config to enforce TEXT output (even though it's non-live)
                     run_cfg = None
                     try:
-                        from google.adk.runners import RunConfig as ADK_RunConfig  # type: ignore
-                        from google.adk.runners import StreamingMode as ADK_StreamingMode  # type: ignore
+                        from google.adk.agents.run_config import (
+                            RunConfig as ADK_RunConfig,
+                            StreamingMode as ADK_StreamingMode,
+                        )  # type: ignore
+                        try:
+                            from google.adk.agents.run_config import (
+                                ResponseModality as ADK_ResponseModality,
+                            )  # type: ignore
+                        except Exception:
+                            ADK_ResponseModality = None  # type: ignore
+                        modalities = None
+                        if ADK_ResponseModality is not None:
+                            try:
+                                modalities = [ADK_ResponseModality.TEXT]
+                            except Exception:
+                                modalities = None
+                        if modalities is None:
+                            modalities = ["TEXT"]
                         run_cfg = ADK_RunConfig(
                             streaming_mode=ADK_StreamingMode.NONE,
-                            response_modalities=["TEXT"],
+                            response_modalities=modalities,  # type: ignore[arg-type]
                         )
                     except Exception:
                         run_cfg = None

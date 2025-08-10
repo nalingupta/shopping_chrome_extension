@@ -433,6 +433,8 @@ export class VideoHandler {
         if (this.isAdkMode && this.muxer) {
             try {
                 this.muxer.stop();
+                // After stopping, ensure no further chunks are sent for this turn
+                this.videoStreamingStarted = false;
             } catch (_) {}
         }
 

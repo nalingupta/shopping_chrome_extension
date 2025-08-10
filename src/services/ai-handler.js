@@ -286,6 +286,11 @@ export class AIHandler {
                     if (text) this.adkClient?.sendTextInput(text);
                     // We have sent inputs; awaiting ADK response
                     if (this._onStatus) this._onStatus("Pending ADK…");
+                    // Give the video muxer a short window to stop emitting slices
+                    // Audio handler sets speechActive=false and stops muxer before calling here
+                    try {
+                        await new Promise((r) => setTimeout(r, 350));
+                    } catch (_) {}
                     this.adkClient?.sendActivityEnd();
                     return;
                 }
