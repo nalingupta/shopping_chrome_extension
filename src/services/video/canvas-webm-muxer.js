@@ -66,7 +66,6 @@ export class CanvasWebmMuxer {
         this.mediaRecorder.ondataavailable = (e) => {
             if (!e.data || e.data.size === 0) return;
             const header = {
-                type: "video_chunk",
                 seq: this.seq++,
                 ts: Date.now(),
                 mime: this.mediaRecorder.mimeType || this.mimeType,

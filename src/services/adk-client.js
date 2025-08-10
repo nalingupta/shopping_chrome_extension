@@ -11,6 +11,8 @@ export class ADKClient {
             onClose: null,
         };
         this._seq = 0;
+        this._pingTimer = null;
+        this._lastPongAt = 0;
     }
 
     async connect(wsUrl, token) {
@@ -25,10 +27,12 @@ export class ADKClient {
                 this.ws.onopen = () => {
                     this.isConnected = true;
                     if (this.handlers.onOpen) this.handlers.onOpen();
+                    this.#startHeartbeat();
                     resolve({ success: true });
                 };
                 this.ws.onclose = () => {
                     this.isConnected = false;
+                    this.#stopHeartbeat();
                     if (this.handlers.onClose) this.handlers.onClose();
                 };
                 this.ws.onerror = (e) => {
@@ -72,12 +76,17 @@ export class ADKClient {
 
     sendVideoChunk(blob, header = {}) {
         if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+        // Ensure header is the control frame for the upcoming binary: force the type
+        const sanitized = { ...header };
+        if (sanitized && typeof sanitized === "object") {
+            delete sanitized.type;
+        }
         const fullHeader = {
-            type: "video_chunk_header",
+            ...sanitized,
             seq: this._seq++,
             ts: Date.now(),
-            mime: "video/webm;codecs=vp8,opus",
-            ...header,
+            mime: sanitized.mime || "video/webm;codecs=vp8,opus",
+            type: "video_chunk_header",
         };
         try {
             this.ws.send(JSON.stringify(fullHeader));
@@ -105,6 +114,10 @@ export class ADKClient {
             try {
                 const msg = JSON.parse(evt.data);
                 const t = msg.type;
+                if (t === "pong") {
+                    this._lastPongAt = Date.now();
+                    return;
+                }
                 if (t === "text_delta" && this.handlers.onTextDelta) {
                     this.handlers.onTextDelta(msg);
                 } else if (
@@ -122,5 +135,22 @@ export class ADKClient {
             }
         }
         // Binary frames are video chunks from server (not expected). Ignore.
+    }
+
+    #startHeartbeat() {
+        this.#stopHeartbeat();
+        this._lastPongAt = Date.now();
+        this._pingTimer = setInterval(() => {
+            try {
+                this.ping();
+            } catch (_) {}
+        }, 25000);
+    }
+
+    #stopHeartbeat() {
+        if (this._pingTimer) {
+            clearInterval(this._pingTimer);
+            this._pingTimer = null;
+        }
     }
 }

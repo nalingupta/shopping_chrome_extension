@@ -10,7 +10,7 @@ export const API_CONFIG = {
     // ADK mode configuration (feature-flagged)
     ADK_MODE_ENABLED: true, // Turned on for testing; set false to use direct Gemini
     ADK_WS_URL: "ws://localhost:8080/ws/live",
-    ADK_MODEL: "gemini-1.5-pro",
+    ADK_MODEL: "models/gemini-live-2.5-flash-preview",
 };
 
 // Validate API keys are present

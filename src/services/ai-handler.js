@@ -195,8 +195,17 @@ export class AIHandler {
 
     // ADK helper for video chunk forwarding (used by VideoHandler)
     sendAdkVideoChunk(blob, header) {
-        if (!this.isAdkMode || !this.adkClient || !this.isAdkConnected) return;
+        if (!this.isAdkMode || !this.adkClient || !this.isAdkConnected) {
+            console.log("[ADK] drop video chunk: WS not connected");
+            return;
+        }
         try {
+            console.log(
+                "[ADK] sendVideoChunk size=",
+                blob?.size,
+                "header=",
+                header
+            );
             this.adkClient.sendVideoChunk(blob, header || {});
         } catch (_) {}
     }

@@ -22,6 +22,10 @@ class LiveStreamBridge:
         self._chunk_count: int = 0
         self._chunk_bytes: int = 0
         self._closing: bool = False
+        # Turn metrics
+        self._turn_seq: int = 0
+        self._turn_start_at_ms: Optional[int] = None
+        self._first_token_at_ms: Optional[int] = None
 
     async def run(self) -> None:
         while True:
@@ -71,6 +75,9 @@ class LiveStreamBridge:
             self.utterance_active = True
             self._chunk_count = 0
             self._chunk_bytes = 0
+            self._turn_seq += 1
+            self._turn_start_at_ms = self._now_ms()
+            self._first_token_at_ms = None
             print("[WS] activity_start")
             await self._send_ok()
             return
@@ -82,15 +89,30 @@ class LiveStreamBridge:
             # Phase 1: immediately echo as a single delta and complete turn
             # Future: stream ADK deltas
             if text:
+                if self._first_token_at_ms is None and self._turn_start_at_ms is not None:
+                    self._first_token_at_ms = self._now_ms()
                 await self._send({"type": "text_delta", "text": text, "isPartial": False})
             await self._send({"type": "turn_complete"})
             return
 
         if msg_type == "activity_end":
             self.utterance_active = False
-            print(f"[WS] activity_end chunks={self._chunk_count} bytes={self._chunk_bytes}")
+            total_ms = 0
+            first_ms = None
+            now_ms = self._now_ms()
+            if self._turn_start_at_ms is not None:
+                total_ms = max(0, now_ms - self._turn_start_at_ms)
+            if self._first_token_at_ms is not None and self._turn_start_at_ms is not None:
+                first_ms = max(0, self._first_token_at_ms - self._turn_start_at_ms)
+            print(
+                f"[TURN] id={self._turn_seq} chunks={self._chunk_count} bytes={self._chunk_bytes} "
+                f"first_token_ms={first_ms if first_ms is not None else 'n/a'} total_ms={total_ms}"
+            )
             await self._send({"type": "turn_complete"})
             await self._send_ok()
+            # Reset per-turn metrics
+            self._turn_start_at_ms = None
+            self._first_token_at_ms = None
             return
 
         if msg_type == "session_end":
@@ -114,6 +136,8 @@ class LiveStreamBridge:
 
         if msg_type == "ping":
             await self._send({"type": "pong"})
+            # Update last seen for heartbeat monitoring
+            # (No idle close yet; reserved for future diagnostics)
             return
 
         await self._send_error("unsupported_type", f"Unsupported message type: {msg_type}")
@@ -126,5 +150,9 @@ class LiveStreamBridge:
 
     async def _send_error(self, code: str, message: str) -> None:
         await self._send({"type": "error", "code": code, "message": message})
+
+    @staticmethod
+    def _now_ms() -> int:
+        return int(asyncio.get_event_loop().time() * 1000)
 
 

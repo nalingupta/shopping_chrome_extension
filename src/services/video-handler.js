@@ -234,17 +234,20 @@ export class VideoHandler {
         // Initialize muxer once in ADK mode
         if (this.isAdkMode && this.muxer && !this._muxerInitialized) {
             try {
+                console.log("[ADK] Muxer init start (1280x720 @1Mbps)");
                 this.muxer.init(1280, 720, 1_000_000);
                 // Simple mic capture for initial integration
                 const mic = await navigator.mediaDevices.getUserMedia({
                     audio: { echoCancellation: true, noiseSuppression: true },
                 });
                 this._micStream = mic;
-                this.muxer.attachAudioTrack(mic);
+                const attachRes = this.muxer.attachAudioTrack(mic);
+                console.log("[ADK] Muxer attachAudioTrack result:", attachRes);
                 this._muxerInitialized = true;
+                console.log("[ADK] Muxer init complete");
             } catch (err) {
                 console.warn(
-                    "Muxer init failed; continuing without A/V mux:",
+                    "[ADK] Muxer init failed; continuing without A/V mux:",
                     err
                 );
             }
@@ -310,18 +313,54 @@ export class VideoHandler {
                     if (this.isAdkMode && this.muxer) {
                         try {
                             // Start muxer with callback that forwards chunks via AIHandler
+                            console.log("[ADK] Muxer start (timeslice=200ms)");
                             this.muxer.start(200, (blob, header) => {
+                                console.log(
+                                    "[ADK] onChunk size=",
+                                    blob?.size,
+                                    "header=",
+                                    header
+                                );
                                 this.aiHandler.sendAdkVideoChunk(blob, header);
                             });
                         } catch (err) {
-                            console.warn("Failed to start muxer:", err);
+                            console.warn("[ADK] Failed to start muxer:", err);
                         }
+                    }
+                }
+
+                // ADK safety: ensure muxer is running even if videoStreamingStarted was pre-set elsewhere
+                if (
+                    this.isAdkMode &&
+                    this.muxer &&
+                    this.speechActive &&
+                    !this.muxer.isActive
+                ) {
+                    try {
+                        console.log(
+                            "[ADK] Ensure muxer started (timeslice=200ms)"
+                        );
+                        this.muxer.start(200, (blob, header) => {
+                            console.log(
+                                "[ADK] onChunk size=",
+                                blob?.size,
+                                "header=",
+                                header
+                            );
+                            this.aiHandler.sendAdkVideoChunk(blob, header);
+                        });
+                    } catch (err) {
+                        console.warn(
+                            "[ADK] Failed to ensure-start muxer:",
+                            err
+                        );
                     }
                 }
 
                 if (this.videoStreamingStarted && this.speechActive) {
                     if (this.isAdkMode && this.muxer) {
                         // Draw incoming frame to canvas; MediaRecorder will emit chunks periodically
+                        console.log("[ADK] pushFrame len=", frameData?.length);
                         this.muxer.pushFrame(frameData, Date.now());
                     } else if (this.aiHandler.isGeminiConnectionActive()) {
                         // Legacy Gemini path
