@@ -110,6 +110,8 @@ class ADKLiveBridge(BaseLiveBridge):
         self._user_id: str = "extension"
         self._session_id: str = uuid.uuid4().hex
         self._session_obj: Any = None
+        # One-time diagnostics for first few live events
+        self._diag_events_remaining: int = 3
 
         _log = logging.getLogger("adk.bridge")
         try:
@@ -237,11 +239,23 @@ class ADKLiveBridge(BaseLiveBridge):
             return
         try:
             from google.genai import types as genai_types  # type: ignore
+            import base64
+            # TEMP: disable video/media ingestion to validate text-only streaming path
+            return
             if self._live_q is not None:
-                blob = genai_types.Blob(data=data, mime_type=str(mime))
+                # Best-effort normalization: Gemini Live expects base64 data strings
+                safe_mime = str(mime or "").strip() or "video/webm;codecs=vp8,opus"
+                # Encode as base64 string to avoid None/coercion issues in downstream layers
+                try:
+                    b64 = base64.b64encode(data).decode("ascii")
+                except Exception:
+                    b64 = ""
+                if not b64:
+                    return
+                blob = genai_types.Blob(data=b64, mime_type=safe_mime)
                 await self._maybe_await(self._live_q.send_realtime(blob))
                 logging.getLogger("adk.bridge").debug(
-                    "ingest_blob bytes=%s mime=%s", len(data), mime
+                    "ingest_blob bytes=%s mime=%s", len(data), safe_mime
                 )
         except Exception:
             # Swallow to keep session resilient
@@ -253,9 +267,9 @@ class ADKLiveBridge(BaseLiveBridge):
         try:
             from google.genai import types as genai_types  # type: ignore
             if self._live_q is not None and text:
-                # Send as a simple text part; runner will assemble into a turn
-                part = genai_types.Part(text=str(text))
-                await self._maybe_await(self._live_q.send_realtime(part))
+                # Send a Content with a single Part(text=...), which is accepted by more ADK builds
+                content = genai_types.Content(parts=[genai_types.Part(text=str(text))])
+                await self._maybe_await(self._live_q.send_realtime(content))
                 preview = (text or "")[:80].replace("\n", " ")
                 logging.getLogger("adk.bridge").debug(
                     "ingest_user_text len=%s preview=%s", len(text), preview
@@ -571,6 +585,25 @@ class ADKLiveBridge(BaseLiveBridge):
                 self._live_attached = True
 
             async for event in events_iter:
+                # Brief diagnostics on first few events to aid shape discovery
+                if self._diag_events_remaining > 0:
+                    try:
+                        if isinstance(event, dict):
+                            bridge_log.debug(
+                                "event_diag dict_keys=%s has_output=%s has_serverContent=%s",
+                                list(event.keys())[:8],
+                                ("output" in event),
+                                ("serverContent" in event or "server_content" in event),
+                            )
+                        else:
+                            bridge_log.debug(
+                                "event_diag type=%s has_output=%s",
+                                type(event).__name__,
+                                hasattr(event, "output"),
+                            )
+                    } except Exception:
+                        pass
+                    self._diag_events_remaining -= 1
                 # Extract any text pieces and enqueue them
                 for piece in self._extract_text(event):
                     if piece:
@@ -663,6 +696,24 @@ class ADKLiveBridge(BaseLiveBridge):
                             t = (p or {}).get("text")
                             if isinstance(t, str):
                                 chunks.append(t)
+                # ADK output-like shapes
+                out = event.get("output") or event.get("server_output")
+                if out:
+                    # candidates[].content.parts[].text
+                    cands = out.get("candidates") or []
+                    for c in cands:
+                        content = (c or {}).get("content") or {}
+                        parts = content.get("parts") or []
+                        for p in parts:
+                            t = (p or {}).get("text")
+                            if isinstance(t, str):
+                                chunks.append(t)
+                    # direct parts[].text
+                    parts = out.get("parts") or []
+                        for p in parts:
+                            t = (p or {}).get("text")
+                            if isinstance(t, str):
+                                chunks.append(t)
             else:
                 # Object-like events: try attributes
                 t = getattr(event, "text", None)
@@ -671,6 +722,17 @@ class ADKLiveBridge(BaseLiveBridge):
                 output = getattr(event, "output", None)
                 if output is not None:
                     parts = getattr(output, "parts", None) or getattr(output, "contents", None)
+                    if isinstance(parts, list):
+                        for p in parts:
+                            pt = getattr(p, "text", None) if hasattr(p, "text") else None
+                            if isinstance(pt, str):
+                                chunks.append(pt)
+                    # candidates[].content.parts[].text
+                    candidates = getattr(output, "candidates", None)
+                    if isinstance(candidates, list):
+                        for c in candidates:
+                            content = getattr(c, "content", None)
+                            parts = getattr(content, "parts", None) if content is not None else None
                     if isinstance(parts, list):
                         for p in parts:
                             pt = getattr(p, "text", None) if hasattr(p, "text") else None

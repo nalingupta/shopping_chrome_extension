@@ -135,14 +135,25 @@ export class MultimediaOrchestrator {
     }
 
     async startMediaStreaming() {
+        // Fast path: in ADK mode, if the handler already marked ADK connected, skip waiting
+        try {
+            if (this.aiHandler?.isAdkMode && this.aiHandler?.isAdkConnected) {
+                this.videoHandler.setVideoStreamingStarted(false);
+                this.audioHandler.audioStreamingStarted = false;
+                return;
+            }
+        } catch (_) {}
+
+        // Provider-agnostic readiness: works for ADK or Gemini
         let waitCount = 0;
-        while (!this.aiHandler.isGeminiConnectionActive() && waitCount < 50) {
+        const maxWait = 100; // up to ~10s in dev to avoid races
+        while (!this.aiHandler.isConnected() && waitCount < maxWait) {
             await new Promise((resolve) => setTimeout(resolve, 100));
             waitCount++;
         }
 
-        if (!this.aiHandler.isGeminiConnectionActive()) {
-            throw new Error("Gemini connection did not complete in time");
+        if (!this.aiHandler.isConnected()) {
+            throw new Error("AI connection did not complete in time");
         }
 
         this.videoHandler.setVideoStreamingStarted(false);

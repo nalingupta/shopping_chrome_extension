@@ -97,6 +97,13 @@ export class ShoppingAssistant {
         });
 
         this.aiHandler.setErrorCallback((error) => {
+            // In ADK mode, ignore benign Gemini client errors to avoid blocking mic start
+            try {
+                const adkOn = !!this.aiHandler?.isAdkMode;
+                if (adkOn) {
+                    return;
+                }
+            } catch (_) {}
             console.error("AI Handler error:", error);
             this.uiManager.uiState.showStatus(
                 "AI connection error",

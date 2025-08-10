@@ -1,5 +1,39 @@
-import { MESSAGE_TYPES } from "../utils/constants.js";
-import { PageAnalyzer } from "../services/page-analyzer.js";
+// Content scripts cannot use static ESM imports reliably across all pages.
+// Use dynamic import with chrome.runtime.getURL to load modules as needed.
+let MESSAGE_TYPES;
+let PageAnalyzer;
+
+(async () => {
+    try {
+        const mod1 = await import(
+            chrome.runtime.getURL("src/utils/constants.js")
+        );
+        MESSAGE_TYPES = mod1.MESSAGE_TYPES;
+    } catch (e) {
+        console.warn("[Content] failed to load constants.js", e);
+    }
+    try {
+        const mod2 = await import(
+            chrome.runtime.getURL("src/services/page-analyzer.js")
+        );
+        PageAnalyzer = mod2.PageAnalyzer;
+    } catch (e) {
+        console.warn("[Content] failed to load page-analyzer.js", e);
+        // Minimal fallback if module load fails
+        PageAnalyzer = class {
+            static getCompletePageInfo() {
+                return {
+                    url: window.location.href,
+                    domain: window.location.hostname,
+                    title: document.title,
+                    timestamp: Date.now(),
+                };
+            }
+        };
+    }
+    // Initialize the content script after modules are loaded
+    new ContentScript();
+})();
 
 class MicPermissionHandler {
     constructor() {
@@ -232,5 +266,4 @@ class ContentScript {
     }
 }
 
-// Initialize the content script when it loads
-new ContentScript();
+// Note: actual initialization happens after dynamic imports above

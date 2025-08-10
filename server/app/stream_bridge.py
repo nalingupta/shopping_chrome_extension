@@ -47,6 +47,11 @@ class LiveStreamBridge:
                 self._chunk_count += 1
                 self._chunk_bytes += len(data)
                 try:
+                    # Drop tiny/empty initial slices that Gemini Live rejects
+                    if len(data) < 1024:
+                        self._log.debug("video_chunk DROP small size=%s (seq=%s)", len(data), (self._expecting_video_header or {}).get("seq"))
+                        self._expecting_video_header = None
+                        continue
                     header = self._expecting_video_header or {}
                     self._log.debug(
                         "video_chunk recv seq=%s size=%s mime=%s",

@@ -27,7 +27,10 @@ export class AIHandler {
         if (this.isAdkMode) {
             this.setupAdkCallbacks();
         }
-        this.initializeGemini();
+        // Avoid noisy Gemini initialization when ADK mode is active
+        if (!this.isAdkMode) {
+            this.initializeGemini();
+        }
     }
 
     async initializeGemini() {
@@ -122,6 +125,11 @@ export class AIHandler {
                     response_modalities: ["TEXT"],
                 });
                 this.isAdkConnected = true;
+                // Fire connection state to header immediately
+                try {
+                    if (this._onConnectionStateChange)
+                        this._onConnectionStateChange("connected");
+                } catch (_) {}
                 return { success: true };
             } catch (error) {
                 console.error("Failed to connect to ADK WS:", error);
@@ -171,6 +179,11 @@ export class AIHandler {
             this.isGeminiConnected &&
             this.geminiAPI.getConnectionStatus().isConnected
         );
+    }
+
+    // Provider-agnostic connection status for orchestrator
+    isConnected() {
+        return this.isGeminiConnectionActive();
     }
 
     sendAudioData(audioData) {
@@ -346,21 +359,30 @@ export class AIHandler {
     // Callback setters for coordination with other handlers
     setBotResponseCallback(callback) {
         this._onBotResponse = callback;
-        this.geminiAPI.setBotResponseCallback(callback);
+        if (!this.isAdkMode) {
+            this.geminiAPI.setBotResponseCallback(callback);
+        }
     }
 
     setStreamingUpdateCallback(callback) {
         this._onStreamingUpdate = callback;
-        this.geminiAPI.setStreamingUpdateCallback(callback);
+        if (!this.isAdkMode) {
+            this.geminiAPI.setStreamingUpdateCallback(callback);
+        }
     }
 
     setConnectionStateCallback(callback) {
         this._onConnectionStateChange = callback;
-        this.geminiAPI.setConnectionStateCallback(callback);
+        if (!this.isAdkMode) {
+            this.geminiAPI.setConnectionStateCallback(callback);
+        }
     }
 
     setErrorCallback(callback) {
         this._onError = callback;
-        this.geminiAPI.setErrorCallback(callback);
+        // When ADK mode is active, avoid wiring UI error callback to Gemini client
+        if (!this.isAdkMode) {
+            this.geminiAPI.setErrorCallback(callback);
+        }
     }
 }

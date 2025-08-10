@@ -11,6 +11,8 @@ export class CanvasWebmMuxer {
         this.seq = 0;
         this.onChunk = null;
         this.isActive = false;
+        // Track whether at least one real frame has been drawn to the canvas
+        this.hasDrawnOnce = false;
     }
 
     init(width = 1280, height = 720, bitsPerSecond = 1_000_000) {
@@ -64,7 +66,10 @@ export class CanvasWebmMuxer {
 
         this.mediaRecorder = new MediaRecorder(this.combinedStream, options);
         this.mediaRecorder.ondataavailable = (e) => {
+            // Drop tiny/empty initial slices which can be produced on the first tick
             if (!e.data || e.data.size === 0) return;
+            if (!this.hasDrawnOnce) return;
+            if (e.data.size < 1024) return;
             const header = {
                 seq: this.seq++,
                 ts: Date.now(),
@@ -102,6 +107,7 @@ export class CanvasWebmMuxer {
                 this.canvas.width,
                 this.canvas.height
             );
+            this.hasDrawnOnce = true;
         } catch (err) {
             // Swallow frame decode errors to avoid disrupting stream
         }
