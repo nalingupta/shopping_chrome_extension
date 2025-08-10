@@ -139,9 +139,52 @@ class ADKLiveBridge(BaseLiveBridge):
 
             # Construct LiveRequestQueue and Runner
             self._live_q = ADK_LiveRequestQueue()  # type: ignore
-            self._runner = ADK_LiveRunner(self._agent)  # type: ignore
+
+            # Prefer InMemoryRunner if available (provides a session_service internally)
+            runner_ok = False
+            try:
+                from google.adk.runners import InMemoryRunner as ADK_InMemoryRunner  # type: ignore
+                self._runner = ADK_InMemoryRunner(agent=self._agent, app_name="adk_bridge")  # type: ignore[call-arg]
+                self._session_service = getattr(self._runner, "session_service", None)
+                runner_ok = True
+                _log.info("adk_init_ok path=%s model=%s runner=InMemoryRunner", _path, self.model)
+            except Exception:
+                # Fallback: construct base Runner with an in-memory/local session service
+                try:
+                    from google.adk.runners import Runner as ADK_BaseRunner  # type: ignore
+                    session_service = None
+                    try:
+                        from google.adk.sessions import InMemorySessionService as ADK_InMemSessionService  # type: ignore
+                        session_service = ADK_InMemSessionService()
+                    except Exception:
+                        try:
+                            from google.adk.sessions import LocalSessionService as ADK_LocalSessionService  # type: ignore
+                            session_service = ADK_LocalSessionService()
+                        except Exception:
+                            try:
+                                from google.adk.sessions import SessionService as ADK_SessionService  # type: ignore
+                                session_service = ADK_SessionService()  # may fail if abstract
+                            except Exception:
+                                session_service = None
+                    if session_service is None:
+                        raise RuntimeError("no_session_service_available")
+                    self._runner = ADK_BaseRunner(
+                        agent=self._agent,
+                        app_name="adk_bridge",
+                        session_service=session_service,
+                    )  # type: ignore[call-arg]
+                    self._session_service = session_service
+                    runner_ok = True
+                    _log.info("adk_init_ok path=%s model=%s runner=Runner(session_service=%s)", _path, self.model, type(session_service).__name__)
+                except Exception as exc:
+                    runner_ok = False
+                    _log.warning("adk_init_failed: %s", str(exc), exc_info=True)
+
+            if not runner_ok:
+                self._adk_ok = False
+                return
+
             self._adk_ok = True
-            _log.info("adk_init_ok path=%s model=%s", _path, self.model)
         except Exception as exc:
             self._adk_ok = False
             _log.warning("adk_init_failed: %s", str(exc), exc_info=True)
@@ -249,18 +292,47 @@ class ADKLiveBridge(BaseLiveBridge):
         try:
             if self._runner is None or self._live_q is None:
                 return
-            async for event in self._runner.run_live(self._live_q):
+
+            # Obtain a live-events async iterator using best-effort compatibility across ADK versions
+            events_iter = None
+            bridge_log = logging.getLogger("adk.bridge")
+            try:
+                # Prefer bound method if present
+                run_live = getattr(self._runner, "run_live", None)
+                if callable(run_live):
+                    # Try (agent, queue) first, then (queue)
+                    try:
+                        events_iter = run_live(self._agent, self._live_q)  # type: ignore[misc]
+                    except TypeError:
+                        events_iter = run_live(self._live_q)  # type: ignore[misc]
+                else:
+                    # Fallback: classmethod or module-level
+                    run_live_cls = getattr(self._runner.__class__, "run_live", None)
+                    if callable(run_live_cls):
+                        try:
+                            events_iter = run_live_cls(self._agent, self._live_q)  # type: ignore[misc]
+                        except TypeError:
+                            events_iter = run_live_cls(self._live_q)  # type: ignore[misc]
+            except Exception:
+                # Will be handled below as no iterator
+                pass
+
+            if events_iter is None:
+                bridge_log.warning("run_live_unavailable: no compatible run_live signature found on Runner")
+                return
+
+            async for event in events_iter:
                 # Extract any text pieces and enqueue them
                 for piece in self._extract_text(event):
                     if piece:
                         await self._out_q.put(("text", piece))
-                        logging.getLogger("adk.bridge").debug(
+                        bridge_log.debug(
                             "delta len=%s preview=%s", len(piece), (piece or "")[:120].replace("\n", " ")
                         )
                 # Heuristics for turn completion markers
                 if self._is_turn_complete_event(event):
                     await self._out_q.put(("turn_end", None))
-                    logging.getLogger("adk.bridge").info("turn_complete from ADK")
+                    bridge_log.info("turn_complete from ADK")
         except asyncio.CancelledError:
             pass
         except Exception:
