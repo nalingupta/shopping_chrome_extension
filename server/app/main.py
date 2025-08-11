@@ -15,16 +15,61 @@ except Exception:
 app = FastAPI(title="ADK Live Bridge", version="0.1.0")
 
 # Configure ADK loggers and attach stream handlers so logs appear in terminal
-_level_name = (os.getenv("ADK_LOG_LEVEL") or os.getenv("LOG_LEVEL") or "INFO").upper()
-_level = getattr(logging, _level_name, logging.INFO)
+_default_level_name = (os.getenv("ADK_LOG_LEVEL") or os.getenv("LOG_LEVEL") or "INFO").upper()
+_default_level = getattr(logging, _default_level_name, logging.INFO)
+
+class ChunkLogFilter(logging.Filter):
+    def __init__(self) -> None:
+        super().__init__()
+        self.suppress = (os.getenv("SUPPRESS_CHUNK_DEBUG", "1") or "1").strip() not in ("0", "false", "False")
+        # Substrings typical of noisy chunk DEBUG logs
+        self._drop_terms = (
+            "recv_json type=audio_chunk_header",
+            "recv_json type=video_chunk_header",
+            "audio_chunk_header",
+            "video_chunk_header",
+            "audio_chunk recv",
+            "video_chunk recv",
+            "forward_blob type=audio",
+            "forward_blob type=video",
+            "ingest_blob bytes=",
+        )
+
+    def filter(self, record: logging.LogRecord) -> bool:  # noqa: A003
+        if not self.suppress:
+            return True
+        try:
+            if record.levelno >= logging.INFO:
+                return True
+            msg = str(record.getMessage())
+            for t in self._drop_terms:
+                if t in msg:
+                    return False
+            return True
+        except Exception:
+            return True
+
+def _level_for(name_env: str, fallback: int) -> int:
+    try:
+        val = os.getenv(name_env)
+        if not val:
+            return fallback
+        return getattr(logging, val.upper(), fallback)
+    except Exception:
+        return fallback
+
 for _name in ("adk.ws", "adk.bridge"):
     _lg = logging.getLogger(_name)
+    # Allow per-logger overrides
+    _level = _level_for("ADK_WS_LEVEL" if _name == "adk.ws" else "ADK_BRIDGE_LEVEL", _default_level)
     _lg.setLevel(_level)
     if not _lg.handlers:
         _handler = logging.StreamHandler(stream=sys.stdout)
         _handler.setLevel(_level)
         _fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
         _handler.setFormatter(_fmt)
+        # Attach noise filter for DEBUG chunk spam
+        _handler.addFilter(ChunkLogFilter())
         _lg.addHandler(_handler)
     _lg.propagate = False
 

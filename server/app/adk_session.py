@@ -306,14 +306,18 @@ class ADKLiveBridge(BaseLiveBridge):
                     "open_request",
                     "start_input",
                 )
+                started = False
                 for name in open_methods:
                     if hasattr(self._live_q, name):
                         try:
                             await self._maybe_await(getattr(self._live_q, name)())
                             bridge_log.info("start_turn signaled via %s", name)
+                            started = True
                             break
                         except Exception:
                             continue
+                if not started:
+                    bridge_log.info("start_turn open_method_not_found; proceeding without explicit open")
         except Exception:
             # Non-fatal; continue without explicit open
             pass
@@ -344,7 +348,7 @@ class ADKLiveBridge(BaseLiveBridge):
                     except Exception:
                         pass
                     continue
-            logging.getLogger("adk.bridge").info(
+            logging.getLogger("adk.bridge").debug(
                 "ingest_blob bytes=%s mime=%s method=%s send_kind=blob",
                 len(data),
                 safe_mime,
@@ -433,14 +437,20 @@ class ADKLiveBridge(BaseLiveBridge):
         try:
             if self._live_q is not None:
                 # Prefer the latest close method name first
+                closed = False
                 for name in ("close_request", "end_input", "finish_input", "close_input"):
                     if hasattr(self._live_q, name):
                         try:
                             await self._maybe_await(getattr(self._live_q, name)())
                             logging.getLogger("adk.bridge").info("end_turn signaled via %s", name)
+                            closed = True
                             break
                         except Exception:
                             continue
+                if not closed:
+                    logging.getLogger("adk.bridge").info(
+                        "end_turn close_method_not_found; proceeding without explicit close"
+                    )
         except Exception:
             pass
 
@@ -461,7 +471,7 @@ class ADKLiveBridge(BaseLiveBridge):
                 if self._awaiting_turn_end:
                     idle_ticks += 1
                     # If live is attached but quiet, fall back after a few idle windows
-                    if idle_ticks >= 5:  # ~2.5s of silence before fallback
+                    if idle_ticks >= 20:  # ~10s of silence before fallback
                         try:
                             logging.getLogger("adk.bridge").warning(
                                 "idle_no_token recent_event_keys=%s", self._recent_event_keys[-3:]
@@ -613,10 +623,12 @@ class ADKLiveBridge(BaseLiveBridge):
                         pass
 
                 try:
+                    # Admit both JPEG stills and audio PCM; keep legacy video/webm entry to be permissive
                     adk_run_config = ADK_RunConfig(
                         streaming_mode=ADK_StreamingMode.BIDI,
                         response_modalities=modalities,  # type: ignore[arg-type]
                         realtime_input_config={
+                            "image": {"mime_type": "image/jpeg"},
                             "video": {"mime_type": "video/webm;codecs=vp8,opus"},
                             "audio": {"mime_type": "audio/pcm;rate=16000"},
                         },

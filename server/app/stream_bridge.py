@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import os
 from typing import Any, Dict, Optional
 
 from fastapi import WebSocket
@@ -23,16 +24,43 @@ class LiveStreamBridge:
         self._expecting_video_header: Optional[Dict[str, Any]] = None
         self._chunk_count: int = 0
         self._chunk_bytes: int = 0
+        # Per-type per-turn counters
+        self._turn_audio_chunks: int = 0
+        self._turn_audio_bytes: int = 0
+        self._turn_video_frames: int = 0
+        self._turn_video_bytes: int = 0
         self._closing: bool = False
         # Turn metrics
         self._turn_seq: int = 0
         self._turn_start_at_ms: Optional[int] = None
         self._first_token_at_ms: Optional[int] = None
+        self._first_token_logged: bool = False
         # Logger
         self._log = logging.getLogger("adk.ws")
         # ADK session bridge
         self._adk_session = None
         self._bridge = None
+        # Aggregation configuration
+        try:
+            self._chunk_summary_interval_ms: int = max(
+                250, int(os.getenv("CHUNK_SUMMARY_INTERVAL_MS", "1000"))
+            )
+        except Exception:
+            self._chunk_summary_interval_ms = 1000
+        try:
+            self._turn_batch_size: int = max(
+                1, int(os.getenv("TURN_BATCH_SIZE", "5"))
+            )
+        except Exception:
+            self._turn_batch_size = 5
+        # Rolling per-second counters
+        self._sec_audio_chunks: int = 0
+        self._sec_audio_bytes: int = 0
+        self._sec_video_frames: int = 0
+        self._sec_video_bytes: int = 0
+        self._last_chunk_summary_at_ms: Optional[int] = None
+        # Rolling batch of completed turns
+        self._turn_batch: list[dict[str, Any]] = []
 
     async def run(self) -> None:
         try:
@@ -58,19 +86,22 @@ class LiveStreamBridge:
                 self._chunk_count += 1
                 self._chunk_bytes += len(data)
                 try:
-                    if len(data) < 1024:
+                    # Determine header type if present
+                    audio_hdr = getattr(self, "_expecting_audio_header", None) or {}
+                    video_hdr = getattr(self, "_expecting_video_header", None) or {}
+                    header = audio_hdr or video_hdr
+                    hdr_type = "audio" if audio_hdr else "video"
+
+                    # Only apply small-frame drop to video; never drop audio based on size
+                    if hdr_type == "video" and len(data) < 1024:
                         self._log.debug(
-                            "media_chunk DROP small size=%s (video_seq=%s)",
+                            "media_chunk DROP small (video) size=%s seq=%s",
                             len(data),
                             (getattr(self, "_expecting_video_header", None) or {}).get("seq"),
                         )
                         setattr(self, "_expecting_audio_header", None)
                         setattr(self, "_expecting_video_header", None)
                         continue
-                    audio_hdr = getattr(self, "_expecting_audio_header", None) or {}
-                    video_hdr = getattr(self, "_expecting_video_header", None) or {}
-                    header = audio_hdr or video_hdr
-                    hdr_type = "audio" if audio_hdr else "video"
                     self._log.debug(
                         "%s_chunk recv seq=%s size=%s mime=%s",
                         hdr_type,
@@ -78,11 +109,49 @@ class LiveStreamBridge:
                         len(data),
                         header.get("mime"),
                     )
+                    # Update per-type counters and per-second aggregation
+                    if hdr_type == "audio":
+                        self._turn_audio_chunks += 1
+                        self._turn_audio_bytes += len(data)
+                        self._sec_audio_chunks += 1
+                        self._sec_audio_bytes += len(data)
+                    else:
+                        self._turn_video_frames += 1
+                        self._turn_video_bytes += len(data)
+                        self._sec_video_frames += 1
+                        self._sec_video_bytes += len(data)
+
+                    # If in an active turn, emit per-second summary when due
+                    now_ms = self._now_ms()
+                    if self.utterance_active:
+                        if self._last_chunk_summary_at_ms is None:
+                            self._last_chunk_summary_at_ms = now_ms
+                        if now_ms - self._last_chunk_summary_at_ms >= self._chunk_summary_interval_ms:
+                            if self._sec_audio_chunks or self._sec_video_frames:
+                                try:
+                                    self._log.info(
+                                        "ChunkSummary turn=%s audioChunks=%s audioBytes=%s videoFrames=%s videoBytes=%s",
+                                        self._turn_seq,
+                                        self._sec_audio_chunks,
+                                        self._sec_audio_bytes,
+                                        self._sec_video_frames,
+                                        self._sec_video_bytes,
+                                    )
+                                except Exception:
+                                    pass
+                                # Reset per-second counters
+                                self._sec_audio_chunks = 0
+                                self._sec_audio_bytes = 0
+                                self._sec_video_frames = 0
+                                self._sec_video_bytes = 0
+                            self._last_chunk_summary_at_ms = now_ms
+
                     if self._bridge is not None:
                         default_mime = "audio/pcm;rate=16000" if hdr_type == "audio" else "video/webm;codecs=vp8,opus"
                         mime = str(header.get("mime") or default_mime)
+                        # Demote per-chunk forward logs to DEBUG; milestones will stay at INFO
                         try:
-                            self._log.info("forward_blob type=%s mime=%s bytes=%s", hdr_type, mime, len(data))
+                            self._log.debug("forward_blob type=%s mime=%s bytes=%s", hdr_type, mime, len(data))
                         except Exception:
                             pass
                         await self._bridge.ingest_blob(mime=mime, data=data)
@@ -100,9 +169,21 @@ class LiveStreamBridge:
                     continue
 
                 try:
-                    # Minimal early log to confirm message arrival
+                    # Log JSON control frames: milestones at INFO, the rest at DEBUG
                     kind = str(payload.get("type"))
-                    self._log.info("recv_json type=%s", kind)
+                    milestone_types = {
+                        "session_start",
+                        "activity_start",
+                        "text_input",
+                        "activity_end",
+                        "session_end",
+                        "turn_complete",
+                        "error",
+                    }
+                    if kind in milestone_types:
+                        self._log.info("recv_json type=%s", kind)
+                    else:
+                        self._log.debug("recv_json type=%s", kind)
                 except Exception:
                     pass
 
@@ -150,9 +231,20 @@ class LiveStreamBridge:
             self.utterance_active = True
             self._chunk_count = 0
             self._chunk_bytes = 0
+            self._turn_audio_chunks = 0
+            self._turn_audio_bytes = 0
+            self._turn_video_frames = 0
+            self._turn_video_bytes = 0
             self._turn_seq += 1
             self._turn_start_at_ms = self._now_ms()
             self._first_token_at_ms = None
+            self._first_token_logged = False
+            # reset per-second aggregation
+            self._sec_audio_chunks = 0
+            self._sec_audio_bytes = 0
+            self._sec_video_frames = 0
+            self._sec_video_bytes = 0
+            self._last_chunk_summary_at_ms = self._now_ms()
             self._log.info("activity_start turn=%s", self._turn_seq)
             try:
                 if self._bridge is not None:
@@ -187,6 +279,16 @@ class LiveStreamBridge:
                                 if piece:
                                     if self._first_token_at_ms is None and self._turn_start_at_ms is not None:
                                         self._first_token_at_ms = self._now_ms()
+                                        if not self._first_token_logged:
+                                            self._first_token_logged = True
+                                            try:
+                                                self._log.info(
+                                                    "first_token turn=%s firstTokenMs=%s",
+                                                    self._turn_seq,
+                                                    self._first_token_at_ms - self._turn_start_at_ms,
+                                                )
+                                            except Exception:
+                                                pass
                                     self._log.debug("delta len=%s preview=%s", len(piece), json.dumps(piece[:120]))
                                     await self._send({"type": "text_delta", "text": piece, "isPartial": True})
                         except Exception:
@@ -218,10 +320,38 @@ class LiveStreamBridge:
                         if piece:
                             if self._first_token_at_ms is None and self._turn_start_at_ms is not None:
                                 self._first_token_at_ms = self._now_ms()
+                                if not self._first_token_logged:
+                                    self._first_token_logged = True
+                                    try:
+                                        self._log.info(
+                                            "first_token turn=%s firstTokenMs=%s",
+                                            self._turn_seq,
+                                            self._first_token_at_ms - self._turn_start_at_ms,
+                                        )
+                                    except Exception:
+                                        pass
                             self._log.debug("delta len=%s preview=%s", len(piece), json.dumps(piece[:120]))
                             await self._send({"type": "text_delta", "text": piece, "isPartial": True})
             except Exception:
                 pass
+            # Flush any pending per-second summary one last time
+            try:
+                if self._sec_audio_chunks or self._sec_video_frames:
+                    self._log.info(
+                        "ChunkSummary turn=%s audioChunks=%s audioBytes=%s videoFrames=%s videoBytes=%s",
+                        self._turn_seq,
+                        self._sec_audio_chunks,
+                        self._sec_audio_bytes,
+                        self._sec_video_frames,
+                        self._sec_video_bytes,
+                    )
+            except Exception:
+                pass
+            # Reset per-second counters after flush
+            self._sec_audio_chunks = 0
+            self._sec_audio_bytes = 0
+            self._sec_video_frames = 0
+            self._sec_video_bytes = 0
             await self._send({"type": "turn_complete"})
             await self._send_ok()
             # Reset per-turn metrics
@@ -232,14 +362,61 @@ class LiveStreamBridge:
                 total_ms = max(0, now_ms - self._turn_start_at_ms)
             if self._first_token_at_ms is not None and self._turn_start_at_ms is not None:
                 first_ms = max(0, self._first_token_at_ms - self._turn_start_at_ms)
-            self._log.info(
-                "TurnSummary turn=%s chunks=%s bytes=%s firstTokenMs=%s totalMs=%s",
-                self._turn_seq,
-                self._chunk_count,
-                self._chunk_bytes,
-                (first_ms if first_ms is not None else "n/a"),
-                total_ms,
-            )
+            try:
+                self._log.info(
+                    "TurnSummary turn=%s chunks=%s bytes=%s audioChunks=%s audioBytes=%s videoFrames=%s videoBytes=%s firstTokenMs=%s totalMs=%s",
+                    self._turn_seq,
+                    self._chunk_count,
+                    self._chunk_bytes,
+                    self._turn_audio_chunks,
+                    self._turn_audio_bytes,
+                    self._turn_video_frames,
+                    self._turn_video_bytes,
+                    (first_ms if first_ms is not None else "n/a"),
+                    total_ms,
+                )
+            except Exception:
+                pass
+            # Append to rolling batch and emit a TurnBatchSummary every N turns
+            try:
+                self._turn_batch.append(
+                    {
+                        "chunks": self._chunk_count,
+                        "bytes": self._chunk_bytes,
+                        "audioChunks": self._turn_audio_chunks,
+                        "audioBytes": self._turn_audio_bytes,
+                        "videoFrames": self._turn_video_frames,
+                        "videoBytes": self._turn_video_bytes,
+                        "firstTokenMs": first_ms,
+                        "totalMs": total_ms,
+                    }
+                )
+                if len(self._turn_batch) >= self._turn_batch_size:
+                    total_chunks = sum(t.get("chunks", 0) for t in self._turn_batch)
+                    total_bytes = sum(t.get("bytes", 0) for t in self._turn_batch)
+                    total_audio_chunks = sum(t.get("audioChunks", 0) for t in self._turn_batch)
+                    total_audio_bytes = sum(t.get("audioBytes", 0) for t in self._turn_batch)
+                    total_video_frames = sum(t.get("videoFrames", 0) for t in self._turn_batch)
+                    total_video_bytes = sum(t.get("videoBytes", 0) for t in self._turn_batch)
+                    first_vals = [t.get("firstTokenMs") for t in self._turn_batch if t.get("firstTokenMs") is not None]
+                    total_vals = [t.get("totalMs") for t in self._turn_batch if t.get("totalMs") is not None]
+                    avg_first = int(sum(first_vals) / len(first_vals)) if first_vals else "n/a"
+                    avg_total = int(sum(total_vals) / len(total_vals)) if total_vals else "n/a"
+                    self._log.info(
+                        "TurnBatchSummary turns=%s totalChunks=%s totalBytes=%s audioChunks=%s audioBytes=%s videoFrames=%s videoBytes=%s avgFirstTokenMs=%s avgTotalMs=%s",
+                        len(self._turn_batch),
+                        total_chunks,
+                        total_bytes,
+                        total_audio_chunks,
+                        total_audio_bytes,
+                        total_video_frames,
+                        total_video_bytes,
+                        avg_first,
+                        avg_total,
+                    )
+                    self._turn_batch.clear()
+            except Exception:
+                pass
             self._turn_start_at_ms = None
             self._first_token_at_ms = None
             return

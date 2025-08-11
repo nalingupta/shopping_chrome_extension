@@ -244,7 +244,7 @@ export class VideoHandler {
             }
         }
         this.screenCapture.startRecording();
-        streamingLogger.logInfo("📹 Video stream started (10 FPS)");
+        streamingLogger.logInfo("📹 Video stream started (2 FPS)");
 
         this.screenshotInterval = setInterval(async () => {
             if (this._skipNextTick) {
@@ -379,7 +379,7 @@ export class VideoHandler {
                     this.stopScreenshotStreaming();
                 }
             }
-        }, 100);
+        }, 500);
     }
 
     stopScreenshotStreaming() {
