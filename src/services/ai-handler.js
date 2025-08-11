@@ -1,11 +1,10 @@
-import { GeminiRealtimeClient } from "./gemini-realtime-client.js";
-import { GeminiTextClient } from "./gemini-text-client.js";
+import { ServerWsClient } from "./server-ws-client.js";
 import { ContextAssembler } from "./prompt/context-assembler.js";
 
 export class AIHandler {
     constructor() {
-        this.geminiAPI = new GeminiRealtimeClient();
-        this.isGeminiConnected = false;
+        this.serverAPI = new ServerWsClient();
+        this.isGeminiConnected = false; // semantic name retained for minimal surface change
         this.currentPageInfo = null;
         this._lastUserMessage = null; // finalized user text or transcript
 
@@ -15,25 +14,22 @@ export class AIHandler {
 
     async initializeGemini() {
         try {
-            const result = await this.geminiAPI.initialize();
-            if (!result.success) {
-                console.error("Gemini initialization failed:", result.error);
-            }
+            // No-op for server client
         } catch (error) {
             console.error("Error initializing Gemini:", error);
         }
     }
 
     setupGeminiCallbacks() {
-        this.geminiAPI.setBotResponseCallback((data) => {
+        this.serverAPI.setBotResponseCallback((data) => {
             this.handleGeminiResponse(data);
         });
 
-        this.geminiAPI.setStreamingUpdateCallback((update) => {
+        this.serverAPI.setStatusCallback((update) => {
             this.handleStreamingUpdate(update);
         });
 
-        this.geminiAPI.setConnectionStateCallback((state) => {
+        this.serverAPI.setConnectionStateCallback((state) => {
             if (state === "connected") {
                 this.isGeminiConnected = true;
             } else if (state === "disconnected") {
@@ -41,7 +37,7 @@ export class AIHandler {
             }
         });
 
-        this.geminiAPI.setErrorCallback((error) => {
+        this.serverAPI.setErrorCallback((error) => {
             console.error("Gemini error:", error);
         });
     }
@@ -53,7 +49,10 @@ export class AIHandler {
         }
 
         try {
-            const result = await this.geminiAPI.connect();
+            const result = await this.serverAPI.connect({
+                fps: 10,
+                sampleRate: 16000,
+            });
             if (!result.success) {
                 throw new Error(result.error || "Failed to connect to Gemini");
             }
@@ -67,7 +66,7 @@ export class AIHandler {
 
     async disconnectFromGemini() {
         try {
-            await this.geminiAPI.disconnect();
+            await this.serverAPI.disconnect();
             this.isGeminiConnected = false;
             return { success: true };
         } catch (error) {
@@ -79,54 +78,48 @@ export class AIHandler {
     isGeminiConnectionActive() {
         return (
             this.isGeminiConnected &&
-            this.geminiAPI.getConnectionStatus().isConnected
+            this.serverAPI.getConnectionStatus().isConnected
         );
     }
 
-    sendAudioData(audioData) {
-        if (this.isGeminiConnectionActive()) {
-            this.geminiAPI.sendAudioChunk(audioData);
-        }
+    // Phase 2: media streaming methods
+    sendAudioPcm(base64Pcm, tsStartMs, numSamples, sampleRate = 16000) {
+        if (!this.isGeminiConnectionActive()) return;
+        this.serverAPI.sendAudioPcm(
+            base64Pcm,
+            tsStartMs,
+            numSamples,
+            sampleRate
+        );
     }
 
-    sendVideoData(videoData) {
-        if (this.isGeminiConnectionActive()) {
-            this.geminiAPI.sendVideoFrame(videoData);
-        }
+    sendImageFrame(base64Jpeg, tsMs) {
+        if (!this.isGeminiConnectionActive()) return;
+        this.serverAPI.sendImageFrame(base64Jpeg, tsMs);
     }
 
     // Utterance boundary helpers
     startUtterance() {
         try {
             this._utteranceStartTs = Date.now();
-            this.geminiAPI.enableAudioInput();
-            try {
-                this.geminiAPI.markUtteranceStart();
-            } catch (_) {}
-            this.geminiAPI.sendActivityStart();
+            // No-op for server-mediated flow
         } catch (_) {}
     }
 
     endUtterance() {
         (async () => {
             try {
-                // Send only the finalized user message as a clientContent user turn
-                if (this._lastUserMessage && this._lastUserMessage.trim()) {
-                    const text = this._lastUserMessage.trim();
-                    this.geminiAPI.sendUserMessage(text);
-                } else {
-                    // No finalized user message to send
-                }
+                // No-op for server-mediated flow
             } catch (_) {}
             try {
-                this.geminiAPI.sendActivityEnd();
+                // No-op for server-mediated flow
                 const elapsed = this._utteranceStartTs
                     ? Date.now() - this._utteranceStartTs
                     : 0;
-                this.geminiAPI.logUtteranceEnd?.(elapsed);
+                void elapsed;
             } catch (_) {}
             try {
-                this.geminiAPI.disableAudioInput();
+                // No-op for server-mediated flow
             } catch (_) {}
         })();
     }
@@ -141,35 +134,12 @@ export class AIHandler {
 
     // REST API Methods (for text messages)
     async sendTextMessage(message) {
-        // Use REST API flow for text input
+        // Phase 1: route text over WS to backend; backend may echo/ack only in this phase
         try {
-            console.debug("[AIHandler] sendTextMessage start");
-            // Use the unified generator which assembles history + page context
-            const responseText = await GeminiTextClient.generateGeminiResponse(
-                message,
-                this.currentPageInfo
-            );
-
-            // Forward as if it were a final bot response
-            if (responseText && this.geminiAPI && this.geminiAPI.callbacks) {
-                const onBotResponse = this.geminiAPI.callbacks.onBotResponse;
-                if (onBotResponse) {
-                    console.debug(
-                        `[AIHandler] sendTextMessage success, textLen=${
-                            responseText?.length || 0
-                        }`
-                    );
-                    onBotResponse({
-                        text: responseText,
-                        isStreaming: false,
-                        timestamp: Date.now(),
-                    });
-                }
-            }
-
+            this.serverAPI.sendTextMessage(String(message || ""));
             return { success: true };
         } catch (error) {
-            console.error("Failed to send text message via REST:", error);
+            console.error("Failed to send text over WS:", error);
             return { success: false, error: error.message };
         }
     }
@@ -183,6 +153,10 @@ export class AIHandler {
     // Common Methods
     isConnected() {
         return this.isGeminiConnectionActive();
+    }
+
+    getSessionStartMs() {
+        return this.serverAPI.sessionStartMs || null;
     }
 
     // Internal methods for handling Gemini responses
@@ -202,18 +176,18 @@ export class AIHandler {
 
     // Callback setters for coordination with other handlers
     setBotResponseCallback(callback) {
-        this.geminiAPI.setBotResponseCallback(callback);
+        this.serverAPI.setBotResponseCallback(callback);
     }
 
     setStreamingUpdateCallback(callback) {
-        this.geminiAPI.setStreamingUpdateCallback(callback);
+        this.serverAPI.setStatusCallback(callback);
     }
 
     setConnectionStateCallback(callback) {
-        this.geminiAPI.setConnectionStateCallback(callback);
+        this.serverAPI.setConnectionStateCallback(callback);
     }
 
     setErrorCallback(callback) {
-        this.geminiAPI.setErrorCallback(callback);
+        this.serverAPI.setErrorCallback(callback);
     }
 }

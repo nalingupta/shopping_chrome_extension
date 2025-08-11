@@ -287,19 +287,9 @@ export class VideoHandler {
                     this.speechActive &&
                     this.aiHandler.isGeminiConnectionActive()
                 ) {
-                    // Only send when Gemini is fully setup to avoid buffering stale frames
-                    const status =
-                        this.aiHandler.geminiAPI?.getConnectionStatus?.();
-                    streamingLogger.logInfo(
-                        `FRAME ready tab=${this.screenCapture.getCurrentTabId()} setup=${!!status?.isSetupComplete}`
-                    );
-                    if (status?.isSetupComplete) {
-                        this.aiHandler.sendVideoData(frameData);
-                    } else {
-                        streamingLogger.logInfo(
-                            `FRAME skipped (setup incomplete) tab=${this.screenCapture.getCurrentTabId()}`
-                        );
-                    }
+                    const tsMs = performance?.now?.() || Date.now();
+                    // frameData is base64 JPEG per existing capture service
+                    this.aiHandler.sendImageFrame(frameData, tsMs);
                 }
             } catch (error) {
                 if (

@@ -98,19 +98,28 @@ export class AudioCaptureService {
 
         this.audioWorkletNode.port.onmessage = (event) => {
             const { type, pcmData, maxAmplitude } = event.data;
+            if (type !== "audioData") return;
 
-            if (
-                type === "audioData" &&
-                this.geminiAPI.isGeminiConnectionActive() &&
-                this.geminiAPI.geminiAPI.isAudioInputEnabled()
-            ) {
+            // Compute timestamps using a session clock; fall back to now
+            const numSamples = pcmData?.length || 0;
+            const sampleRate = 16000;
+            const durationMs = (numSamples / sampleRate) * 1000;
+            const nowMs = performance?.now?.() || Date.now();
+            const tsStartMs = nowMs - durationMs;
+
+            if (this.geminiAPI.isGeminiConnectionActive()) {
                 const uint8Array = new Uint8Array(pcmData.buffer);
                 const base64 = btoa(String.fromCharCode(...uint8Array));
-                this.geminiAPI.sendAudioData(base64);
+                this.geminiAPI.sendAudioPcm(
+                    base64,
+                    tsStartMs,
+                    numSamples,
+                    sampleRate
+                );
+            }
 
-                if (maxAmplitude !== undefined) {
-                    this.onAudioLevelDetected(maxAmplitude);
-                }
+            if (maxAmplitude !== undefined) {
+                this.onAudioLevelDetected(maxAmplitude);
             }
         };
 
@@ -134,11 +143,7 @@ export class AudioCaptureService {
             );
 
         audioProcessor.onaudioprocess = (event) => {
-            if (
-                !this.geminiAPI.isGeminiConnectionActive() ||
-                !this.geminiAPI.geminiAPI.isAudioInputEnabled()
-            )
-                return;
+            if (!this.geminiAPI.isGeminiConnectionActive()) return;
 
             const inputData = event.inputBuffer.getChannelData(0);
             const outputData = event.outputBuffer.getChannelData(0);
@@ -161,9 +166,20 @@ export class AudioCaptureService {
                 pcmData[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
             }
 
+            const numSamples = pcmData.length;
+            const sampleRate = 16000;
+            const durationMs = (numSamples / sampleRate) * 1000;
+            const nowMs = performance?.now?.() || Date.now();
+            const tsStartMs = nowMs - durationMs;
+
             const uint8Array = new Uint8Array(pcmData.buffer);
             const base64 = btoa(String.fromCharCode(...uint8Array));
-            this.geminiAPI.sendAudioData(base64);
+            this.geminiAPI.sendAudioPcm(
+                base64,
+                tsStartMs,
+                numSamples,
+                sampleRate
+            );
         };
 
         this.audioSource.connect(audioProcessor);
