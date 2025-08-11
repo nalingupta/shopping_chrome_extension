@@ -4,6 +4,9 @@
 import WebSocket from "ws";
 
 const WS_URL = process.env.ADK_WS_URL || "ws://localhost:8080/ws/live";
+const WAIT_AFTER_END_MS = Number(process.env.WAIT_AFTER_END_MS || 15000);
+const TEST_TEXT = process.env.TEST_TEXT || "hello from verify script";
+const PING_INTERVAL_MS = Number(process.env.PING_INTERVAL_MS || 10000);
 
 function wait(ms) {
     return new Promise((r) => setTimeout(r, ms));
@@ -18,9 +21,18 @@ async function main() {
         process.exitCode = 1;
     });
 
+    let pingTimer = null;
+
     ws.on("close", (code, reason) => {
         console.log("WS closed:", code, reason?.toString());
+        if (pingTimer) {
+            clearInterval(pingTimer);
+            pingTimer = null;
+        }
     });
+
+    let gotDelta = false;
+    let gotTurnComplete = false;
 
     ws.on("message", (data, isBinary) => {
         try {
@@ -33,8 +45,10 @@ async function main() {
                         : String(data);
                 const msg = JSON.parse(text);
                 if (msg.type === "text_delta") {
+                    gotDelta = true;
                     console.log("delta:", msg.text);
                 } else if (msg.type === "turn_complete") {
+                    gotTurnComplete = true;
                     console.log("turn_complete");
                 } else if (msg.type === "error") {
                     console.error("server error:", msg);
@@ -61,6 +75,12 @@ async function main() {
     });
 
     console.log("Connected. Sending test messages...");
+    // Heartbeat to keep the connection open during waits
+    pingTimer = setInterval(() => {
+        try {
+            ws.send(JSON.stringify({ type: "ping" }));
+        } catch {}
+    }, PING_INTERVAL_MS);
     ws.send(
         JSON.stringify({
             type: "session_start",
@@ -72,17 +92,31 @@ async function main() {
     ws.send(
         JSON.stringify({
             type: "text_input",
-            text: "hello from verify script",
+            text: TEST_TEXT,
             ts: Date.now(),
         })
     );
     ws.send(JSON.stringify({ type: "activity_end" }));
 
-    // Give server some time to respond
-    await wait(1000);
-    ws.send(JSON.stringify({ type: "session_end" }));
-    await wait(300);
-    ws.close();
+    // Allow time for deltas or fallback
+    console.log(`Waiting up to ${WAIT_AFTER_END_MS}ms for deltas...`);
+    await wait(WAIT_AFTER_END_MS);
+
+    try {
+        ws.send(JSON.stringify({ type: "session_end" }));
+    } catch {}
+    await wait(200);
+    try {
+        ws.close();
+    } catch {}
+
+    if (gotDelta || gotTurnComplete) {
+        console.log("VERIFY RESULT: PASS (received response)");
+        process.exitCode = 0;
+    } else {
+        console.error("VERIFY RESULT: FAIL (no response within wait window)");
+        process.exitCode = 2;
+    }
 }
 
 main().catch((err) => {

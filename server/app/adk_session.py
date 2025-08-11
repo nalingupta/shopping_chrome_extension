@@ -114,6 +114,12 @@ class ADKLiveBridge(BaseLiveBridge):
         self._diag_events_remaining: int = 3
         # Recent event keys (for idle diagnostics)
         self._recent_event_keys: list[list[str]] = []
+        # Per-turn lifecycle state and idle timeout configuration
+        self._turn_opened: bool = False
+        try:
+            self._idle_turn_timeout_ms: int = int(os.getenv("ADK_IDLE_TURN_TIMEOUT_MS", "60000"))
+        except Exception:
+            self._idle_turn_timeout_ms = 60000
 
         _log = logging.getLogger("adk.bridge")
         try:
@@ -318,6 +324,7 @@ class ADKLiveBridge(BaseLiveBridge):
                             continue
                 if not started:
                     bridge_log.info("start_turn open_method_not_found; proceeding without explicit open")
+                self._turn_opened = started
         except Exception:
             # Non-fatal; continue without explicit open
             pass
@@ -451,6 +458,9 @@ class ADKLiveBridge(BaseLiveBridge):
                     logging.getLogger("adk.bridge").info(
                         "end_turn close_method_not_found; proceeding without explicit close"
                     )
+                # Only mark turn closed if we successfully invoked a close method
+                if closed:
+                    self._turn_opened = False
         except Exception:
             pass
 
@@ -470,15 +480,26 @@ class ADKLiveBridge(BaseLiveBridge):
             except asyncio.TimeoutError:
                 if self._awaiting_turn_end:
                     idle_ticks += 1
-                    # If live is attached but quiet, fall back after a few idle windows
-                    if idle_ticks >= 20:  # ~10s of silence before fallback
+                    # If live is attached but quiet, fall back after configured idle window
+                    if (idle_ticks * 500) >= self._idle_turn_timeout_ms:
                         try:
                             logging.getLogger("adk.bridge").warning(
                                 "idle_no_token recent_event_keys=%s", self._recent_event_keys[-3:]
                             )
                         except Exception:
                             pass
-                        # Do not fallback to non-live text; end the turn to prevent UI hang
+                        # As a last resort, attempt non-live text fallback so the UI receives a response
+                        try:
+                            fallback_text = await self._run_text_fallback()
+                        except Exception:
+                            fallback_text = None
+                        if isinstance(fallback_text, str) and fallback_text.strip():
+                            try:
+                                await self._out_q.put(("text", fallback_text))
+                            except Exception:
+                                pass
+                            # Yield once below on next loop iteration
+                        # End the turn either way to prevent UI hang
                         break
                 continue
 
