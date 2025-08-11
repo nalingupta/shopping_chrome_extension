@@ -153,8 +153,8 @@ export class AIHandler {
                 const token = API_CONFIG?.ADK_TOKEN || "";
                 const res = await this.adkClient.connect(url, token);
                 if (!res?.success) throw new Error("ADK connect failed");
-                const model = API_CONFIG?.ADK_MODEL || "gemini-1.5-pro";
-                this.adkClient.sendSessionStart(model, {
+                // Backend is authoritative for ADK model; do not pass a client model
+                this.adkClient.sendSessionStart(undefined, {
                     response_modalities: ["TEXT"],
                 });
                 // Wait for server ack to mark session ready

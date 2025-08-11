@@ -103,8 +103,9 @@ class LiveStreamBridge:
         if msg_type == "session_start":
             # Create ADK session/bridge
             self.session_open = True
-            model = str(payload.get("model") or "gemini-live-2.5-flash-preview")
-            self._log.info("session_start model=%s", model)
+            # Backend is authoritative for model selection in ADK mode
+            model = "gemini-live-2.5-flash"
+            self._log.info("session_start using_server_model=%s region=us-central1", model)
             self._adk_session = ADKSessionFactory.create_session(model=model, config=RunConfig())
             self._bridge = self._adk_session.bridge
             try:

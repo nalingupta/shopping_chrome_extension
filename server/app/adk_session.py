@@ -140,9 +140,13 @@ class ADKLiveBridge(BaseLiveBridge):
             if not ADK_LiveRequestQueue or not ADK_LiveRunner or not ADK_Agent:
                 raise RuntimeError("Missing ADK classes (LiveRequestQueue/LiveRunner/Agent) in %s" % _path)
 
-            if not self._api_key:
+            # Prefer Vertex ADC/service account for Live models. API key is not used for Vertex Live.
+            adc_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+            project = os.getenv("GOOGLE_CLOUD_PROJECT")
+            location = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
+            if not (adc_path and os.path.exists(adc_path)):
                 self._adk_ok = False
-                _log.warning("adk_init_skipped: missing API key in env (GEMINI_API_KEY/GOOGLE_API_KEY)")
+                _log.error("adk_init_missing_adc: set GOOGLE_APPLICATION_CREDENTIALS and GOOGLE_CLOUD_PROJECT/LOCATION for Vertex Live")
                 return
 
             # Construct Agent (latest ADK requires a name). Normalize model id (strip optional "models/")
@@ -155,17 +159,19 @@ class ADKLiveBridge(BaseLiveBridge):
                 "answer the user's question clearly in text."
             )
             agent_constructed = False
+            # Vertex mode: avoid api_key; prefer passing project/location if supported
             try:
                 self._agent = ADK_Agent(  # type: ignore
                     name="adk_bridge",
                     model=effective_model,
-                    api_key=self._api_key,
-                    instructions=instruction_text,  # some builds support this field
+                    instructions=instruction_text,
+                    project=project,
+                    location=location,
                 )
                 agent_constructed = True
             except Exception:
                 try:
-                    self._agent = ADK_Agent(name="adk_bridge", model=effective_model, api_key=self._api_key)  # type: ignore
+                    self._agent = ADK_Agent(name="adk_bridge", model=effective_model, project=project, location=location)  # type: ignore
                     agent_constructed = True
                 except Exception:
                     self._agent = ADK_Agent(name="adk_bridge", model=effective_model)  # type: ignore
@@ -186,7 +192,7 @@ class ADKLiveBridge(BaseLiveBridge):
                 self._runner = ADK_InMemoryRunner(agent=self._agent, app_name="adk_bridge")  # type: ignore[call-arg]
                 self._session_service = getattr(self._runner, "session_service", None)
                 runner_ok = True
-                _log.info("adk_init_ok path=%s model=%s runner=InMemoryRunner", _path, self.model)
+                _log.info("adk_init_ok path=%s model=%s runner=InMemoryRunner vertex_mode=true project=%s location=%s", _path, self.model, project, location)
             except Exception:
                 # Fallback: construct base Runner with an in-memory/local session service
                 try:
@@ -214,7 +220,7 @@ class ADKLiveBridge(BaseLiveBridge):
                     )  # type: ignore[call-arg]
                     self._session_service = session_service
                     runner_ok = True
-                    _log.info("adk_init_ok path=%s model=%s runner=Runner(session_service=%s)", _path, self.model, type(session_service).__name__)
+                    _log.info("adk_init_ok path=%s model=%s runner=Runner(session_service=%s) vertex_mode=true project=%s location=%s", _path, self.model, type(session_service).__name__, project, location)
                 except Exception as exc:
                     runner_ok = False
                     _log.warning("adk_init_failed: %s", str(exc), exc_info=True)
@@ -496,7 +502,11 @@ class ADKLiveBridge(BaseLiveBridge):
 
     async def stream_deltas(self) -> AsyncGenerator[str, None]:
         if not self._adk_ok or self._closed:
-            # No ADK available → no deltas
+            # No ADK available → log and stop (no fallback model)
+            try:
+                logging.getLogger("adk.bridge").error("adk_live_unavailable: no ADK bridge; live_model_required")
+            except Exception:
+                pass
             return
         # Drain output queue until we see a turn boundary or silence while awaiting turn end
         idle_ticks = 0
@@ -514,13 +524,7 @@ class ADKLiveBridge(BaseLiveBridge):
                             )
                         except Exception:
                             pass
-                        try:
-                            fb_text = await self._run_text_fallback()
-                            if fb_text:
-                                yield fb_text
-                        except Exception:
-                            pass
-                        # Even if fallback fails, end the turn to prevent UI hang
+                        # Do not fallback to non-live text; end the turn to prevent UI hang
                         break
                 continue
 
@@ -670,6 +674,7 @@ class ADKLiveBridge(BaseLiveBridge):
                         response_modalities=modalities,  # type: ignore[arg-type]
                         realtime_input_config={
                             "video": {"mime_type": "video/webm;codecs=vp8,opus"},
+                            "audio": {"mime_type": "audio/pcm;rate=16000"},
                         },
                     )
                 except Exception:

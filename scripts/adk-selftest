@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# One-command ADK Live self-test (text + audio) using Vertex ADC
+# Usage: ./scripts/adk-selftest [PROJECT_ID] [LOCATION]
+
+PROJECT_ID=${1:-shopping-chrome-ext-nalin}
+LOCATION=${2:-us-central1}
+
+# Determine project root (git) or fall back to script dir/.. 
+if ROOT=$(git rev-parse --show-toplevel 2>/dev/null); then
+  :
+else
+  SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+  ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
+fi
+
+export GOOGLE_APPLICATION_CREDENTIALS="$ROOT/server/credentials/service_account.json"
+
+# Activate conda env if available
+if command -v conda >/dev/null 2>&1; then
+  # load conda function then activate
+  # shellcheck disable=SC1091
+  source "$(conda info --base)/etc/profile.d/conda.sh" || true
+  conda activate shopping-chrome-ext || true
+fi
+
+if [[ ! -f "$GOOGLE_APPLICATION_CREDENTIALS" ]]; then
+  echo "Missing service account: $GOOGLE_APPLICATION_CREDENTIALS" >&2
+  exit 2
+fi
+
+python "$ROOT/scripts/adk_live_selftest.py" --project "$PROJECT_ID" --location "$LOCATION"
+
