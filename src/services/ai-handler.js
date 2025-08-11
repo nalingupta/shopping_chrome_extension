@@ -90,6 +90,11 @@ export class AIHandler {
                 if (!this._adkStreamingStarted) {
                     this._adkStreamingStarted = true;
                     if (this._onStatus) this._onStatus("Thinking…");
+                    try {
+                        console.debug(
+                            "[ADK] Streaming interim output enabled (TEXT only)"
+                        );
+                    } catch (_) {}
                 }
                 this._adkStreamingBuffer += delta;
                 if (this._onStreamingUpdate) {
@@ -105,6 +110,11 @@ export class AIHandler {
                 const finalText = this._adkStreamingBuffer || "";
                 if (!this._adkStreamingStarted) {
                     if (this._onStatus) this._onStatus("No response from AI");
+                    try {
+                        console.debug(
+                            "[ADK] No interim deltas observed in this turn"
+                        );
+                    } catch (_) {}
                     // Ensure UI finalizes pending bubble even with no text
                     if (this._onBotResponse) {
                         this._onBotResponse({
@@ -249,13 +259,22 @@ export class AIHandler {
             return;
         }
         try {
-            console.log(
-                "[ADK] sendVideoChunk size=",
-                blob?.size,
-                "header=",
-                header
-            );
+            // Silent in prod; keep concise debug
+            // console.debug("[ADK] sendVideoChunk", blob?.size, header);
             this.adkClient.sendVideoChunk(blob, header || {});
+        } catch (_) {}
+    }
+
+    // ADK helper for audio chunk forwarding (PCM16 @16kHz)
+    sendAdkAudioChunk(arrayBuffer) {
+        if (!this.isAdkMode || !this.adkClient || !this.isAdkConnected) {
+            return;
+        }
+        try {
+            const blob = new Blob([arrayBuffer]);
+            this.adkClient.sendAudioChunk(blob, {
+                mime: "audio/pcm;rate=16000",
+            });
         } catch (_) {}
     }
 
@@ -286,6 +305,11 @@ export class AIHandler {
                     if (text) this.adkClient?.sendTextInput(text);
                     // We have sent inputs; awaiting ADK response
                     if (this._onStatus) this._onStatus("Pending ADK…");
+                    try {
+                        console.debug(
+                            "[ADK] Interims suppressed; only final transcript is sent at end of utterance"
+                        );
+                    } catch (_) {}
                     // Give the video muxer a short window to stop emitting slices
                     // Audio handler sets speechActive=false and stops muxer before calling here
                     try {

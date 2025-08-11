@@ -231,25 +231,16 @@ export class VideoHandler {
 
         this.previewManager.startPreview();
 
-        // Initialize muxer once in ADK mode
-        if (this.isAdkMode && this.muxer && !this._muxerInitialized) {
+        // Initialize ADK JPEG path (no muxer start)
+        if (this.isAdkMode && !this._muxerInitialized) {
             try {
-                console.log("[ADK] Muxer init start (1280x720 @1Mbps)");
-                this.muxer.init(1280, 720, 1_000_000);
-                // Simple mic capture for initial integration
-                const mic = await navigator.mediaDevices.getUserMedia({
-                    audio: { echoCancellation: true, noiseSuppression: true },
-                });
-                this._micStream = mic;
-                const attachRes = this.muxer.attachAudioTrack(mic);
-                console.log("[ADK] Muxer attachAudioTrack result:", attachRes);
-                this._muxerInitialized = true;
-                console.log("[ADK] Muxer init complete");
-            } catch (err) {
-                console.warn(
-                    "[ADK] Muxer init failed; continuing without A/V mux:",
-                    err
+                console.log(
+                    "[ADK] JPEG streaming path active (image/jpeg frames)"
                 );
+                this._muxerInitialized = true;
+                console.log("[ADK] JPEG path ready");
+            } catch (err) {
+                console.warn("[ADK] JPEG path init warning:", err);
             }
         }
         this.screenCapture.startRecording();
@@ -310,58 +301,30 @@ export class VideoHandler {
                     streamingLogger.logInfo(
                         "RESUME video sending after stable frame"
                     );
-                    if (this.isAdkMode && this.muxer) {
-                        try {
-                            // Start muxer with callback that forwards chunks via AIHandler
-                            console.log("[ADK] Muxer start (timeslice=200ms)");
-                            this.muxer.start(200, (blob, header) => {
-                                console.log(
-                                    "[ADK] onChunk size=",
-                                    blob?.size,
-                                    "header=",
-                                    header
-                                );
-                                this.aiHandler.sendAdkVideoChunk(blob, header);
-                            });
-                        } catch (err) {
-                            console.warn("[ADK] Failed to start muxer:", err);
-                        }
-                    }
+                    // No muxer start for JPEG path
                 }
 
-                // ADK safety: ensure muxer is running even if videoStreamingStarted was pre-set elsewhere
-                if (
-                    this.isAdkMode &&
-                    this.muxer &&
-                    this.speechActive &&
-                    !this.muxer.isActive
-                ) {
-                    try {
-                        console.log(
-                            "[ADK] Ensure muxer started (timeslice=200ms)"
-                        );
-                        this.muxer.start(200, (blob, header) => {
-                            console.log(
-                                "[ADK] onChunk size=",
-                                blob?.size,
-                                "header=",
-                                header
-                            );
-                            this.aiHandler.sendAdkVideoChunk(blob, header);
-                        });
-                    } catch (err) {
-                        console.warn(
-                            "[ADK] Failed to ensure-start muxer:",
-                            err
-                        );
-                    }
-                }
+                // No muxer ensure-start for JPEG path
 
                 if (this.videoStreamingStarted && this.speechActive) {
-                    if (this.isAdkMode && this.muxer) {
-                        // Draw incoming frame to canvas; MediaRecorder will emit chunks periodically
-                        console.log("[ADK] pushFrame len=", frameData?.length);
-                        this.muxer.pushFrame(frameData, Date.now());
+                    if (this.isAdkMode) {
+                        try {
+                            // frameData is base64 JPEG; send as bytes
+                            const byteChars = atob(frameData);
+                            const len = byteChars.length;
+                            const bytes = new Uint8Array(len);
+                            for (let i = 0; i < len; i++)
+                                bytes[i] = byteChars.charCodeAt(i);
+                            const blob = new Blob([bytes], {
+                                type: "image/jpeg",
+                            });
+                            this.aiHandler.sendAdkVideoChunk(blob, {
+                                mime: "image/jpeg",
+                                durMs: 100,
+                            });
+                        } catch (e) {
+                            console.warn("[ADK] JPEG send failed", e);
+                        }
                     } else if (this.aiHandler.isGeminiConnectionActive()) {
                         // Legacy Gemini path
                         const status =

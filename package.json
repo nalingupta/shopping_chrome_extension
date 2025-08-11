@@ -7,8 +7,8 @@
         "server:dev": "conda run -n shopping-chrome-ext env ADK_LOG_LEVEL=DEBUG LOG_LEVEL=DEBUG uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload --app-dir server --env-file .env",
         "verify:adk": "node scripts/verify_adk_e2e.js",
         "preserve": "kill -TERM $(lsof -ti tcp:8080) 2>/dev/null || true; sleep 1; kill -KILL $(lsof -ti tcp:8080) 2>/dev/null || true",
-        "serve": "bash -lc 'source ~/.zshrc >/dev/null 2>&1 || true; conda activate shopping-chrome-ext && ADK_LOG_LEVEL=DEBUG LOG_LEVEL=DEBUG uvicorn app.main:app --app-dir server --host 0.0.0.0 --port 8080 --reload --env-file .env --log-level info --access-log'",
-        "serve:noreload": "bash -lc 'source ~/.zshrc >/dev/null 2>&1 || true; conda activate shopping-chrome-ext && ADK_LOG_LEVEL=DEBUG LOG_LEVEL=DEBUG uvicorn app.main:app --app-dir server --host 0.0.0.0 --port 8080 --env-file .env --log-level info --access-log'"
+        "serve": "bash -lc 'source ~/.zshrc >/dev/null 2>&1 || true; conda activate shopping-chrome-ext && ADK_LOG_LEVEL=DEBUG LOG_LEVEL=DEBUG GOOGLE_APPLICATION_CREDENTIALS=\"$PWD/server/credentials/service_account.json\" GOOGLE_CLOUD_PROJECT=shopping-chrome-ext-nalin GOOGLE_CLOUD_LOCATION=us-central1 GOOGLE_GENAI_USE_VERTEXAI=TRUE uvicorn app.main:app --app-dir server --host 0.0.0.0 --port 8080 --reload --env-file .env --log-level info --access-log'",
+        "serve:noreload": "bash -lc 'source ~/.zshrc >/dev/null 2>&1 || true; conda activate shopping-chrome-ext && ADK_LOG_LEVEL=DEBUG LOG_LEVEL=DEBUG GOOGLE_APPLICATION_CREDENTIALS=\"$PWD/server/credentials/service_account.json\" GOOGLE_CLOUD_PROJECT=shopping-chrome-ext-nalin GOOGLE_CLOUD_LOCATION=us-central1 GOOGLE_GENAI_USE_VERTEXAI=TRUE uvicorn app.main:app --app-dir server --host 0.0.0.0 --port 8080 --env-file .env --log-level info --access-log'"
     },
     "type": "module",
     "dependencies": {},

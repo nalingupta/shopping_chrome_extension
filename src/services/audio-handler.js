@@ -95,22 +95,21 @@ export class AudioHandler {
     }
 
     async startAudioStreaming() {
-        // In ADK mode we do not stream PCM via WebAudio; skip capture entirely
-        try {
-            if (this.aiHandler?.isAdkMode) {
-                return { success: true };
-            }
-        } catch (_) {}
-
         // Defensive: attempt to resume audio context before starting
         try {
-            if (
-                this.aiHandler &&
-                this.aiHandler.geminiAPI &&
-                this.aiHandler.geminiAPI.audioContext &&
-                this.aiHandler.geminiAPI.audioContext.state === "suspended"
-            ) {
-                await this.aiHandler.geminiAPI.audioContext.resume();
+            if (this.aiHandler && this.aiHandler.geminiAPI) {
+                // Ensure an AudioContext exists even in ADK mode
+                if (!this.aiHandler.geminiAPI.audioContext) {
+                    try {
+                        await this.aiHandler.geminiAPI.initialize();
+                    } catch (_) {}
+                }
+                if (
+                    this.aiHandler.geminiAPI.audioContext &&
+                    this.aiHandler.geminiAPI.audioContext.state === "suspended"
+                ) {
+                    await this.aiHandler.geminiAPI.audioContext.resume();
+                }
             }
         } catch (e) {
             // Non-fatal; fallback to starting anyway

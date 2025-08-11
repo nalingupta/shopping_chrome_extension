@@ -15,7 +15,13 @@ except Exception:
 async def check_text(client: genai.Client, model: str) -> bool:  # type: ignore
     try:
         async with client.aio.live.connect(model=model, config={"response_modalities": ["TEXT"]}) as s:
-            await s.send_realtime_input(text="Say hi in one word.")
+            # Use client_content turn to align with documented patterns
+            await s.send_client_content(
+                turns=genai_types.Content(
+                    role="user",
+                    parts=[genai_types.Part.from_text(text="Say hi in one word.")],
+                )
+            )
             stream = s.receive()
             for _ in range(20):
                 try:
@@ -32,29 +38,35 @@ async def check_text(client: genai.Client, model: str) -> bool:  # type: ignore
     return False
 
 
-async def check_audio(client: genai.Client, model: str) -> bool:  # type: ignore
+async def check_media(client: genai.Client, model: str) -> bool:  # type: ignore
     try:
-        cfg = {
-            "response_modalities": ["TEXT"],
-            "input_audio_transcription": {},
-        }
+        cfg = {"response_modalities": ["TEXT"], "input_audio_transcription": {}}
         async with client.aio.live.connect(model=model, config=cfg) as s:
-            # 1s of 16kHz PCM16 silence to validate transport
-            import array
+            # Send one tiny JPEG frame
+            import base64
+            jpeg_b64 = (
+                "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////2wBDAf//////////////////////////////////////////wAARCABkAGQDAREAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAb/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAgT/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwCfAAH/2Q=="
+            )
+            jpeg_bytes = base64.b64decode(jpeg_b64)
+            await s.send_realtime_input(
+                video=genai_types.Blob(data=jpeg_bytes, mime_type="image/jpeg")
+            )
 
-            samples = 16000
-            pcm16 = array.array("h", [0] * samples).tobytes()
+            # Send 1s PCM16 @16kHz
+            import array
+            pcm16 = array.array("h", [0] * 16000).tobytes()
             await s.send_realtime_input(
                 audio=genai_types.Blob(data=pcm16, mime_type="audio/pcm;rate=16000")
             )
-            # Mark end of turn explicitly so the server can process
-            try:
-                await s.send_client_content(
-                    turns=genai_types.Content(role="user", parts=[]),
-                    turn_complete=True,
-                )
-            except Exception:
-                pass
+
+            # Provide a user prompt and mark turn complete
+            await s.send_client_content(
+                turns=genai_types.Content(
+                    role="user",
+                    parts=[genai_types.Part.from_text(text="Briefly describe the image.")],
+                ),
+                turn_complete=True,
+            )
 
             stream = s.receive()
             got_any = False
@@ -83,9 +95,9 @@ async def check_audio(client: genai.Client, model: str) -> bool:  # type: ignore
 async def _run(project: str, location: str, model: str) -> int:
     client = genai.Client(vertexai=True, project=project, location=location)
     ok_text = await check_text(client, model)
-    ok_audio = await check_audio(client, model)
-    print(f"summary: text={'OK' if ok_text else 'FAIL'} audio={'OK' if ok_audio else 'FAIL'}")
-    return 0 if (ok_text and ok_audio) else 10
+    ok_media = await check_media(client, model)
+    print(f"summary: text={'OK' if ok_text else 'FAIL'} media={'OK' if ok_media else 'FAIL'}")
+    return 0 if (ok_text and ok_media) else 10
 
 
 def main() -> int:

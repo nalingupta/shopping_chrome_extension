@@ -53,30 +53,43 @@ class LiveStreamBridge:
                 break
 
             if "bytes" in message and message["bytes"] is not None:
-                # Binary video chunk
+                # Binary media chunk (audio or video) preceded by a header
                 data: bytes = message["bytes"]  # type: ignore[assignment]
                 self._chunk_count += 1
                 self._chunk_bytes += len(data)
                 try:
-                    # Drop tiny/empty initial slices that Gemini Live rejects
                     if len(data) < 1024:
-                        self._log.debug("video_chunk DROP small size=%s (seq=%s)", len(data), (self._expecting_video_header or {}).get("seq"))
-                        self._expecting_video_header = None
+                        self._log.debug(
+                            "media_chunk DROP small size=%s (video_seq=%s)",
+                            len(data),
+                            (getattr(self, "_expecting_video_header", None) or {}).get("seq"),
+                        )
+                        setattr(self, "_expecting_audio_header", None)
+                        setattr(self, "_expecting_video_header", None)
                         continue
-                    header = self._expecting_video_header or {}
+                    audio_hdr = getattr(self, "_expecting_audio_header", None) or {}
+                    video_hdr = getattr(self, "_expecting_video_header", None) or {}
+                    header = audio_hdr or video_hdr
+                    hdr_type = "audio" if audio_hdr else "video"
                     self._log.debug(
-                        "video_chunk recv seq=%s size=%s mime=%s",
+                        "%s_chunk recv seq=%s size=%s mime=%s",
+                        hdr_type,
                         header.get("seq"),
                         len(data),
                         header.get("mime"),
                     )
-                    # Forward to ADK bridge if available
                     if self._bridge is not None:
-                        mime = str(header.get("mime") or "video/webm;codecs=vp8,opus")
+                        default_mime = "audio/pcm;rate=16000" if hdr_type == "audio" else "video/webm;codecs=vp8,opus"
+                        mime = str(header.get("mime") or default_mime)
+                        try:
+                            self._log.info("forward_blob type=%s mime=%s bytes=%s", hdr_type, mime, len(data))
+                        except Exception:
+                            pass
                         await self._bridge.ingest_blob(mime=mime, data=data)
                 except Exception:
                     pass
-                self._expecting_video_header = None
+                setattr(self, "_expecting_audio_header", None)
+                setattr(self, "_expecting_video_header", None)
                 continue
 
             if "text" in message and message["text"] is not None:
@@ -197,6 +210,10 @@ class LiveStreamBridge:
             try:
                 if self._bridge is not None:
                     await self._bridge.end_turn()
+                    try:
+                        self._log.info("turn_complete_signal_sent")
+                    except Exception:
+                        pass
                     async for piece in self._bridge.stream_deltas():
                         if piece:
                             if self._first_token_at_ms is None and self._turn_start_at_ms is not None:
@@ -250,6 +267,16 @@ class LiveStreamBridge:
                 "video_chunk_header seq=%s durMs=%s mime=%s",
                 payload.get("seq"),
                 payload.get("durMs"),
+                payload.get("mime"),
+            )
+            return
+
+        if msg_type == "audio_chunk_header":
+            # Optional header preceding a binary PCM audio frame
+            self._expecting_audio_header = payload
+            self._log.debug(
+                "audio_chunk_header seq=%s mime=%s",
+                payload.get("seq"),
                 payload.get("mime"),
             )
             return

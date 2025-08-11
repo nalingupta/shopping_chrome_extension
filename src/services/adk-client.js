@@ -138,6 +138,28 @@ export class ADKClient {
         }
     }
 
+    // ADK: send raw PCM16 audio as binary with explicit mime header
+    sendAudioChunk(blob, header = {}) {
+        if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+        const sanitized = { ...header };
+        if (sanitized && typeof sanitized === "object") {
+            delete sanitized.type;
+        }
+        const fullHeader = {
+            ...sanitized,
+            seq: this._seq++,
+            ts: Date.now(),
+            mime: sanitized.mime || "audio/pcm;rate=16000",
+            type: "audio_chunk_header",
+        };
+        try {
+            this.ws.send(JSON.stringify(fullHeader));
+            this.ws.send(blob);
+        } catch (err) {
+            if (this.handlers.onError) this.handlers.onError(err);
+        }
+    }
+
     ping() {
         this.#sendJSON({ type: "ping" });
     }

@@ -17,7 +17,11 @@ async def probe_live(model: str, project: str, location: str, prompt: str) -> in
     try:
         async with client.aio.live.connect(
             model=model,
-            config={"response_modalities": ["TEXT"]},
+            config={
+                "response_modalities": ["TEXT"],
+                # align with server: explicitly allow input audio transcription
+                "input_audio_transcription": {},
+            },
         ) as session:
             print("Connected to Live session.")
             # Try sending a short text input; fall back if API shape differs
@@ -37,6 +41,31 @@ async def probe_live(model: str, project: str, location: str, prompt: str) -> in
                     sent = True
                 except Exception:
                     pass
+
+            # Send a small JPEG and 1s PCM to mirror extension behavior
+            try:
+                import base64
+                # 1x1 white pixel JPEG
+                jpeg_b64 = (
+                    "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////2wBDAf//////////////////////////////////////////wAARCABkAGQDAREAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAb/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAgT/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwCfAAH/2Q=="
+                )
+                jpeg_bytes = base64.b64decode(jpeg_b64)
+                await session.send_realtime_input(
+                    video=genai_types.Blob(data=jpeg_bytes, mime_type="image/jpeg")
+                )
+            except Exception:
+                pass
+
+            try:
+                import array
+                pcm16 = array.array("h", [0] * 16000).tobytes()
+                await session.send_realtime_input(
+                    audio=genai_types.Blob(
+                        data=pcm16, mime_type="audio/pcm;rate=16000"
+                    )
+                )
+            except Exception:
+                pass
             if not sent:
                 print("Warning: could not send text via send_realtime_input; proceeding to receive events only.")
 

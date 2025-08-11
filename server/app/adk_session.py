@@ -322,95 +322,39 @@ class ADKLiveBridge(BaseLiveBridge):
         if not self._adk_ok or self._closed:
             return
         try:
-            # Prefer ADK types for live queue, fallback to genai types
-            adk_types = None
-            try:
-                from google.adk import types as adk_types  # type: ignore
-            except Exception:
-                adk_types = None
+            if self._live_q is None:
+                return
             from google.genai import types as genai_types  # type: ignore
-            if self._live_q is not None:
-                safe_mime = str(mime or "").strip() or "video/webm;codecs=vp8,opus"
-                content = None
-                part_field_used = None
-                # Prefer ADK native types if available
-                if adk_types is not None:
-                    try:
-                        adk_blob = adk_types.Blob(data=data, mime_type=safe_mime)
-                        part = adk_types.Part(blob=adk_blob)
-                        content = adk_types.Content(role="user", parts=[part])
-                        part_field_used = "blob"
-                    except Exception:
-                        # Retry with inline_data field
-                        try:
-                            adk_blob = adk_types.Blob(data=data, mime_type=safe_mime)
-                            part = adk_types.Part(inline_data=adk_blob)
-                            content = adk_types.Content(role="user", parts=[part])
-                            part_field_used = "inline_data"
-                        except Exception:
-                            content = None
-                # Fallback to python-genai types
-                if content is None:
-                    try:
-                        g_blob = genai_types.Blob(data=data, mime_type=safe_mime)
-                        part = genai_types.Part(inline_data=g_blob)
-                        content = genai_types.Content(role="user", parts=[part])
-                        part_field_used = "inline_data_bytes"
-                    except Exception:
-                        # Retry with base64 inline_data for older genai variants
-                        try:
-                            import base64 as _b64
-                            b64 = _b64.b64encode(data).decode("ascii")
-                        except Exception:
-                            b64 = ""
-                        if b64:
-                            try:
-                                g_blob = genai_types.Blob(data=b64, mime_type=safe_mime)
-                                part = genai_types.Part(inline_data=g_blob)
-                                content = genai_types.Content(role="user", parts=[part])
-                                part_field_used = "inline_data_b64"
-                            except Exception:
-                                content = None
-                        else:
-                            content = None
-                if content is None:
+            safe_mime = str(mime or "").strip() or "application/octet-stream"
+            blob = genai_types.Blob(data=data, mime_type=safe_mime)
+            used_method = None
+            for name in ("send_realtime", "send", "enqueue", "put", "write"):
+                fn = getattr(self._live_q, name, None)
+                if not callable(fn):
+                    continue
+                try:
+                    await self._maybe_await(fn(blob))  # type: ignore[misc]
+                    used_method = name
+                    break
+                except Exception as exc:
                     try:
                         logging.getLogger("adk.bridge").warning(
-                            "content_build_failed mime=%s provider=%s",
-                            safe_mime,
-                            "adk_types" if adk_types is not None else "genai_types",
+                            "ingest_blob_send_failed method=%s err=%s", name, str(exc)
                         )
                     except Exception:
                         pass
-                    return
-                # Try multiple method names and log which succeeded
-                used_method = None
-                for name in ("send_realtime", "send", "enqueue", "put", "write"):
-                    fn = getattr(self._live_q, name, None)
-                    if not callable(fn):
-                        continue
-                    try:
-                        await self._maybe_await(fn(content))  # type: ignore[misc]
-                        used_method = name
-                        break
-                    except Exception as exc:
-                        try:
-                            logging.getLogger("adk.bridge").warning(
-                                "ingest_blob_failed method=%s err=%s", name, str(exc)
-                            )
-                        except Exception:
-                            pass
-                        continue
-                logging.getLogger("adk.bridge").info(
-                    "ingest_blob bytes=%s mime=%s method=%s part_field=%s",
-                    len(data),
-                    safe_mime,
-                    used_method or "unknown",
-                    part_field_used or "unknown",
-                )
+                    continue
+            logging.getLogger("adk.bridge").info(
+                "ingest_blob bytes=%s mime=%s method=%s send_kind=blob",
+                len(data),
+                safe_mime,
+                used_method or "unknown",
+            )
         except Exception:
-            # Swallow to keep session resilient
-            pass
+            try:
+                logging.getLogger("adk.bridge").error("ingest_blob exception; dropping frame", exc_info=True)
+            except Exception:
+                pass
 
     async def ingest_user_text(self, text: str) -> None:
         if not self._adk_ok or self._closed:
@@ -676,6 +620,8 @@ class ADKLiveBridge(BaseLiveBridge):
                             "video": {"mime_type": "video/webm;codecs=vp8,opus"},
                             "audio": {"mime_type": "audio/pcm;rate=16000"},
                         },
+                        # Enable input audio transcription per reference implementation
+                        input_audio_transcription={},
                     )
                 except Exception:
                     adk_run_config = None

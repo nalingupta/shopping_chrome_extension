@@ -101,12 +101,19 @@ export class AudioCaptureService {
 
             if (
                 type === "audioData" &&
-                this.geminiAPI.isGeminiConnectionActive() &&
-                this.geminiAPI.geminiAPI.isAudioInputEnabled()
+                ((this.geminiAPI.isAdkMode && this.geminiAPI.isAdkConnected) ||
+                    (this.geminiAPI.isGeminiConnectionActive() &&
+                        this.geminiAPI.geminiAPI.isAudioInputEnabled()))
             ) {
-                const uint8Array = new Uint8Array(pcmData.buffer);
-                const base64 = btoa(String.fromCharCode(...uint8Array));
-                this.geminiAPI.sendAudioData(base64);
+                if (this.geminiAPI.isAdkMode) {
+                    // Send raw PCM bytes to ADK
+                    this.geminiAPI.sendAdkAudioChunk(pcmData.buffer);
+                } else {
+                    // Legacy Gemini base64 path
+                    const uint8Array = new Uint8Array(pcmData.buffer);
+                    const base64 = btoa(String.fromCharCode(...uint8Array));
+                    this.geminiAPI.sendAudioData(base64);
+                }
 
                 if (maxAmplitude !== undefined) {
                     this.onAudioLevelDetected(maxAmplitude);
