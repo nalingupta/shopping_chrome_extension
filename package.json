@@ -1,12 +1,15 @@
 {
-  "name": "shopping-chrome-extension",
-  "version": "0.18.0",
-  "scripts": {
-    "build": "echo 'No build process needed for this extension'",
-    "lint": "echo 'Linting completed - no linter configured'"
-  },
-
-  "type": "module",
-  "dependencies": {
-  }
+    "name": "shopping-chrome-extension",
+    "version": "0.18.0",
+    "scripts": {
+        "build": "echo 'No build process needed for this extension'",
+        "lint": "echo 'Linting completed - no linter configured'",
+        "kill:8787": "lsof -nP -iTCP:8787 -sTCP:LISTEN -t | xargs -r kill -9 || true",
+        "serve": "npm run kill:8787 && dotenv -e server/.env -- conda run -n shopping-chrome-ext bash -lc 'uvicorn server.main:app --port 8787 --reload'"
+    },
+    "type": "module",
+    "dependencies": {},
+    "devDependencies": {
+        "dotenv-cli": "^7.4.2"
+    }
 }

@@ -48,9 +48,12 @@ class ConnectionState:
         self.audio_chunks: List[Tuple[float, bytes, int, int]] = []  # (tsStartMs, pcm_bytes, num_samples, sample_rate)
         self.transcripts: List[Tuple[float, str]] = []  # (tsMs, text)
         # VAD
-        self.sample_rate = 16000
-        self.vad = RmsVadSegmenter(sample_rate_hz=self.sample_rate, cfg=VadConfig())
+        self.sample_rate = int(os.getenv("VAD_SAMPLE_RATE", "16000"))
+        self.vad = RmsVadSegmenter(sample_rate_hz=self.sample_rate, cfg=_make_vad_cfg_from_env())
         self.pending_finalizations: List[Dict[str, Any]] = []  # queued segments awaiting transcript
+        # Backpressure thresholds
+        self.max_frames_buffer = int(os.getenv("MAX_FRAMES_BUFFER", "5000"))
+        self.max_audio_chunks = int(os.getenv("MAX_AUDIO_CHUNKS", "5000"))
 
 
 async def _send_json_safe(ws: WebSocket, payload: Dict[str, Any]) -> None:
@@ -111,7 +114,8 @@ async def websocket_endpoint(websocket: WebSocket):
                 await _send_json_safe(websocket, {"type": "ack", "seq": seq, "ackType": "init"})
                 # Send capture configuration to client (only capture FPS is exposed to client)
                 try:
-                    capture_fps = 10  # configurable server-side default
+                    capture_fps_env = os.getenv("CAPTURE_FPS", "10")
+                    capture_fps = int(capture_fps_env) if str(capture_fps_env).isdigit() else 10
                     await _send_json_safe(websocket, {"type": "config", "captureFps": capture_fps})
                 except Exception:
                     pass
@@ -126,8 +130,11 @@ async def websocket_endpoint(websocket: WebSocket):
                         jpeg_bytes = base64.b64decode(b64)
                         state.frames.append((ts, jpeg_bytes))
                         # keep last N minutes of frames; simple cap
-                        if len(state.frames) > 20000:
-                            state.frames = state.frames[-20000:]
+                        if len(state.frames) > state.max_frames_buffer:
+                            # drop oldest and notify busy
+                            drop = len(state.frames) - state.max_frames_buffer
+                            state.frames = state.frames[drop:]
+                            await _send_json_safe(websocket, {"type": "status", "state": "busy", "droppedFrames": drop})
                 except Exception as exc:
                     logger.warning("Failed to buffer frame: %s", exc)
                 await _send_json_safe(websocket, {"type": "ack", "seq": seq, "ackType": "imageFrame"})
@@ -144,8 +151,10 @@ async def websocket_endpoint(websocket: WebSocket):
                         pcm_bytes = base64.b64decode(b64)
                         # buffer full chunk for later encoding
                         state.audio_chunks.append((ts_start, pcm_bytes, num_samples, sr))
-                        if len(state.audio_chunks) > 20000:
-                            state.audio_chunks = state.audio_chunks[-20000:]
+                        if len(state.audio_chunks) > state.max_audio_chunks:
+                            drop = len(state.audio_chunks) - state.max_audio_chunks
+                            state.audio_chunks = state.audio_chunks[drop:]
+                            await _send_json_safe(websocket, {"type": "status", "state": "busy", "droppedAudioChunks": drop})
                         # slice into VAD frames of cfg.frame_ms
                         frame_ms = state.vad.cfg.frame_ms
                         samples_per_frame = int(sr * (frame_ms / 1000))
@@ -182,6 +191,16 @@ async def websocket_endpoint(websocket: WebSocket):
             elif mtype == "text":
                 state.text_msgs_received += 1
                 await _send_json_safe(websocket, {"type": "ack", "seq": seq, "ackType": "text"})
+            elif mtype == "control":
+                action = (message.get("action") or "").lower()
+                if action == "forcesegmentclose":
+                    # derive a window from last 2s of audio if available; else last 2s of frames; else ignore
+                    now_ms = _latest_ts(state)
+                    seg_end = now_ms
+                    seg_start = max(0.0, seg_end - 2000.0)
+                    await _send_json_safe(websocket, {"type": "status", "state": "segment_forced", "segment_start_ms": seg_start, "segment_end_ms": seg_end})
+                    asyncio.create_task(_finalize_segment(state, seg_start, seg_end))
+                await _send_json_safe(websocket, {"type": "ack", "seq": seq, "ackType": "control"})
             else:
                 await _send_json_safe(websocket, {"type": "error", "message": f"unknown_type:{mtype}"})
 
@@ -222,7 +241,8 @@ async def _finalize_segment(state: ConnectionState, seg_start_ms: float, seg_end
             if ts + (num / sr) * 1000.0 >= seg_start_ms and ts <= seg_end_ms:
                 audio_window.append((ts, pcm, num, sr))
         with tempfile.TemporaryDirectory(prefix="seg_") as tmpdir:
-            result = encode_segment(tmpdir, frames_window, audio_window, seg_start_ms, seg_end_ms, encode_fps=2.0)
+            encode_fps = float(os.getenv("ENCODE_FPS", "2.0"))
+            result = encode_segment(tmpdir, frames_window, audio_window, seg_start_ms, seg_end_ms, encode_fps=encode_fps)
             # Decide content to send to Gemini per fallback rules:
             # 1) If frames selected > 0 and video muxed, try video + transcript
             # 2) Else if audio present, send audio WAV + transcript
@@ -259,14 +279,44 @@ async def _finalize_segment(state: ConnectionState, seg_start_ms: float, seg_end
             if gemini_text:
                 await _send_json_safe(state.websocket, {"type": "response", "text": gemini_text})
     except Exception as exc:
-        payload = {
+        # provide error plus fallback response if possible
+        try:
+            gemini_text = generate_video_response(None, text)
+        except Exception:
+            gemini_text = ""
+        await _send_json_safe(state.websocket, {
             "type": "segment",
             "segmentStartMs": seg_start_ms,
             "segmentEndMs": seg_end_ms,
             "transcript": text,
             "encoded": False,
             "error": f"encode_failed:{exc}",
-        }
-        await _send_json_safe(state.websocket, payload)
+            "responseText": gemini_text,
+        })
+        if gemini_text:
+            await _send_json_safe(state.websocket, {"type": "response", "text": gemini_text})
+
+
+def _latest_ts(state: ConnectionState) -> float:
+    last_audio_ts = 0.0
+    if state.audio_chunks:
+        ts, _, num, sr = state.audio_chunks[-1]
+        last_audio_ts = ts + (num / sr) * 1000.0
+    last_frame_ts = state.frames[-1][0] if state.frames else 0.0
+    return max(last_audio_ts, last_frame_ts)
+
+
+def _make_vad_cfg_from_env() -> VadConfig:
+    try:
+        return VadConfig(
+            frame_ms=int(os.getenv("VAD_FRAME_MS", "30")),
+            min_speech_ms=int(os.getenv("VAD_MIN_SPEECH_MS", "300")),
+            end_silence_ms=int(os.getenv("VAD_END_SILENCE_MS", "800")),
+            pre_roll_ms=int(os.getenv("VAD_PRE_ROLL_MS", "200")),
+            post_roll_ms=int(os.getenv("VAD_POST_ROLL_MS", "300")),
+            amplitude_threshold=float(os.getenv("VAD_AMPLITUDE_THRESHOLD", "0.02")),
+        )
+    except Exception:
+        return VadConfig()
 
 

@@ -134,17 +134,27 @@ def mux_to_webm(concat_path: str, audio_wav_path: str, out_path: str) -> None:
     cmd = [
         "ffmpeg",
         "-y",
-        "-safe", "0",
-        "-f", "concat",
-        "-i", concat_path,
-        "-i", audio_wav_path,
-        "-c:v", "libvpx-vp9",
-        "-pix_fmt", "yuv420p",
-        "-c:a", "libopus",
+        "-safe",
+        "0",
+        "-f",
+        "concat",
+        "-i",
+        concat_path,
+        "-i",
+        audio_wav_path,
+        "-c:v",
+        "libvpx-vp9",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "libopus",
         "-shortest",
         out_path,
     ]
-    subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if proc.returncode != 0:
+        err = proc.stderr.decode("utf-8", errors="ignore")
+        raise RuntimeError(f"ffmpeg failed ({proc.returncode}): {err[:1200]}")
 
 
 def encode_segment(
