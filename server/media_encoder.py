@@ -10,10 +10,11 @@ import wave
 
 @dataclass
 class EncodeResult:
-    out_path: str
+    video_out_path: str
     frame_count: int
     audio_ms: float
     fps: float
+    audio_wav_path: str
 
 
 def _ensure_dir(path: str) -> None:
@@ -174,7 +175,8 @@ def encode_segment(
     concat_path = os.path.join(session_dir, "frames.txt")
     write_concat_file(selected, concat_path)
     out_path = os.path.join(session_dir, "out.webm")
-    mux_to_webm(concat_path, audio_wav_path, out_path)
-    return EncodeResult(out_path=out_path, frame_count=count, audio_ms=audio_ms, fps=encode_fps)
+    if count > 0:
+        mux_to_webm(concat_path, audio_wav_path, out_path)
+    return EncodeResult(video_out_path=out_path, frame_count=count, audio_ms=audio_ms, fps=encode_fps, audio_wav_path=audio_wav_path)
 
 

@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import os
 import json
 import logging
 from typing import Any, Dict, List, Optional, Tuple
@@ -11,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .vad import RmsVadSegmenter, VadConfig
 from .media_encoder import encode_segment
+from .gemini_client import generate_video_response, generate_audio_response
 
 
 logger = logging.getLogger("server")
@@ -221,18 +223,41 @@ async def _finalize_segment(state: ConnectionState, seg_start_ms: float, seg_end
                 audio_window.append((ts, pcm, num, sr))
         with tempfile.TemporaryDirectory(prefix="seg_") as tmpdir:
             result = encode_segment(tmpdir, frames_window, audio_window, seg_start_ms, seg_end_ms, encode_fps=2.0)
-            # For Phase 4, only report success and basic stats. We will attach the file path in Phase 5 for Gemini.
+            # Decide content to send to Gemini per fallback rules:
+            # 1) If frames selected > 0 and video muxed, try video + transcript
+            # 2) Else if audio present, send audio WAV + transcript
+            # 3) Else send transcript only
+            video_path = None
+            if result.frame_count > 0:
+                vp = os.path.join(tmpdir, "out.webm")
+                if os.path.exists(vp):
+                    video_path = vp
+
+            if video_path:
+                gemini_text = generate_video_response(video_path, text)
+                encoded = True
+            elif result.audio_ms > 0:
+                gemini_text = generate_audio_response(result.audio_wav_path, text)
+                encoded = False
+            else:
+                gemini_text = generate_video_response(None, text)
+                encoded = False
+
             payload = {
                 "type": "segment",
                 "segmentStartMs": seg_start_ms,
                 "segmentEndMs": seg_end_ms,
                 "transcript": text,
-                "encoded": True,
+                "encoded": encoded,
                 "frameCount": result.frame_count,
                 "audioMs": result.audio_ms,
                 "fps": result.fps,
+                "responseText": gemini_text,
             }
             await _send_json_safe(state.websocket, payload)
+            # Also emit a response message for UI rendering without client changes
+            if gemini_text:
+                await _send_json_safe(state.websocket, {"type": "response", "text": gemini_text})
     except Exception as exc:
         payload = {
             "type": "segment",
