@@ -7,6 +7,10 @@ export class AudioCaptureService {
         this.audioWorkletNode = null;
         this.audioSource = null;
         this.onAudioLevelCallback = null;
+        // Local audio processing state
+        this.audioContext = null;
+        this.audioSessionOffsetMs = null; // session-relative base time for the first audio sample
+        this.totalSamplesSent = 0; // running count for sample-accurate tsStartMs
     }
 
     async setupAudioCapture() {
@@ -24,7 +28,16 @@ export class AudioCaptureService {
                     googTypingNoiseDetection: true,
                 },
             });
-
+            // Initialize AudioContext if not already created
+            if (!this.audioContext) {
+                try {
+                    const AC = window.AudioContext || window.webkitAudioContext;
+                    this.audioContext = new AC({ sampleRate: 16000 });
+                } catch (_) {
+                    const AC = window.AudioContext || window.webkitAudioContext;
+                    this.audioContext = new AC();
+                }
+            }
             return true;
         } catch (error) {
             console.error("Audio capture setup failed:", error);
@@ -38,19 +51,25 @@ export class AudioCaptureService {
         }
 
         try {
-            // Ensure AudioContext is active before starting processing
-            if (
-                this.geminiAPI.geminiAPI.audioContext &&
-                this.geminiAPI.geminiAPI.audioContext.state === "suspended"
-            ) {
+            // Ensure AudioContext exists and is running
+            if (!this.audioContext) {
                 try {
-                    await this.geminiAPI.geminiAPI.audioContext.resume();
+                    const AC = window.AudioContext || window.webkitAudioContext;
+                    this.audioContext = new AC({ sampleRate: 16000 });
+                } catch (_) {
+                    const AC = window.AudioContext || window.webkitAudioContext;
+                    this.audioContext = new AC();
+                }
+            }
+            if (this.audioContext.state === "suspended") {
+                try {
+                    await this.audioContext.resume();
                 } catch (e) {
                     console.warn("AudioContext resume failed:", e);
                 }
             }
 
-            if (this.geminiAPI.geminiAPI.audioContext.audioWorklet) {
+            if (this.audioContext.audioWorklet) {
                 await this.startAudioWorkletProcessing();
                 streamingLogger.logInfo(
                     "🎤 Audio stream started (AudioWorklet)"
@@ -87,12 +106,10 @@ export class AudioCaptureService {
         const processorUrl = chrome.runtime.getURL(
             "src/audio/pcm-processor.js"
         );
-        await this.geminiAPI.geminiAPI.audioContext.audioWorklet.addModule(
-            processorUrl
-        );
+        await this.audioContext.audioWorklet.addModule(processorUrl);
 
         this.audioWorkletNode = new AudioWorkletNode(
-            this.geminiAPI.geminiAPI.audioContext,
+            this.audioContext,
             "pcm-processor"
         );
 
@@ -100,12 +117,22 @@ export class AudioCaptureService {
             const { type, pcmData, maxAmplitude } = event.data;
             if (type !== "audioData") return;
 
-            // Compute timestamps using a session clock; fall back to now
+            // Sample-accurate session-relative timestamps
             const numSamples = pcmData?.length || 0;
             const sampleRate = 16000;
             const durationMs = (numSamples / sampleRate) * 1000;
-            const nowMs = performance?.now?.() || Date.now();
-            const tsStartMs = nowMs - durationMs;
+            const sessionStartMs = this.geminiAPI.getSessionStartMs?.() || null;
+            if (this.audioSessionOffsetMs == null) {
+                const nowRel = sessionStartMs
+                    ? (performance?.now?.() || Date.now()) - sessionStartMs
+                    : 0;
+                // Anchor base to the start of the first chunk
+                this.audioSessionOffsetMs = Math.max(0, nowRel - durationMs);
+                this.totalSamplesSent = 0;
+            }
+            const tsStartMs =
+                this.audioSessionOffsetMs +
+                (this.totalSamplesSent / sampleRate) * 1000;
 
             if (this.geminiAPI.isGeminiConnectionActive()) {
                 const uint8Array = new Uint8Array(pcmData.buffer);
@@ -116,6 +143,7 @@ export class AudioCaptureService {
                     numSamples,
                     sampleRate
                 );
+                this.totalSamplesSent += numSamples;
             }
 
             if (maxAmplitude !== undefined) {
@@ -123,24 +151,30 @@ export class AudioCaptureService {
             }
         };
 
-        this.audioSource =
-            this.geminiAPI.geminiAPI.audioContext.createMediaStreamSource(
-                this.audioStream
-            );
+        this.audioSource = this.audioContext.createMediaStreamSource(
+            this.audioStream
+        );
         this.audioSource.connect(this.audioWorkletNode);
     }
 
     startScriptProcessorFallback() {
-        this.audioSource =
-            this.geminiAPI.geminiAPI.audioContext.createMediaStreamSource(
-                this.audioStream
-            );
-        const audioProcessor =
-            this.geminiAPI.geminiAPI.audioContext.createScriptProcessor(
-                4096,
-                1,
-                1
-            );
+        if (!this.audioContext) {
+            try {
+                const AC = window.AudioContext || window.webkitAudioContext;
+                this.audioContext = new AC({ sampleRate: 16000 });
+            } catch (_) {
+                const AC = window.AudioContext || window.webkitAudioContext;
+                this.audioContext = new AC();
+            }
+        }
+        this.audioSource = this.audioContext.createMediaStreamSource(
+            this.audioStream
+        );
+        const audioProcessor = this.audioContext.createScriptProcessor(
+            4096,
+            1,
+            1
+        );
 
         audioProcessor.onaudioprocess = (event) => {
             if (!this.geminiAPI.isGeminiConnectionActive()) return;
@@ -169,8 +203,17 @@ export class AudioCaptureService {
             const numSamples = pcmData.length;
             const sampleRate = 16000;
             const durationMs = (numSamples / sampleRate) * 1000;
-            const nowMs = performance?.now?.() || Date.now();
-            const tsStartMs = nowMs - durationMs;
+            const sessionStartMs = this.geminiAPI.getSessionStartMs?.() || null;
+            if (this.audioSessionOffsetMs == null) {
+                const nowRel = sessionStartMs
+                    ? (performance?.now?.() || Date.now()) - sessionStartMs
+                    : 0;
+                this.audioSessionOffsetMs = Math.max(0, nowRel - durationMs);
+                this.totalSamplesSent = 0;
+            }
+            const tsStartMs =
+                this.audioSessionOffsetMs +
+                (this.totalSamplesSent / sampleRate) * 1000;
 
             const uint8Array = new Uint8Array(pcmData.buffer);
             const base64 = btoa(String.fromCharCode(...uint8Array));
@@ -180,6 +223,7 @@ export class AudioCaptureService {
                 numSamples,
                 sampleRate
             );
+            this.totalSamplesSent += numSamples;
         };
 
         this.audioSource.connect(audioProcessor);
@@ -192,6 +236,9 @@ export class AudioCaptureService {
             this.audioStream.getTracks().forEach((track) => track.stop());
             this.audioStream = null;
         }
+        // Reset session timestamping state
+        this.audioSessionOffsetMs = null;
+        this.totalSamplesSent = 0;
     }
 
     onAudioLevelDetected(level) {

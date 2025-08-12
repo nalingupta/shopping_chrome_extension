@@ -44,6 +44,19 @@ export class AudioHandler {
                     if (callbacks.transcription)
                         callbacks.transcription(finalText);
                 } catch (_) {}
+                // Send final transcript to backend with session-relative timestamp
+                try {
+                    const sessionStart =
+                        this.aiHandler.getSessionStartMs?.() || null;
+                    const tsMs = sessionStart
+                        ? (performance?.now?.() || Date.now()) - sessionStart
+                        : 0;
+                    this.aiHandler.serverAPI?.sendTranscript(
+                        String(finalText || ""),
+                        tsMs,
+                        true
+                    );
+                } catch (_) {}
             },
             onAudioStreamingStart: async () => {
                 await this.startAudioStreaming();

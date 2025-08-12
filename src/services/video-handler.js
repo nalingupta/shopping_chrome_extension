@@ -223,7 +223,7 @@ export class VideoHandler {
 
         this.previewManager.startPreview();
         this.screenCapture.startRecording();
-        streamingLogger.logInfo("📹 Video stream started (10 FPS)");
+        streamingLogger.logInfo("📹 Video stream started (continuous)");
 
         // Determine capture fps from server config when available
         const captureFps =
@@ -281,21 +281,13 @@ export class VideoHandler {
                     `CAPTURED frame from tab=${currIdAfter} (pre=${currIdBefore})`
                 );
 
-                // Resume sending only after first stable frame post-switch and while speech is active
-                if (this.speechActive && !this.videoStreamingStarted) {
-                    this.videoStreamingStarted = true;
-                    streamingLogger.logInfo(
-                        "RESUME video sending after stable frame"
-                    );
-                }
-
-                if (
-                    this.videoStreamingStarted &&
-                    this.speechActive &&
-                    this.aiHandler.isGeminiConnectionActive()
-                ) {
-                    const tsMs = performance?.now?.() || Date.now();
-                    // frameData is base64 JPEG per existing capture service
+                // Continuous streaming: always send frames when connected
+                if (this.aiHandler.isGeminiConnectionActive()) {
+                    const sessionStart =
+                        this.aiHandler.getSessionStartMs?.() || null;
+                    const tsMs = sessionStart
+                        ? (performance?.now?.() || Date.now()) - sessionStart
+                        : performance?.now?.() || Date.now();
                     this.aiHandler.sendImageFrame(frameData, tsMs);
                 }
             } catch (error) {
