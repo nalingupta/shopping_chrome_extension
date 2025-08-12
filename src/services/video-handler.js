@@ -1,6 +1,7 @@
 import { ScreenCaptureService } from "./screen-capture-service.js";
 import { LivePreviewManager } from "./live-preview-manager.js";
 import { streamingLogger } from "../utils/streaming-logger.js";
+import { FEATURES } from "../config/features.js";
 
 export class VideoHandler {
     constructor(aiHandler) {
@@ -221,16 +222,22 @@ export class VideoHandler {
             return;
         }
 
+        // Determine capture fps: server override > 0 wins; else default by feature flag
+        const backendFps = this.aiHandler?.serverAPI?.getCaptureFps?.();
+        const defaultFps = FEATURES.USE_STATIC_SCREEN_CAPTURE ? 1 : 10;
+        const captureFps =
+            typeof backendFps === "number" && backendFps > 0
+                ? backendFps
+                : defaultFps;
+        const intervalMs = Math.max(10, Math.floor(1000 / captureFps));
+
+        // Align preview FPS to capture FPS and start services
+        this.previewManager.setFps?.(captureFps);
         this.previewManager.startPreview();
         this.screenCapture.startRecording();
-        streamingLogger.logInfo("📹 Video stream started (continuous)");
-
-        // Determine capture fps from server config when available
-        const captureFps =
-            (this.aiHandler?.serverAPI?.getCaptureFps?.() || 10) > 0
-                ? this.aiHandler.serverAPI.getCaptureFps()
-                : 10;
-        const intervalMs = Math.max(10, Math.floor(1000 / captureFps));
+        streamingLogger.logInfo(
+            `📹 Video stream started (continuous); captureFps=${captureFps}`
+        );
 
         this.screenshotInterval = setInterval(async () => {
             if (this._skipNextTick) {
@@ -276,12 +283,7 @@ export class VideoHandler {
                     return;
                 }
                 this.screenCaptureFailureCount = 0;
-                this.previewManager.updatePreview(frameData);
-                streamingLogger.logInfo(
-                    `CAPTURED frame from tab=${currIdAfter} (pre=${currIdBefore})`
-                );
-
-                // Continuous streaming: always send frames when connected
+                // Continuous streaming: send to backend first (priority)
                 if (this.aiHandler.isGeminiConnectionActive()) {
                     const sessionStart =
                         this.aiHandler.getSessionStartMs?.() || null;
@@ -290,6 +292,12 @@ export class VideoHandler {
                         : performance?.now?.() || Date.now();
                     this.aiHandler.sendImageFrame(frameData, tsMs);
                 }
+
+                // Then update live preview (lower priority)
+                this.previewManager.updatePreview(frameData);
+                streamingLogger.logInfo(
+                    `CAPTURED frame from tab=${currIdAfter} (pre=${currIdBefore})`
+                );
             } catch (error) {
                 if (
                     error.message &&
@@ -321,6 +329,19 @@ export class VideoHandler {
                         this.stopScreenshotStreaming();
                         return;
                     }
+                }
+
+                // Gracefully handle static capture skip conditions without stopping the stream
+                const msg = String(error?.message || "");
+                const isStaticSkip =
+                    msg.includes("static_backoff") ||
+                    msg.includes("restricted_or_blocked") ||
+                    msg.includes("window_minimized_or_unfocused") ||
+                    msg.includes("no_active_tab");
+
+                if (isStaticSkip) {
+                    streamingLogger.logInfo(`SKIP tick: ${msg}`);
+                    return;
                 }
 
                 const failureResult = await this.handleScreenCaptureFailure();

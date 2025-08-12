@@ -7,7 +7,7 @@ export class LivePreviewManager {
         this.isActive = false;
         this.frameCount = 0;
         this.lastFrameTime = 0;
-        this.fps = 10; // 10 FPS for preview
+        this.fps = 10; // default; will be overridden by VideoHandler
         this.frameInterval = 1000 / this.fps;
 
         this.initialize();
@@ -85,7 +85,7 @@ export class LivePreviewManager {
 
         const currentTime = Date.now();
 
-        // Throttle to 2 FPS
+        // Throttle to configured FPS
         if (currentTime - this.lastFrameTime < this.frameInterval) {
             return;
         }
@@ -162,6 +162,13 @@ export class LivePreviewManager {
         this.ctx.textAlign = "center";
         this.ctx.textBaseline = "middle";
         this.ctx.fillText("LIVE", padding + indicatorSize / 2, padding + 6);
+    }
+
+    setFps(fps) {
+        const n = Number(fps);
+        if (!Number.isFinite(n) || n <= 0) return;
+        this.fps = n;
+        this.frameInterval = 1000 / this.fps;
     }
 
     resize() {
