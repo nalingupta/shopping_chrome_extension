@@ -1,12 +1,12 @@
 {
-  "name": "shopping-chrome-extension",
-  "version": "0.18.0",
-  "scripts": {
-    "build": "echo 'No build process needed for this extension'",
-    "lint": "echo 'Linting completed - no linter configured'"
-  },
-
-  "type": "module",
-  "dependencies": {
-  }
+    "name": "shopping-chrome-extension",
+    "version": "0.18.0",
+    "scripts": {
+        "build": "echo 'No build process needed for this extension'",
+        "lint": "echo 'Linting completed - no linter configured'",
+        "serve": "zsh scripts/serve.sh"
+    },
+    "type": "module",
+    "dependencies": {},
+    "devDependencies": {}
 }

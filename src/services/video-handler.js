@@ -60,7 +60,7 @@ export class VideoHandler {
                         // Pause sending and clear pending frames before switch
                         this.videoStreamingStarted = false;
                         try {
-                            this.aiHandler?.geminiAPI?.clearPendingVideoFrames?.();
+                            // legacy path removed
                         } catch (_) {}
                         const result = await this.screenCapture.switchToTab(
                             activeInfo.tabId
@@ -223,7 +223,14 @@ export class VideoHandler {
 
         this.previewManager.startPreview();
         this.screenCapture.startRecording();
-        streamingLogger.logInfo("📹 Video stream started (10 FPS)");
+        streamingLogger.logInfo("📹 Video stream started (continuous)");
+
+        // Determine capture fps from server config when available
+        const captureFps =
+            (this.aiHandler?.serverAPI?.getCaptureFps?.() || 10) > 0
+                ? this.aiHandler.serverAPI.getCaptureFps()
+                : 10;
+        const intervalMs = Math.max(10, Math.floor(1000 / captureFps));
 
         this.screenshotInterval = setInterval(async () => {
             if (this._skipNextTick) {
@@ -274,32 +281,14 @@ export class VideoHandler {
                     `CAPTURED frame from tab=${currIdAfter} (pre=${currIdBefore})`
                 );
 
-                // Resume sending only after first stable frame post-switch and while speech is active
-                if (this.speechActive && !this.videoStreamingStarted) {
-                    this.videoStreamingStarted = true;
-                    streamingLogger.logInfo(
-                        "RESUME video sending after stable frame"
-                    );
-                }
-
-                if (
-                    this.videoStreamingStarted &&
-                    this.speechActive &&
-                    this.aiHandler.isGeminiConnectionActive()
-                ) {
-                    // Only send when Gemini is fully setup to avoid buffering stale frames
-                    const status =
-                        this.aiHandler.geminiAPI?.getConnectionStatus?.();
-                    streamingLogger.logInfo(
-                        `FRAME ready tab=${this.screenCapture.getCurrentTabId()} setup=${!!status?.isSetupComplete}`
-                    );
-                    if (status?.isSetupComplete) {
-                        this.aiHandler.sendVideoData(frameData);
-                    } else {
-                        streamingLogger.logInfo(
-                            `FRAME skipped (setup incomplete) tab=${this.screenCapture.getCurrentTabId()}`
-                        );
-                    }
+                // Continuous streaming: always send frames when connected
+                if (this.aiHandler.isGeminiConnectionActive()) {
+                    const sessionStart =
+                        this.aiHandler.getSessionStartMs?.() || null;
+                    const tsMs = sessionStart
+                        ? (performance?.now?.() || Date.now()) - sessionStart
+                        : performance?.now?.() || Date.now();
+                    this.aiHandler.sendImageFrame(frameData, tsMs);
                 }
             } catch (error) {
                 if (
@@ -339,7 +328,7 @@ export class VideoHandler {
                     this.stopScreenshotStreaming();
                 }
             }
-        }, 100);
+        }, intervalMs);
     }
 
     stopScreenshotStreaming() {

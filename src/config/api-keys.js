@@ -1,14 +1,10 @@
-// API Configuration - Hardcoded for production use
+// API Configuration for local development
 export const API_CONFIG = {
-    // Gemini API key for AI processing
-    GEMINI_API_KEY: 'AIzaSyBZNwOelWAZowrj2nUJaarQrF1R_goyu1I',
-    
+    // Backend server endpoints (Phase 1)
+    SERVER_WS_URL: "ws://127.0.0.1:8787/ws",
+    SERVER_HTTP_URL: "http://127.0.0.1:8787",
+
     // Connection settings
     CONNECTION_TIMEOUT: 30000, // 30 seconds
-    RETRY_ATTEMPTS: 3
+    RETRY_ATTEMPTS: 3,
 };
-
-// Validate API keys are present
-if (!API_CONFIG.GEMINI_API_KEY) {
-    console.error('Gemini API key missing in configuration');
-}

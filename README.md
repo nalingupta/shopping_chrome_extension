@@ -60,12 +60,16 @@ The extension uses a unified conversation management system:
 
 ## Technical Details
 
-### Architecture
+### Architecture (server-mediated)
 
--   **Background Script**: Handles cross-window messaging and state management
--   **Side Panel**: Main UI for user interaction
--   **Content Script**: Captures page information and screen data
--   **Services**: Modular services for audio, screen capture, and AI integration
+-   **Backend (FastAPI)**: WebSocket `/ws` for realtime media; health endpoint `/healthz`.
+    -   VAD-based segmentation with 2s transcript wait; server-side FPS downsampling and ffmpeg mux.
+    -   Fallback hierarchy: Video→Audio→Text; always calls Gemini 2.5 Flash via Google GenAI SDK.
+    -   Env-driven knobs: `CAPTURE_FPS`, `ENCODE_FPS`, VAD params.
+-   **Background Script**: Handles messaging and state management; no direct Gemini calls.
+-   **Side Panel**: Main UI; streams image frames and PCM audio to backend via WebSocket.
+-   **Content Script**: Captures page info.
+-   **Services**: Audio capture, screenshot capture, server WS client, UI orchestration.
 
 ### Storage
 
@@ -74,6 +78,16 @@ The extension uses a unified conversation management system:
 -   Automatic cleanup and migration utilities
 
 ### Cross-Window Communication
+
+### Local development
+
+-   Conda env: `shopping-chrome-ext` (Python 3.11). Install: `fastapi uvicorn[standard] websockets pydantic python-dotenv google-genai ffmpeg-python webrtcvad soundfile pillow`.
+-   ffmpeg required (installed via conda-forge).
+-   Backend env in `server/.env`:
+    -   `GEMINI_API_KEY=...`
+    -   Optional: `CAPTURE_FPS=10`, `ENCODE_FPS=2.0`, VAD env vars.
+-   Start server: `uvicorn server.main:app --port 8787 --reload`
+-   Extension CSP must allow `ws://127.0.0.1:*`.
 
 -   Chrome runtime messaging for real-time updates
 -   Storage change listeners for automatic synchronization
