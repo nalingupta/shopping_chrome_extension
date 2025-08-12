@@ -60,7 +60,7 @@ export class VideoHandler {
                         // Pause sending and clear pending frames before switch
                         this.videoStreamingStarted = false;
                         try {
-                            this.aiHandler?.geminiAPI?.clearPendingVideoFrames?.();
+                            // legacy path removed
                         } catch (_) {}
                         const result = await this.screenCapture.switchToTab(
                             activeInfo.tabId

@@ -1,6 +1,6 @@
 import { MESSAGE_TYPES } from "../utils/constants.js";
 import { StorageManager, clearChatStorageOnReload } from "../utils/storage.js";
-import { GeminiTextClient } from "../services/gemini-text-client.js";
+// Legacy GeminiTextClient removed; text is routed via server WS through AIHandler in the side panel
 import { MicrophoneService } from "../services/microphone-service.js";
 
 class BackgroundService {
@@ -116,16 +116,15 @@ class BackgroundService {
     }
 
     async handleProcessUserQuery(request, sender, sendResponse) {
+        // Route text to side panel UI; AIHandler will forward to server over WS
         try {
-            const response = await GeminiTextClient.processQuery(request.data);
-            sendResponse(response);
-        } catch (error) {
-            sendResponse({
-                success: false,
-                error: error.message,
-                response:
-                    "I'm sorry, I encountered an error while processing your request. Please try again.",
+            chrome.runtime.sendMessage({
+                type: MESSAGE_TYPES.PROCESS_USER_QUERY,
+                data: request.data,
             });
+            sendResponse({ success: true });
+        } catch (error) {
+            sendResponse({ success: false, error: error.message });
         }
     }
 
