@@ -118,14 +118,16 @@ def write_concat_file(frames_with_durations: List[Tuple[str, float]], concat_pat
     with open(concat_path, "w") as f:
         if not frames_with_durations:
             return
+        # Concat demuxer format: optional header, then for each file:
+        # file 'path'\n
+        # duration <sec> (applies to the preceding file). The last file is listed twice without duration.
+        f.write("ffconcat version 1.0\n")
         for i, (path, dur) in enumerate(frames_with_durations):
-            # ffmpeg concat demuxer expects duration BEFORE file, and last file listed twice (or without duration)
             if i < len(frames_with_durations) - 1:
-                f.write(f"duration {dur:.6f}\n")
                 f.write(f"file '{path}'\n")
-            else:
-                # last file: write duration then file twice to honor duration
                 f.write(f"duration {dur:.6f}\n")
+            else:
+                # Last file: write once and then repeat it with no duration line
                 f.write(f"file '{path}'\n")
                 f.write(f"file '{path}'\n")
 

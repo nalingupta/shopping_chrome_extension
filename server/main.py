@@ -12,7 +12,11 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .vad import RmsVadSegmenter, VadConfig
 from .media_encoder import encode_segment
-from .gemini_client import generate_video_response, generate_audio_response
+from .gemini_client import (
+    generate_video_response,
+    generate_audio_response,
+    generate_image_response,
+)
 
 
 logger = logging.getLogger("server")
@@ -72,6 +76,9 @@ async def websocket_endpoint(websocket: WebSocket):
     # Periodic status pings
     async def status_task():
         try:
+            frames_prev = 0
+            audio_prev = 0
+            transcripts_prev = 0
             while True:
                 await asyncio.sleep(5)
                 await _send_json_safe(
@@ -85,6 +92,31 @@ async def websocket_endpoint(websocket: WebSocket):
                         "text": state.text_msgs_received,
                     },
                 )
+                # Log a concise ingest summary every 5s
+                try:
+                    df = state.frames_received - frames_prev
+                    da = state.audio_chunks_received - audio_prev
+                    dt = state.transcripts_received - transcripts_prev
+                    frames_prev = state.frames_received
+                    audio_prev = state.audio_chunks_received
+                    transcripts_prev = state.transcripts_received
+                    rf = df / 5.0
+                    ra = da / 5.0
+                    logger.info(
+                        "INGEST 5s frames=%d (+%d, r=%.1f/s) audio=%d (+%d, r=%.1f/s) transcripts=%d (+%d) buffers: frames_buf=%d audio_buf=%d",
+                        state.frames_received,
+                        df,
+                        rf,
+                        state.audio_chunks_received,
+                        da,
+                        ra,
+                        state.transcripts_received,
+                        dt,
+                        len(state.frames),
+                        len(state.audio_chunks),
+                    )
+                except Exception:
+                    pass
         except Exception:
             # Task ends when connection closes
             return
@@ -122,7 +154,7 @@ async def websocket_endpoint(websocket: WebSocket):
             elif mtype == "imageFrame":
                 state.frames_received += 1
                 if state.frames_received % 100 == 0:
-                    logger.info("Frames received: %d", state.frames_received)
+                    logger.debug("Frames received: %d", state.frames_received)
                 try:
                     b64 = message.get("base64")
                     ts = float(message.get("tsMs") or 0)
@@ -141,7 +173,7 @@ async def websocket_endpoint(websocket: WebSocket):
             elif mtype == "audioChunk":
                 state.audio_chunks_received += 1
                 if state.audio_chunks_received % 100 == 0:
-                    logger.info("Audio chunks received: %d", state.audio_chunks_received)
+                    logger.debug("Audio chunks received: %d", state.audio_chunks_received)
                 try:
                     b64 = message.get("base64")
                     ts_start = float(message.get("tsStartMs") or 0)
@@ -190,7 +222,32 @@ async def websocket_endpoint(websocket: WebSocket):
                 await _send_json_safe(websocket, {"type": "ack", "seq": seq, "ackType": "transcript"})
             elif mtype == "text":
                 state.text_msgs_received += 1
+                # Acknowledge first
                 await _send_json_safe(websocket, {"type": "ack", "seq": seq, "ackType": "text"})
+                try:
+                    text = message.get("text") or ""
+                    ts = float(message.get("tsMs") or 0)
+                    logger.info("TEXT received tsMs=%.1f len=%d", ts, len(text))
+                    # Store as transcript candidate as well
+                    state.transcripts.append((ts, text))
+                    if len(state.transcripts) > 500:
+                        state.transcripts = state.transcripts[-500:]
+                    # Immediate typed-only finalize: short window and inline image (last frame) if present
+                    now_ms = _latest_ts(state)
+                    seg_end = now_ms
+                    seg_start = max(0.0, seg_end - 2000.0)
+                    asyncio.create_task(
+                        _finalize_segment(
+                            state,
+                            seg_start,
+                            seg_end,
+                            provided_text=text,
+                            skip_transcript_wait=True,
+                            prefer_inline_image=True,
+                        )
+                    )
+                except Exception:
+                    pass
             elif mtype == "control":
                 action = (message.get("action") or "").lower()
                 if action == "forcesegmentclose":
@@ -229,9 +286,19 @@ async def _await_transcript(state: ConnectionState, seg_start_ms: float, seg_end
     return chosen_text
 
 
-async def _finalize_segment(state: ConnectionState, seg_start_ms: float, seg_end_ms: float) -> None:
-    # 1) wait for transcript (<=2s)
-    text = await _await_transcript(state, seg_start_ms, seg_end_ms)
+async def _finalize_segment(
+    state: ConnectionState,
+    seg_start_ms: float,
+    seg_end_ms: float,
+    provided_text: Optional[str] = None,
+    skip_transcript_wait: bool = False,
+    prefer_inline_image: bool = False,
+) -> None:
+    # 1) transcript handling
+    if skip_transcript_wait:
+        text = provided_text
+    else:
+        text = await _await_transcript(state, seg_start_ms, seg_end_ms)
     # 2) encode segment (downsampled frames to 2 FPS) using timestamp-synchronized buffers
     try:
         # select frames within window
@@ -240,9 +307,48 @@ async def _finalize_segment(state: ConnectionState, seg_start_ms: float, seg_end
         for (ts, pcm, num, sr) in state.audio_chunks:
             if ts + (num / sr) * 1000.0 >= seg_start_ms and ts <= seg_end_ms:
                 audio_window.append((ts, pcm, num, sr))
+        logger.info(
+            "SEG window [%.1f, %.1f] frames_in=%d audio_chunks_in=%d",
+            seg_start_ms,
+            seg_end_ms,
+            len(frames_window),
+            len(audio_window),
+        )
         with tempfile.TemporaryDirectory(prefix="seg_") as tmpdir:
             encode_fps = float(os.getenv("ENCODE_FPS", "2.0"))
             result = encode_segment(tmpdir, frames_window, audio_window, seg_start_ms, seg_end_ms, encode_fps=encode_fps)
+            logger.info(
+                "ENCODE result frame_count=%d audio_ms=%.1f fps=%.2f",
+                result.frame_count,
+                result.audio_ms,
+                result.fps,
+            )
+
+            # Typed-only and prefer_inline_image path: send last frame as image + text
+            if prefer_inline_image:
+                last_frame_bytes = None
+                if frames_window:
+                    # Use the latest frame in the window
+                    last_frame_bytes = frames_window[-1][1]
+                gemini_text = generate_image_response(last_frame_bytes, text)
+                payload = {
+                    "type": "segment",
+                    "segmentStartMs": seg_start_ms,
+                    "segmentEndMs": seg_end_ms,
+                    "transcript": text,
+                    "encoded": False,
+                    "frameCount": result.frame_count,
+                    "audioMs": result.audio_ms,
+                    "fps": result.fps,
+                    "responseText": gemini_text,
+                    "chosenPath": "image+text" if last_frame_bytes else "text",
+                }
+                logger.info("GEMINI chosen_path=%s preview=%.120s", payload["chosenPath"], (gemini_text or ""))
+                await _send_json_safe(state.websocket, payload)
+                if gemini_text:
+                    await _send_json_safe(state.websocket, {"type": "response", "text": gemini_text})
+                return
+
             # Decide content to send to Gemini per fallback rules:
             # 1) If frames selected > 0 and video muxed, try video + transcript
             # 2) Else if audio present, send audio WAV + transcript
@@ -256,12 +362,15 @@ async def _finalize_segment(state: ConnectionState, seg_start_ms: float, seg_end
             if video_path:
                 gemini_text = generate_video_response(video_path, text)
                 encoded = True
+                chosen_path = "video+text" if text else "video"
             elif result.audio_ms > 0:
                 gemini_text = generate_audio_response(result.audio_wav_path, text)
                 encoded = False
+                chosen_path = "audio+text" if text else "audio"
             else:
                 gemini_text = generate_video_response(None, text)
                 encoded = False
+                chosen_path = "text"
 
             payload = {
                 "type": "segment",
@@ -273,12 +382,16 @@ async def _finalize_segment(state: ConnectionState, seg_start_ms: float, seg_end
                 "audioMs": result.audio_ms,
                 "fps": result.fps,
                 "responseText": gemini_text,
+                "chosenPath": chosen_path,
             }
+            logger.info("GEMINI chosen_path=%s preview=%.120s", chosen_path, (gemini_text or ""))
             await _send_json_safe(state.websocket, payload)
             # Also emit a response message for UI rendering without client changes
             if gemini_text:
                 await _send_json_safe(state.websocket, {"type": "response", "text": gemini_text})
     except Exception as exc:
+        # log the concrete ffmpeg/encode failure for diagnosis
+        logger.exception("ENCODE failed in segment [%.1f, %.1f]", seg_start_ms, seg_end_ms)
         # provide error plus fallback response if possible
         try:
             gemini_text = generate_video_response(None, text)

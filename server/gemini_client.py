@@ -87,6 +87,47 @@ def generate_video_response(
         return ""
 
 
+def generate_image_response(
+    image_bytes: Optional[bytes],
+    transcript_text: Optional[str],
+    system_prompt: str = DEFAULT_SYSTEM_PROMPT,
+) -> str:
+    """Calls Gemini 2.5 Flash with a single image + optional text and returns response text.
+
+    If the image cannot be attached or the call fails, it falls back to text-only using the transcript.
+    """
+    prompt = system_prompt
+    if transcript_text:
+        prompt = f"{system_prompt}\n\nUser transcription (if any): {transcript_text}"
+
+    client = _client()
+
+    if image_bytes:
+        try:
+            contents = [types.Part(text=prompt)]
+            contents.append(
+                types.Part(
+                    inline_data=types.Blob(mime_type="image/jpeg", data=image_bytes)
+                )
+            )
+            resp = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=contents,
+            )
+            return getattr(resp, "text", "") or ""
+        except Exception:
+            pass
+
+    try:
+        resp = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+        )
+        return getattr(resp, "text", "") or ""
+    except Exception:
+        return ""
+
+
 def generate_audio_response(
     audio_wav_path: Optional[str],
     transcript_text: Optional[str],
