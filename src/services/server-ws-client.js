@@ -12,6 +12,7 @@ export class ServerWsClient {
             onConnectionStateChange: null,
         };
         this.sessionStartMs = null;
+        this.captureFps = 10;
     }
 
     setBotResponseCallback(cb) {
@@ -140,6 +141,12 @@ export class ServerWsClient {
                 this.callbacks.onError?.(
                     new Error(data?.message || "server error")
                 );
+            } else if (t === "config" && typeof data.captureFps === "number") {
+                this.captureFps = data.captureFps;
+                this.callbacks.onStatus?.({
+                    type: "config",
+                    captureFps: this.captureFps,
+                });
             }
         } catch (error) {
             this.#emitError(error);
@@ -172,5 +179,9 @@ export class ServerWsClient {
             const v = c === "x" ? r : (r & 0x3) | 0x8;
             return v.toString(16);
         });
+    }
+
+    getCaptureFps() {
+        return this.captureFps;
     }
 }

@@ -20,3 +20,4 @@ dist/
 build/.env
 __pycache__/
 *.pyc
+.env

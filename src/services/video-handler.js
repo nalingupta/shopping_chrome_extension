@@ -225,6 +225,13 @@ export class VideoHandler {
         this.screenCapture.startRecording();
         streamingLogger.logInfo("📹 Video stream started (10 FPS)");
 
+        // Determine capture fps from server config when available
+        const captureFps =
+            (this.aiHandler?.serverAPI?.getCaptureFps?.() || 10) > 0
+                ? this.aiHandler.serverAPI.getCaptureFps()
+                : 10;
+        const intervalMs = Math.max(10, Math.floor(1000 / captureFps));
+
         this.screenshotInterval = setInterval(async () => {
             if (this._skipNextTick) {
                 this._skipNextTick = false;
@@ -329,7 +336,7 @@ export class VideoHandler {
                     this.stopScreenshotStreaming();
                 }
             }
-        }, 100);
+        }, intervalMs);
     }
 
     stopScreenshotStreaming() {
