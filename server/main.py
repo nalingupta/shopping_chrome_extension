@@ -20,7 +20,10 @@ from .gemini_client import (
 
 
 logger = logging.getLogger("server")
-logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s %(message)s")
+# Reduce server terminal verbosity by default; keep extension console logs unchanged
+_log_level_name = os.getenv("SERVER_LOG_LEVEL", "WARNING").upper()
+_log_level = getattr(logging, _log_level_name, logging.WARNING)
+logging.basicConfig(level=_log_level, format="[%(asctime)s] %(levelname)s %(message)s")
 
 app = FastAPI(title="Shopping Extension Backend", version="0.1.0")
 
@@ -71,7 +74,7 @@ async def _send_json_safe(ws: WebSocket, payload: Dict[str, Any]) -> None:
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     state = ConnectionState(websocket)
-    logger.info("WS connected: %s", websocket.client)
+    logger.debug("WS connected: %s", websocket.client)
 
     # Periodic status pings
     async def status_task():
@@ -102,7 +105,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     transcripts_prev = state.transcripts_received
                     rf = df / 5.0
                     ra = da / 5.0
-                    logger.info(
+                    logger.debug(
                         "INGEST 5s frames=%d (+%d, r=%.1f/s) audio=%d (+%d, r=%.1f/s) transcripts=%d (+%d) buffers: frames_buf=%d audio_buf=%d",
                         state.frames_received,
                         df,
@@ -142,7 +145,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 if isinstance(sr, int) and sr > 0:
                     state.sample_rate = sr
                     state.vad = RmsVadSegmenter(sample_rate_hz=state.sample_rate, cfg=VadConfig())
-                logger.info("INIT session=%s fps=%s sr=%s", state.session_id, fps, state.sample_rate)
+                logger.debug("INIT session=%s fps=%s sr=%s", state.session_id, fps, state.sample_rate)
                 await _send_json_safe(websocket, {"type": "ack", "seq": seq, "ackType": "init"})
                 # Send capture configuration to client (only capture FPS is exposed to client)
                 try:
@@ -262,7 +265,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 await _send_json_safe(websocket, {"type": "error", "message": f"unknown_type:{mtype}"})
 
     except WebSocketDisconnect:
-        logger.info("WS disconnected: %s", websocket.client)
+        logger.debug("WS disconnected: %s", websocket.client)
     except Exception as exc:  # noqa: BLE001
         logger.exception("WS error: %s", exc)
     finally:

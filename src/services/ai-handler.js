@@ -1,5 +1,6 @@
 import { ServerWsClient } from "./server-ws-client.js";
 import { ContextAssembler } from "./prompt/context-assembler.js";
+import { DEFAULT_CAPTURE_FPS } from "../config/features.js";
 
 export class AIHandler {
     constructor() {
@@ -50,7 +51,7 @@ export class AIHandler {
 
         try {
             const result = await this.serverAPI.connect({
-                fps: 10,
+                fps: DEFAULT_CAPTURE_FPS,
                 sampleRate: 16000,
             });
             if (!result.success) {
