@@ -248,6 +248,10 @@ export class VideoHandler {
                 : defaultFps;
         const intervalMs = Math.max(10, Math.floor(1000 / captureFps));
         this._currentCaptureFps = captureFps;
+        // Initialize drift-aware baseline at stream start
+        this._intervalMs = intervalMs;
+        this._basePerfMs = performance?.now?.() || Date.now();
+        this._expectedTickIndex = 0;
 
         // Align preview FPS to capture FPS and start services
         this._resetTickSeries();
