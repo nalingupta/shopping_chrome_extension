@@ -91,6 +91,8 @@ export class VideoHandler {
                                 failureType,
                                 result.error
                             );
+                        } else {
+                            // Static path: no immediate capture (use periodic cadence only)
                         }
                     } catch (error) {
                         console.warn("Tab activation switch failed:", error);
@@ -258,7 +260,7 @@ export class VideoHandler {
         );
         this._captureStartWallMs = Date.now();
 
-        this.screenshotInterval = setInterval(async () => {
+        const captureLoop = async () => {
             // Drift-aware gap insertion
             try {
                 const nowPerf = performance?.now?.() || Date.now();
@@ -460,7 +462,18 @@ export class VideoHandler {
                     this.stopScreenshotStreaming();
                 }
             }
-        }, intervalMs);
+        };
+
+        // helper to (re)start interval aligned to current baseline
+        const startAlignedInterval = () => {
+            if (this.screenshotInterval) {
+                clearInterval(this.screenshotInterval);
+                this.screenshotInterval = null;
+            }
+            this.screenshotInterval = setInterval(captureLoop, intervalMs);
+        };
+
+        startAlignedInterval();
     }
 
     stopScreenshotStreaming() {
@@ -527,6 +540,8 @@ export class VideoHandler {
             throw error;
         }
     }
+
+    // (instant capture removed)
 
     async cleanup() {
         await this.screenCapture.cleanup();
