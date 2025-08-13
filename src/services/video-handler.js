@@ -259,6 +259,29 @@ export class VideoHandler {
         this._captureStartWallMs = Date.now();
 
         this.screenshotInterval = setInterval(async () => {
+            // Drift-aware gap insertion
+            try {
+                const nowPerf = performance?.now?.() || Date.now();
+                if (this._basePerfMs == null) this._basePerfMs = nowPerf;
+                if (this._intervalMs == null) this._intervalMs = intervalMs;
+                const expectedIndex = Math.floor(
+                    (nowPerf - this._basePerfMs) / this._intervalMs
+                );
+                const gap = Math.max(
+                    0,
+                    expectedIndex - this._expectedTickIndex
+                );
+                if (gap > 0) {
+                    await this._ensureSegment(
+                        this.screenCapture.getCurrentTabId()
+                    );
+                    for (let i = 0; i < gap; i++) {
+                        this._noteTick(false);
+                        this._noteSegmentTick(false);
+                    }
+                    this._expectedTickIndex = expectedIndex;
+                }
+            } catch (_) {}
             if (this._skipNextTick) {
                 this._skipNextTick = false;
                 streamingLogger.logInfo("SKIP first tick after tab switch");
@@ -266,6 +289,7 @@ export class VideoHandler {
                 await this._ensureSegment(this.screenCapture.getCurrentTabId());
                 this._noteTick(false);
                 this._noteSegmentTick(false);
+                this._expectedTickIndex += 1;
                 return;
             }
             // Prevent auto-resume; only resume when first stable frame is captured below
@@ -278,6 +302,7 @@ export class VideoHandler {
                     this._noteTick(false);
                     this._noteSegmentTick(false);
                     this.stopScreenshotStreaming();
+                    this._expectedTickIndex += 1;
                     return;
                 }
             }
@@ -303,6 +328,7 @@ export class VideoHandler {
                             this._noteSegmentTick(false);
                             await this.screenCapture.switchToTab(activeTab.id);
                             // Skip this tick to avoid capturing mid-transition
+                            this._expectedTickIndex += 1;
                             return;
                         }
                     } else {
@@ -335,6 +361,7 @@ export class VideoHandler {
                     );
                     this._noteTick(false);
                     this._noteSegmentTick(false);
+                    this._expectedTickIndex += 1;
                     return;
                 }
                 this.screenCaptureFailureCount = 0;
@@ -355,6 +382,7 @@ export class VideoHandler {
                 );
                 this._noteTick(true);
                 this._noteSegmentTick(true);
+                this._expectedTickIndex += 1;
             } catch (error) {
                 if (
                     error.message &&
@@ -367,9 +395,11 @@ export class VideoHandler {
                     this._noteSegmentTick(false);
                     const recoverySuccess = await this.recoverFromInvalidTab();
                     if (recoverySuccess) {
+                        this._expectedTickIndex += 1;
                         return;
                     } else {
                         this.stopScreenshotStreaming();
+                        this._expectedTickIndex += 1;
                         return;
                     }
                 }
@@ -380,6 +410,7 @@ export class VideoHandler {
                     );
                     this._noteTick(false);
                     this._noteSegmentTick(false);
+                    this._expectedTickIndex += 1;
                     return;
                 }
 
@@ -396,9 +427,11 @@ export class VideoHandler {
                     this._noteSegmentTick(false);
                     const recoverySuccess = await this.recoverFromInvalidTab();
                     if (recoverySuccess) {
+                        this._expectedTickIndex += 1;
                         return;
                     } else {
                         this.stopScreenshotStreaming();
+                        this._expectedTickIndex += 1;
                         return;
                     }
                 }
@@ -418,6 +451,7 @@ export class VideoHandler {
                     );
                     this._noteTick(false);
                     this._noteSegmentTick(false);
+                    this._expectedTickIndex += 1;
                     return;
                 }
 
