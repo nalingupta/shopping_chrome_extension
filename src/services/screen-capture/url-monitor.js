@@ -12,13 +12,29 @@ export class URLMonitor {
     }
 
     isRestrictedUrl(url) {
-        return (
-            url.startsWith("chrome://") ||
-            url.startsWith("chrome-extension://") ||
-            url.startsWith("moz-extension://") ||
-            url.startsWith("edge://") ||
-            url.startsWith("about:")
-        );
+        try {
+            const u = String(url || "");
+            if (!u) return false;
+            const isChromeScheme =
+                u.startsWith("chrome://") ||
+                u.startsWith("chrome-extension://") ||
+                u.startsWith("edge://") ||
+                u.startsWith("about:");
+            if (isChromeScheme) return true;
+            // Chrome Web Store
+            try {
+                const { host } = new URL(u);
+                if (
+                    host === "chromewebstore.google.com" ||
+                    (host === "chrome.google.com" && u.includes("/webstore"))
+                ) {
+                    return true;
+                }
+            } catch (_) {}
+            return false;
+        } catch (_) {
+            return false;
+        }
     }
 
     categorizeFailure(error, tabId) {

@@ -1,3 +1,5 @@
+import { DEFAULT_CAPTURE_FPS } from "../../config/features.js";
+
 export class StaticScreenshotService {
     constructor() {
         this.isRecording = false;
@@ -172,32 +174,31 @@ export class StaticScreenshotService {
     async #isRestrictedOrBlocked(url, isIncognito) {
         const u = String(url || "");
         const isFile = u.startsWith("file://");
-        const isChromeScheme =
-            u.startsWith("chrome://") ||
-            u.startsWith("chrome-extension://") ||
-            u.startsWith("edge://") ||
-            u.startsWith("about:");
-        if (isChromeScheme) return true;
-
-        if (this.#isChromeWebStoreUrl(u)) return true;
-
+        // Centralized restricted URL logic lives in URLMonitor; duplicate minimal rules only for permissions
+        // Permissions that block static capture regardless of URL
         if (isIncognito && this._cachedIncognitoAllowed === false) return true;
-
         if (isFile && this._cachedFileSchemeAllowed === false) return true;
 
-        return false;
-    }
-
-    #isChromeWebStoreUrl(url) {
+        // Use chrome.tabs API to check URL quickly; defer to URLMonitor via ScreenCaptureService when available
         try {
-            const { host } = new URL(url);
-            return (
-                host === "chromewebstore.google.com" ||
-                (host === "chrome.google.com" && url.includes("/webstore"))
-            );
-        } catch (_) {
-            return false;
-        }
+            // Fallback quick checks that mirror URLMonitor.isRestrictedUrl()
+            const isChromeScheme =
+                u.startsWith("chrome://") ||
+                u.startsWith("chrome-extension://") ||
+                u.startsWith("edge://") ||
+                u.startsWith("about:");
+            if (isChromeScheme) return true;
+            try {
+                const { host } = new URL(u);
+                if (
+                    host === "chromewebstore.google.com" ||
+                    (host === "chrome.google.com" && u.includes("/webstore"))
+                ) {
+                    return true;
+                }
+            } catch (_) {}
+        } catch (_) {}
+        return false;
     }
 
     #stripDataUrl(dataUrl) {
@@ -215,7 +216,7 @@ export class StaticScreenshotService {
             lower.includes("permission")
         ) {
             const now = Date.now();
-            const backoffMs = 1500;
+            const backoffMs = Math.round(1000 / (DEFAULT_CAPTURE_FPS || 1));
             this.lastBackoffUntilMs = Math.max(
                 this.lastBackoffUntilMs,
                 now + backoffMs

@@ -1,7 +1,7 @@
 import { ScreenCaptureService } from "./screen-capture-service.js";
 import { LivePreviewManager } from "./live-preview-manager.js";
 import { streamingLogger } from "../utils/streaming-logger.js";
-import { FEATURES } from "../config/features.js";
+import { FEATURES, DEFAULT_CAPTURE_FPS } from "../config/features.js";
 
 export class VideoHandler {
     constructor(aiHandler) {
@@ -30,6 +30,13 @@ export class VideoHandler {
         this.screenCaptureFailureCount = 0;
         this.isTabSwitching = false;
         this.speechActive = false; // gate sending by speech activity
+
+        // Substitution / white-frame support
+        this._suppressionActive = false;
+        this._suppressionReason = null; // 'navigation'|'restricted'|'minimized'|'incognito_permission'|'file_permission'|'tab_removed'
+        this._suppressionStartWallMs = null;
+        this._firstFrameDims = null; // { width, height } set once on first real frame
+        this._whiteFrameCache = null; // base64 JPEG for current chosen dims
     }
 
     async setupScreenCapture() {
@@ -106,7 +113,12 @@ export class VideoHandler {
                 }
             },
             onUpdated: async (tabId, changeInfo, tab) => {
+                if (changeInfo.status === "loading") {
+                    // Navigation started; hint suppression window (capture-first will end early on success)
+                    this._beginSuppression("navigation");
+                }
                 if (changeInfo.status === "complete") {
+                    this._endSuppression("navigation");
                     try {
                         const isCurrentTab =
                             this.screenCapture.getCurrentTabId() === tabId;
@@ -134,6 +146,16 @@ export class VideoHandler {
                             error
                         );
                     }
+                }
+                // Restricted URL hint using centralized check when URL changes
+                if (changeInfo.url) {
+                    try {
+                        const isRestricted = this.screenCapture.isRestrictedUrl(
+                            tab.url
+                        );
+                        if (isRestricted) this._beginSuppression("restricted");
+                        else this._endSuppression("restricted");
+                    } catch (_) {}
                 }
             },
             onRemoved: async (tabId, removeInfo) => {
@@ -166,6 +188,19 @@ export class VideoHandler {
                         "Failed to handle window focus change:",
                         error
                     );
+                }
+                // Minimized/unfocused hint
+                if (windowId === chrome.windows.WINDOW_ID_NONE) {
+                    this._beginSuppression("minimized");
+                } else {
+                    try {
+                        const win = await chrome.windows.get(windowId);
+                        if (win && win.state === "minimized") {
+                            this._beginSuppression("minimized");
+                        } else {
+                            this._endSuppression("minimized");
+                        }
+                    } catch (_) {}
                 }
             },
         };
@@ -241,7 +276,7 @@ export class VideoHandler {
 
         // Determine capture fps: server override > 0 wins; else default by feature flag
         const backendFps = this.aiHandler?.serverAPI?.getCaptureFps?.();
-        const defaultFps = 1; // enforce 1 FPS default in all modes per requirement
+        const defaultFps = DEFAULT_CAPTURE_FPS; // centralized default
         const captureFps =
             typeof backendFps === "number" && backendFps > 0
                 ? backendFps
@@ -258,7 +293,6 @@ export class VideoHandler {
         this._resetSegments();
         this.previewManager.setFps?.(captureFps);
         this.previewManager.startPreview();
-        this.screenCapture.startRecording();
         streamingLogger.logInfo(
             `📹 Video stream started (continuous); captureFps=${captureFps}`
         );
@@ -282,8 +316,8 @@ export class VideoHandler {
                         this.screenCapture.getCurrentTabId()
                     );
                     for (let i = 0; i < gap; i++) {
-                        this._noteTick(false);
-                        this._noteSegmentTick(false);
+                        this._noteTick("miss");
+                        this._noteSegmentTick("miss");
                     }
                     this._expectedTickIndex = expectedIndex;
                 }
@@ -293,8 +327,8 @@ export class VideoHandler {
                 streamingLogger.logInfo("SKIP first tick after tab switch");
                 // Do NOT auto-resume here; wait for stable frame + speech gate
                 await this._ensureSegment(this.screenCapture.getCurrentTabId());
-                this._noteTick(false);
-                this._noteSegmentTick(false);
+                this._noteTick("miss");
+                this._noteSegmentTick("miss");
                 this._expectedTickIndex += 1;
                 return;
             }
@@ -305,8 +339,8 @@ export class VideoHandler {
                     await this._ensureSegment(
                         this.screenCapture.getCurrentTabId()
                     );
-                    this._noteTick(false);
-                    this._noteSegmentTick(false);
+                    this._noteTick("miss");
+                    this._noteSegmentTick("miss");
                     this.stopScreenshotStreaming();
                     this._expectedTickIndex += 1;
                     return;
@@ -365,8 +399,8 @@ export class VideoHandler {
                     streamingLogger.logInfo(
                         `DROP frame due to tab change mid-tick (pre=${currIdBefore} post=${currIdAfter})`
                     );
-                    this._noteTick(false);
-                    this._noteSegmentTick(false);
+                    this._noteTick("miss");
+                    this._noteSegmentTick("miss");
                     this._expectedTickIndex += 1;
                     return;
                 }
@@ -386,9 +420,11 @@ export class VideoHandler {
                 streamingLogger.logInfo(
                     `CAPTURED frame from tab=${currIdAfter} (pre=${currIdBefore})`
                 );
-                this._noteTick(true);
-                this._noteSegmentTick(true);
+                this._noteTick("hit");
+                this._noteSegmentTick("hit");
                 this._expectedTickIndex += 1;
+                // Capture first frame dimensions once for future white frames
+                this._maybeCaptureFirstDimsAsync(frameData);
             } catch (error) {
                 if (
                     error.message &&
@@ -397,8 +433,8 @@ export class VideoHandler {
                     await this._ensureSegment(
                         this.screenCapture.getCurrentTabId()
                     );
-                    this._noteTick(false);
-                    this._noteSegmentTick(false);
+                    this._noteTick("miss");
+                    this._noteSegmentTick("miss");
                     const recoverySuccess = await this.recoverFromInvalidTab();
                     if (recoverySuccess) {
                         this._expectedTickIndex += 1;
@@ -414,8 +450,8 @@ export class VideoHandler {
                     await this._ensureSegment(
                         this.screenCapture.getCurrentTabId()
                     );
-                    this._noteTick(false);
-                    this._noteSegmentTick(false);
+                    this._noteTick("miss");
+                    this._noteSegmentTick("miss");
                     this._expectedTickIndex += 1;
                     return;
                 }
@@ -445,18 +481,62 @@ export class VideoHandler {
                 // Gracefully handle static capture skip conditions without stopping the stream
                 const msg = String(error?.message || "");
                 const isStaticSkip =
-                    msg.includes("static_backoff") ||
                     msg.includes("restricted_or_blocked") ||
                     msg.includes("window_minimized_or_unfocused") ||
                     msg.includes("no_active_tab");
+                const isRateOrBackoff =
+                    msg.includes("rate_limited") ||
+                    msg.includes("static_backoff");
 
+                // Substitution only for must-have blocking reasons; not for rate/backoff/drift
                 if (isStaticSkip) {
+                    // Begin suppression if not already in one
+                    if (!this._suppressionActive) {
+                        if (msg.includes("restricted_or_blocked"))
+                            this._beginSuppression("restricted");
+                        else if (msg.includes("window_minimized_or_unfocused"))
+                            this._beginSuppression("minimized");
+                        else if (msg.includes("no_active_tab"))
+                            this._beginSuppression("tab_removed");
+                    }
+
+                    const whiteBase64 = await this._ensureWhiteFrameBase64();
+                    if (whiteBase64) {
+                        // Send to backend
+                        if (this.aiHandler.isGeminiConnectionActive()) {
+                            const sessionStart =
+                                this.aiHandler.getSessionStartMs?.() || null;
+                            const tsMs = sessionStart
+                                ? (performance?.now?.() || Date.now()) -
+                                  sessionStart
+                                : performance?.now?.() || Date.now();
+                            this.aiHandler.sendImageFrame(whiteBase64, tsMs);
+                        }
+                        // Update preview
+                        this.previewManager.updatePreview(whiteBase64);
+                        streamingLogger.logInfo(
+                            `SUBSTITUTE white frame due to: ${msg}`
+                        );
+                        this._noteTick("substitute");
+                        this._noteSegmentTick("substitute");
+                        this._expectedTickIndex += 1;
+                        return;
+                    } else {
+                        // fall back to miss if we couldn't generate
+                        this._noteTick("miss");
+                        this._noteSegmentTick("miss");
+                        this._expectedTickIndex += 1;
+                        return;
+                    }
+                }
+
+                if (isRateOrBackoff) {
                     streamingLogger.logInfo(`SKIP tick: ${msg}`);
                     await this._ensureSegment(
                         this.screenCapture.getCurrentTabId()
                     );
-                    this._noteTick(false);
-                    this._noteSegmentTick(false);
+                    this._noteTick("miss");
+                    this._noteSegmentTick("miss");
                     this._expectedTickIndex += 1;
                     return;
                 }
@@ -477,7 +557,27 @@ export class VideoHandler {
             this.screenshotInterval = setInterval(captureLoop, intervalMs);
         };
 
-        startAlignedInterval();
+        // Start recording first, then perform one immediate capture to avoid initial "-1" miss,
+        // then start the periodic interval. Keep this lean, no async/await signature changes.
+        Promise.resolve(this.screenCapture.startRecording())
+            .catch(() => {})
+            .finally(() => {
+                // Fire one immediate tick, then start interval regardless of outcome
+                Promise.resolve(captureLoop())
+                    .catch(() => {})
+                    .finally(() => startAlignedInterval());
+            });
+    }
+
+    applyServerCaptureFps(newFps) {
+        const n = Number(newFps);
+        if (!Number.isFinite(n) || n <= 0) return;
+        if (this._currentCaptureFps && this._currentCaptureFps === n) return;
+        const wasActive = !!this.screenshotInterval;
+        if (wasActive) {
+            this.stopScreenshotStreaming();
+            this.startScreenshotStreaming();
+        }
     }
 
     stopScreenshotStreaming() {
@@ -571,12 +671,88 @@ export class VideoHandler {
         this._tickMisses = 0;
     }
 
-    _noteTick(isHit) {
+    _beginSuppression(reason) {
+        if (this._suppressionActive && this._suppressionReason === reason)
+            return;
+        this._suppressionActive = true;
+        this._suppressionReason = reason;
+        this._suppressionStartWallMs = Date.now();
+    }
+
+    _endSuppression(reason) {
+        if (!this._suppressionActive) return;
+        if (
+            reason &&
+            this._suppressionReason &&
+            reason !== this._suppressionReason
+        )
+            return;
+        this._suppressionActive = false;
+        this._suppressionReason = null;
+        this._suppressionStartWallMs = null;
+    }
+
+    _getEstimatedDims() {
+        try {
+            const ratio = Math.max(1, window.devicePixelRatio || 1);
+            const w = Math.max(
+                1,
+                Math.floor((window.screen?.width || 1280) * ratio)
+            );
+            const h = Math.max(
+                1,
+                Math.floor((window.screen?.height || 720) * ratio)
+            );
+            return { width: w, height: h };
+        } catch (_) {
+            return { width: 1280, height: 720 };
+        }
+    }
+
+    async _ensureWhiteFrameBase64() {
+        if (this._whiteFrameCache) return this._whiteFrameCache;
+        const dims = this._firstFrameDims || this._getEstimatedDims();
+        try {
+            const canvas = document.createElement("canvas");
+            canvas.width = dims.width;
+            canvas.height = dims.height;
+            const ctx = canvas.getContext("2d");
+            ctx.fillStyle = "#ffffff";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            const dataUrl = canvas.toDataURL("image/jpeg", 0.8);
+            const i = dataUrl.indexOf(",");
+            const base64 = i >= 0 ? dataUrl.slice(i + 1) : dataUrl;
+            this._whiteFrameCache = base64;
+            return base64;
+        } catch (_) {
+            return null;
+        }
+    }
+
+    _maybeCaptureFirstDimsAsync(base64Jpeg) {
+        if (this._firstFrameDims) return;
+        try {
+            const img = new Image();
+            img.onload = () => {
+                if (!this._firstFrameDims) {
+                    this._firstFrameDims = {
+                        width: img.width,
+                        height: img.height,
+                    };
+                    // Invalidate cached white frame if dims were based on estimates
+                    this._whiteFrameCache = null;
+                }
+            };
+            img.onerror = () => {};
+            img.src = `data:image/jpeg;base64,${base64Jpeg}`;
+        } catch (_) {}
+    }
+
+    _noteTick(kind) {
         this._tickTotal += 1;
-        if (isHit) this._tickHits += 1;
-        else this._tickMisses += 1;
-        const t = isHit ? "hit" : "miss";
-        if (this._tickRunType === t) {
+        if (kind === "hit") this._tickHits += 1;
+        else if (kind === "miss") this._tickMisses += 1;
+        if (this._tickRunType === kind) {
             this._tickRunCount += 1;
         } else {
             if (this._tickRunType !== null) {
@@ -585,7 +761,7 @@ export class VideoHandler {
                     count: this._tickRunCount,
                 });
             }
-            this._tickRunType = t;
+            this._tickRunType = kind;
             this._tickRunCount = 1;
         }
     }
@@ -638,10 +814,19 @@ export class VideoHandler {
         let fmt = `${prefix}: `;
         const styles = [];
         series.forEach((run, idx) => {
-            const sign = run.type === "hit" ? "+" : "-";
-            const color =
-                run.type === "hit" ? "color:#16a34a" : "color:#ef4444";
-            fmt += `%c${sign}${run.count}`;
+            let token = "";
+            let color = "color:#ef4444";
+            if (run.type === "hit") {
+                token = `+${run.count}`;
+                color = "color:#16a34a";
+            } else if (run.type === "miss") {
+                token = `-${run.count}`;
+            } else if (run.type === "substitute") {
+                token = `-${run.count} (substituted)`;
+            } else {
+                token = `?${run.count}`;
+            }
+            fmt += `%c${token}`;
             styles.push(color);
             if (idx < series.length - 1) fmt += ", ";
         });
@@ -690,20 +875,19 @@ export class VideoHandler {
         }
     }
 
-    _noteSegmentTick(isHit) {
+    _noteSegmentTick(kind) {
         if (!this._currentSegment) return;
         const data = this._currentSegment;
         data.total += 1;
-        if (isHit) data.hits += 1;
-        else data.misses += 1;
-        const t = isHit ? "hit" : "miss";
-        if (data.runType === t) {
+        if (kind === "hit") data.hits += 1;
+        else if (kind === "miss") data.misses += 1;
+        if (data.runType === kind) {
             data.runCount += 1;
         } else {
             if (data.runType !== null) {
                 data.series.push({ type: data.runType, count: data.runCount });
             }
-            data.runType = t;
+            data.runType = kind;
             data.runCount = 1;
         }
     }

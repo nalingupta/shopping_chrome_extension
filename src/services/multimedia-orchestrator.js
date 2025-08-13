@@ -42,6 +42,21 @@ export class MultimediaOrchestrator {
                 );
             }
 
+            // Wire server status updates to video handler (apply server FPS override once if needed)
+            this.aiHandler.setStreamingUpdateCallback?.((update) => {
+                try {
+                    if (
+                        update &&
+                        update.type === "config" &&
+                        typeof update.captureFps === "number"
+                    ) {
+                        this.videoHandler.applyServerCaptureFps(
+                            update.captureFps
+                        );
+                    }
+                } catch (_) {}
+            });
+
             // Setup video capture
             const videoResult = await this.videoHandler.setupScreenCapture();
             if (!videoResult.success) {

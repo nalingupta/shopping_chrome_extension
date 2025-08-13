@@ -3,3 +3,4 @@ export const FEATURES = {
     // instead of the Chrome Debugger Page.captureScreenshot path.
     USE_STATIC_SCREEN_CAPTURE: true,
 };
+export const DEFAULT_CAPTURE_FPS = 1;
