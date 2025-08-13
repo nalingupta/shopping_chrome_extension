@@ -146,7 +146,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 await _send_json_safe(websocket, {"type": "ack", "seq": seq, "ackType": "init"})
                 # Send capture configuration to client (only capture FPS is exposed to client)
                 try:
-                    capture_fps_env = os.getenv("CAPTURE_FPS", "10")
+                    capture_fps_env = os.getenv("CAPTURE_FPS", "1")
                     capture_fps = int(capture_fps_env) if str(capture_fps_env).isdigit() else 10
                     await _send_json_safe(websocket, {"type": "config", "captureFps": capture_fps})
                 except Exception:
@@ -315,7 +315,7 @@ async def _finalize_segment(
             len(audio_window),
         )
         with tempfile.TemporaryDirectory(prefix="seg_") as tmpdir:
-            encode_fps = float(os.getenv("ENCODE_FPS", "2.0"))
+            encode_fps = float(os.getenv("ENCODE_FPS", "1.0"))
             result = encode_segment(tmpdir, frames_window, audio_window, seg_start_ms, seg_end_ms, encode_fps=encode_fps)
             logger.info(
                 "ENCODE result frame_count=%d audio_ms=%.1f fps=%.2f",

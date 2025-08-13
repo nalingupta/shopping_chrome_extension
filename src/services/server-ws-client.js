@@ -12,7 +12,8 @@ export class ServerWsClient {
             onConnectionStateChange: null,
         };
         this.sessionStartMs = null;
-        this.captureFps = 10;
+        // Default to 1 FPS to avoid initial high-rate capture before server config arrives
+        this.captureFps = 1;
     }
 
     setBotResponseCallback(cb) {
@@ -32,7 +33,7 @@ export class ServerWsClient {
         return { isConnected: this.isConnected };
     }
 
-    async connect({ fps = 10, sampleRate = 16000 } = {}) {
+    async connect({ fps = 1, sampleRate = 16000 } = {}) {
         if (this.isConnected) return { success: true };
         return new Promise((resolve) => {
             try {
