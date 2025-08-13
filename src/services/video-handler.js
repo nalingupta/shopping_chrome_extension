@@ -500,6 +500,17 @@ export class VideoHandler {
                             this._beginSuppression("tab_removed");
                     }
 
+                    // If no prior real frame yet, do NOT send a fake; treat as a miss only
+                    if (!this._firstFrameDims) {
+                        await this._ensureSegment(
+                            this.screenCapture.getCurrentTabId()
+                        );
+                        this._noteTick("miss");
+                        this._noteSegmentTick("miss");
+                        this._expectedTickIndex += 1;
+                        return;
+                    }
+
                     const whiteBase64 = await this._ensureWhiteFrameBase64();
                     if (whiteBase64) {
                         // Send to backend
@@ -742,6 +753,14 @@ export class VideoHandler {
                     // Invalidate cached white frame if dims were based on estimates
                     this._whiteFrameCache = null;
                 }
+                // Pre-warm white-frame cache off the interval tick
+                try {
+                    setTimeout(() => {
+                        Promise.resolve(this._ensureWhiteFrameBase64()).catch(
+                            () => {}
+                        );
+                    }, 0);
+                } catch (_) {}
             };
             img.onerror = () => {};
             img.src = `data:image/jpeg;base64,${base64Jpeg}`;
