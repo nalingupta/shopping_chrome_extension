@@ -76,6 +76,15 @@ export class StaticScreenshotService {
                 error?.message || error || "unknown_capture_error"
             );
             this.#maybeApplyBackoff(msg);
+            if (
+                msg.includes("rate") ||
+                msg.includes("too many") ||
+                msg.includes("quota")
+            ) {
+                console.warn(
+                    "Static capture skipped due to Chrome FPS/rate limit; will retry next tick"
+                );
+            }
             throw new Error(this.#mapErrorToCode(msg));
         }
     }
