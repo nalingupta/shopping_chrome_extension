@@ -730,11 +730,50 @@ export class VideoHandler {
             const ctx = canvas.getContext("2d");
             ctx.fillStyle = "#ffffff";
             ctx.fillRect(0, 0, canvas.width, canvas.height);
-            const dataUrl = canvas.toDataURL("image/jpeg", 0.8);
-            const i = dataUrl.indexOf(",");
-            const base64 = i >= 0 ? dataUrl.slice(i + 1) : dataUrl;
-            this._whiteFrameCache = base64;
-            return base64;
+
+            const base64 = await new Promise((resolve) => {
+                try {
+                    canvas.toBlob(
+                        (blob) => {
+                            try {
+                                if (!blob) return resolve(null);
+                                const reader = new FileReader();
+                                reader.onloadend = () => {
+                                    try {
+                                        const dataUrl = reader.result;
+                                        if (typeof dataUrl === "string") {
+                                            const idx = dataUrl.indexOf(",");
+                                            resolve(
+                                                idx >= 0
+                                                    ? dataUrl.slice(idx + 1)
+                                                    : dataUrl
+                                            );
+                                        } else {
+                                            resolve(null);
+                                        }
+                                    } catch (_) {
+                                        resolve(null);
+                                    }
+                                };
+                                reader.onerror = () => resolve(null);
+                                reader.readAsDataURL(blob);
+                            } catch (_) {
+                                resolve(null);
+                            }
+                        },
+                        "image/jpeg",
+                        0.8
+                    );
+                } catch (_) {
+                    resolve(null);
+                }
+            });
+
+            if (typeof base64 === "string") {
+                this._whiteFrameCache = base64;
+                return base64;
+            }
+            return null;
         } catch (_) {
             return null;
         }
