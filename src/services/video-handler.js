@@ -22,7 +22,11 @@ export class VideoHandler {
         this._tickTotal = 0;
         this._tickHits = 0;
         this._tickMisses = 0;
-        this._tabTickMap = new Map(); // tabId -> { series, runType, runCount, total, hits, misses }
+        this._captureStartWallMs = null;
+        // Segment-based per-active-tab runs (each contiguous active period becomes a line)
+        this._segments = [];
+        this._currentSegment = null; // { tabId, series:[], runType, runCount, total, hits, misses }
+        this._tabUrlCache = new Map();
         this.screenCaptureFailureCount = 0;
         this.isTabSwitching = false;
         this.speechActive = false; // gate sending by speech activity
@@ -91,8 +95,10 @@ export class VideoHandler {
                     } catch (error) {
                         console.warn("Tab activation switch failed:", error);
                     } finally {
-                        // Skip first tick instead of fixed delay; gating will prevent stale sends
-                        this._skipNextTick = true;
+                        // For legacy debugger flow, skip the first tick after a tab switch
+                        if (!FEATURES.USE_STATIC_SCREEN_CAPTURE) {
+                            this._skipNextTick = true;
+                        }
                         this.isTabSwitching = false;
                     }
                 }
@@ -239,38 +245,38 @@ export class VideoHandler {
                 ? backendFps
                 : defaultFps;
         const intervalMs = Math.max(10, Math.floor(1000 / captureFps));
+        this._currentCaptureFps = captureFps;
 
         // Align preview FPS to capture FPS and start services
         this._resetTickSeries();
-        this._resetPerTabSeries();
+        this._resetSegments();
         this.previewManager.setFps?.(captureFps);
         this.previewManager.startPreview();
         this.screenCapture.startRecording();
         streamingLogger.logInfo(
             `📹 Video stream started (continuous); captureFps=${captureFps}`
         );
+        this._captureStartWallMs = Date.now();
 
         this.screenshotInterval = setInterval(async () => {
             if (this._skipNextTick) {
                 this._skipNextTick = false;
                 streamingLogger.logInfo("SKIP first tick after tab switch");
                 // Do NOT auto-resume here; wait for stable frame + speech gate
+                await this._ensureSegment(this.screenCapture.getCurrentTabId());
                 this._noteTick(false);
-                this._noteTabTick(
-                    this.screenCapture.getCurrentTabId() ?? "unknown",
-                    false
-                );
+                this._noteSegmentTick(false);
                 return;
             }
             // Prevent auto-resume; only resume when first stable frame is captured below
             if (!this.screenCapture.hasStream()) {
                 const recoverySuccess = await this.recoverFromInvalidTab();
                 if (!recoverySuccess) {
-                    this._noteTick(false);
-                    this._noteTabTick(
-                        this.screenCapture.getCurrentTabId() ?? "unknown",
-                        false
+                    await this._ensureSegment(
+                        this.screenCapture.getCurrentTabId()
                     );
+                    this._noteTick(false);
+                    this._noteSegmentTick(false);
                     this.stopScreenshotStreaming();
                     return;
                 }
@@ -290,12 +296,11 @@ export class VideoHandler {
                             console.warn(
                                 `MISMATCH detected (current=${currentTabId}, active=${activeTab.id}) → switching now`
                             );
-                            this._noteTick(false);
-                            this._noteTabTick(
-                                this.screenCapture.getCurrentTabId() ??
-                                    "unknown",
-                                false
+                            await this._ensureSegment(
+                                this.screenCapture.getCurrentTabId()
                             );
+                            this._noteTick(false);
+                            this._noteSegmentTick(false);
                             await this.screenCapture.switchToTab(activeTab.id);
                             // Skip this tick to avoid capturing mid-transition
                             return;
@@ -320,6 +325,7 @@ export class VideoHandler {
                     }
                 } catch (_) {}
                 const currIdBefore = this.screenCapture.getCurrentTabId();
+                await this._ensureSegment(currIdBefore);
                 const frameData = await this.screenCapture.captureFrame();
                 const currIdAfter = this.screenCapture.getCurrentTabId();
                 // Guard: if tabId changed mid-tick, drop this frame
@@ -328,7 +334,7 @@ export class VideoHandler {
                         `DROP frame due to tab change mid-tick (pre=${currIdBefore} post=${currIdAfter})`
                     );
                     this._noteTick(false);
-                    this._noteTabTick(currIdBefore ?? "unknown", false);
+                    this._noteSegmentTick(false);
                     return;
                 }
                 this.screenCaptureFailureCount = 0;
@@ -348,17 +354,17 @@ export class VideoHandler {
                     `CAPTURED frame from tab=${currIdAfter} (pre=${currIdBefore})`
                 );
                 this._noteTick(true);
-                this._noteTabTick(currIdAfter ?? "unknown", true);
+                this._noteSegmentTick(true);
             } catch (error) {
                 if (
                     error.message &&
                     error.message.includes("Detached while handling command")
                 ) {
-                    this._noteTick(false);
-                    this._noteTabTick(
-                        this.screenCapture.getCurrentTabId() ?? "unknown",
-                        false
+                    await this._ensureSegment(
+                        this.screenCapture.getCurrentTabId()
                     );
+                    this._noteTick(false);
+                    this._noteSegmentTick(false);
                     const recoverySuccess = await this.recoverFromInvalidTab();
                     if (recoverySuccess) {
                         return;
@@ -369,11 +375,11 @@ export class VideoHandler {
                 }
 
                 if (error.message.includes("Debugger not attached")) {
-                    this._noteTick(false);
-                    this._noteTabTick(
-                        this.screenCapture.getCurrentTabId() ?? "unknown",
-                        false
+                    await this._ensureSegment(
+                        this.screenCapture.getCurrentTabId()
                     );
+                    this._noteTick(false);
+                    this._noteSegmentTick(false);
                     return;
                 }
 
@@ -383,11 +389,11 @@ export class VideoHandler {
                         error.message.includes("not valid for capture") ||
                         error.message.includes("not accessible"))
                 ) {
-                    this._noteTick(false);
-                    this._noteTabTick(
-                        this.screenCapture.getCurrentTabId() ?? "unknown",
-                        false
+                    await this._ensureSegment(
+                        this.screenCapture.getCurrentTabId()
                     );
+                    this._noteTick(false);
+                    this._noteSegmentTick(false);
                     const recoverySuccess = await this.recoverFromInvalidTab();
                     if (recoverySuccess) {
                         return;
@@ -407,11 +413,11 @@ export class VideoHandler {
 
                 if (isStaticSkip) {
                     streamingLogger.logInfo(`SKIP tick: ${msg}`);
-                    this._noteTick(false);
-                    this._noteTabTick(
-                        this.screenCapture.getCurrentTabId() ?? "unknown",
-                        false
+                    await this._ensureSegment(
+                        this.screenCapture.getCurrentTabId()
                     );
+                    this._noteTick(false);
+                    this._noteSegmentTick(false);
                     return;
                 }
 
@@ -544,28 +550,38 @@ export class VideoHandler {
                 "Tick series",
                 this._tickSeries,
                 this._tickMisses,
-                this._tickTotal
+                this._tickTotal,
+                undefined,
+                this._currentCaptureFps,
+                this._captureStartWallMs != null
+                    ? Math.max(0, Date.now() - this._captureStartWallMs)
+                    : undefined
             );
         }
         // per-tab series
         try {
-            for (const [tabId, data] of this._tabTickMap.entries()) {
-                const series = this.#finalizeSeriesCopy(data);
+            // finalize current and log segments in order
+            this.#finalizeCurrentSegment();
+            for (const seg of this._segments) {
+                const series = this.#finalizeSeriesCopy(seg);
                 if (series.length > 0) {
+                    const url = this._tabUrlCache.get(seg.tabId) || "unknown";
                     this.#logSeriesLine(
-                        `Tab ${tabId}`,
+                        `Tab ${seg.tabId}`,
                         series,
-                        data.misses || 0,
-                        data.total || 0
+                        seg.misses || 0,
+                        seg.total || 0,
+                        url,
+                        undefined
                     );
                 }
             }
         } catch (_) {}
         this._resetTickSeries();
-        this._resetPerTabSeries();
+        this._resetSegments();
     }
 
-    #logSeriesLine(prefix, series, misses, total) {
+    #logSeriesLine(prefix, series, misses, total, url, fps, durationMs) {
         let fmt = `${prefix}: `;
         const styles = [];
         series.forEach((run, idx) => {
@@ -578,32 +594,52 @@ export class VideoHandler {
         });
         const pct = total > 0 ? Math.round((misses / total) * 100) : 0;
         fmt += ` | Miss freq: ${misses}/${total} (${pct}%)`;
+        if (url) fmt += ` (url: ${url})`;
+        if (typeof fps === "number") fmt += ` (captureFps: ${fps})`;
+        if (typeof durationMs === "number") {
+            const secs = Math.round(durationMs / 1000);
+            fmt += ` (duration: ${secs}s)`;
+        }
         try {
             // eslint-disable-next-line no-console
             console.log(fmt, ...styles);
         } catch (_) {}
     }
 
-    _resetPerTabSeries() {
-        this._tabTickMap.clear();
+    _resetSegments() {
+        this._segments = [];
+        this._currentSegment = null;
+        try {
+            this._tabUrlCache.clear();
+        } catch (_) {}
     }
 
-    _ensureTabSeries(tabId) {
-        if (!this._tabTickMap.has(tabId)) {
-            this._tabTickMap.set(tabId, {
+    async _ensureSegment(tabId) {
+        const id = tabId ?? "unknown";
+        if (!this._currentSegment || this._currentSegment.tabId !== id) {
+            this.#finalizeCurrentSegment();
+            this._currentSegment = {
+                tabId: id,
                 series: [],
                 runType: null,
                 runCount: 0,
                 total: 0,
                 hits: 0,
                 misses: 0,
-            });
+            };
+            this._segments.push(this._currentSegment);
+            try {
+                if (typeof id === "number") {
+                    const tab = await chrome.tabs.get(id);
+                    if (tab?.url) this._tabUrlCache.set(id, tab.url);
+                }
+            } catch (_) {}
         }
-        return this._tabTickMap.get(tabId);
     }
 
-    _noteTabTick(tabId, isHit) {
-        const data = this._ensureTabSeries(tabId);
+    _noteSegmentTick(isHit) {
+        if (!this._currentSegment) return;
+        const data = this._currentSegment;
         data.total += 1;
         if (isHit) data.hits += 1;
         else data.misses += 1;
@@ -619,11 +655,16 @@ export class VideoHandler {
         }
     }
 
-    #finalizeSeriesCopy(data) {
-        const out = [...data.series];
+    #finalizeCurrentSegment() {
+        if (!this._currentSegment) return;
+        const data = this._currentSegment;
         if (data.runType !== null && data.runCount > 0) {
-            out.push({ type: data.runType, count: data.runCount });
+            data.series.push({ type: data.runType, count: data.runCount });
         }
-        return out;
+    }
+
+    #finalizeSeriesCopy(data) {
+        // Current run was already flushed by finalizeCurrentSegment() before printing
+        return [...data.series];
     }
 }
