@@ -1,82 +1,83 @@
-# Voice-Triggered Screen Recording
+# Screen Recording (Static Capture)
 
-This feature automatically captures screen recordings during voice input sessions, creating videos that combine screenshots at 1 FPS with synchronized audio.
+The extension performs continuous static screen capture during listening sessions and streams JPEG frames to the local backend, which aligns them with audio to produce segments for the Gemini model.
 
 ## How It Works
 
-1. **Voice Detection**: When the user starts speaking, the system automatically begins screen recording
-2. **Screen Capture**: Screenshots are captured at 1 FPS (once per second) during the entire speech duration
-3. **Audio Recording**: High-quality audio is recorded simultaneously with the screen captures
-4. **Video Creation**: When speech ends, screenshots and audio are combined into a WebM video file
-5. **Automatic Download**: The completed video is automatically downloaded to the user's device
+1. **Listening Start**: When the user turns the mic on (listening mode), the system begins continuous screen capture.
+2. **Static Screen Capture**: Uses `chrome.tabs.captureVisibleTab` to grab the visible area of the active tab in the last‑focused normal window.
+3. **Audio Capture**: High‑quality PCM audio is streamed concurrently.
+4. **Backend Processing**: The backend aligns frames and audio by timestamps, and encodes segments (video/audio/image+text) for Gemini.
+5. **UI Preview**: A lightweight preview canvas shows the latest frames at the capture FPS.
 
 ## Technical Implementation
 
 ### Components
 
-- **GeminiVoiceHandler**: Enhanced to trigger screen recording on speech detection
-- **ScreenRecorder**: New service that handles screen capture and video creation
-- **Chrome Extension Integration**: Uses desktopCapture API for screen access
+-   **VideoHandler**: Orchestrates capture loop and prioritizes backend send before preview updates.
+-   **ScreenCaptureService**: Routes between static capture (default) and legacy debugger path via feature flag.
+-   **StaticScreenshotService**: Executes `chrome.tabs.captureVisibleTab` and applies fallback rules/backoff.
+-   **StaticWindowTracker**: Tracks the last‑focused normal window and active tab across rapid switches.
+-   **AIHandler/ServerWsClient**: Streams frames/audio to the backend over WebSocket.
 
 ### Key Features
 
-- **Automatic Start/Stop**: Recording begins when speech is detected and ends when speech stops
-- **1 FPS Capture Rate**: Optimized for performance while maintaining visual continuity  
-- **Audio Synchronization**: Audio and video are perfectly synchronized
-- **WebM Format**: Creates web-compatible video files
-- **Error Handling**: Graceful fallbacks and error recovery
+-   **Continuous During Listening**: Capture runs continuously while the mic is on (not gated by speech activity).
+-   **Capture Rate**: Default 1 FPS for static capture. The server can suggest a value, but Chrome may effectively limit `captureVisibleTab` to ~1 FPS.
+-   **Timestamp Synchronization**: Frames and audio share a session clock for perfect alignment.
+-   **Backend Priority**: Each tick sends the frame to the backend first; preview updates after.
+-   **Error Handling**: Graceful fallbacks, skip-on-error, and automatic resume.
 
 ## Usage
 
 ### In Extension Context
-The screen recording is automatically integrated with the existing voice input system. No additional setup required.
+
+Screen capture starts automatically when listening begins and stops when listening ends.
 
 ### Testing
-Use the `test-screen-recording.html` file to test the functionality:
 
-1. Open the HTML file in Chrome
-2. Click "Start Voice Recognition"
-3. Grant microphone and screen sharing permissions
-4. Start speaking - screen recording begins automatically
-5. Stop speaking - video is created and downloaded
+Developer checks during listening:
+
+-   Verify WebSocket connects and a `config` message may provide `captureFps`.
+-   Expect frames to be sent at ~1 FPS (or server suggestion when feasible) and preview to update at the same cadence.
+-   Switching tabs/windows rapidly should always capture the visible tab in the last‑focused normal window.
 
 ## Permissions Required
 
 The extension manifest includes these permissions:
-- `desktopCapture`: For screen recording access
-- Microphone access: For audio recording during speech
 
-## File Formats
+-   `tabs`
+-   `host_permissions: ["<all_urls>"]`
+-   Microphone permissions (for audio streaming)
 
-- **Video**: WebM format with VP9 codec
-- **Audio**: WebM format with Opus codec  
-- **Screenshots**: JPEG format (intermediate processing)
+## Data Formats
+
+-   **Frames**: JPEG (quality 80) base64 (no data URL prefix) via WebSocket `{ type: "imageFrame", tsMs, mime: "image/jpeg", base64 }`.
+-   **Audio**: PCM Int16 mono at 16 kHz via WebSocket `{ type: "audioChunk", tsStartMs, numSamples, sampleRate, base64 }`.
 
 ## Performance Considerations
 
-- **1 FPS Rate**: Minimizes resource usage while maintaining usability
-- **Automatic Cleanup**: Memory and resources are freed after video creation
-- **Efficient Processing**: Uses Canvas API for optimized screenshot processing
+-   Static capture via `chrome.tabs.captureVisibleTab` is effectively ~1 FPS on Chrome; higher rates may be rate‑limited.
+-   Preview is throttled to the capture FPS.
+-   Automatic cleanup releases intervals and listeners on stop.
 
 ## Error Handling
 
-The system handles various error scenarios:
-- Permission denied for screen or microphone access
-- Screen capture API unavailability  
-- Audio recording failures
-- Video creation errors
+-   Restricted/minimized/incognito/file‑scheme disallowed: skip tick with one‑line reason; resume next tick.
+-   Rate‑limit/permission errors: apply short backoff (≈1.5s), log a warning, then resume.
+-   Transient failures do not stop streaming; repeated hard failures are handled conservatively.
 
 ## Browser Compatibility
 
-- **Chrome/Chromium**: Full support with desktopCapture API
-- **Other Browsers**: Fallback to getDisplayMedia API (requires user interaction)
-- **Extension Context**: Optimal performance with Chrome extension APIs
+-   **Chrome/Chromium**: Supported via `chrome.tabs.captureVisibleTab`.
+-   **Restricted Pages**: `chrome://`, `chrome-extension://`, Chrome Web Store pages, disallowed `file://`, and incognito (without permission) are not captured.
 
 ## Future Enhancements
 
 Potential improvements:
-- Variable frame rates based on activity
-- Multiple screen/window selection
-- Video compression options
-- Cloud storage integration
-- Real-time streaming capabilities
+
+-   Variable frame rates based on activity
+-   Multiple screen/window selection
+-   Video compression options
+-   Cloud storage integration
+-   Real-time streaming capabilities
