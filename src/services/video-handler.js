@@ -258,18 +258,38 @@ export class VideoHandler {
             try {
                 // Actively self-heal: switch immediately if mismatch
                 try {
-                    const [activeTab] = await chrome.tabs.query({
-                        active: true,
-                        currentWindow: true,
-                    });
-                    const currentTabId = this.screenCapture.getCurrentTabId();
-                    if (activeTab && currentTabId !== activeTab.id) {
-                        console.log(
-                            `MISMATCH detected (current=${currentTabId}, active=${activeTab.id}) → switching now`
-                        );
-                        await this.screenCapture.switchToTab(activeTab.id);
-                        // Skip this tick to avoid capturing mid-transition
-                        return;
+                    if (!FEATURES.USE_STATIC_SCREEN_CAPTURE) {
+                        const [activeTab] = await chrome.tabs.query({
+                            active: true,
+                            currentWindow: true,
+                        });
+                        const currentTabId =
+                            this.screenCapture.getCurrentTabId();
+                        if (activeTab && currentTabId !== activeTab.id) {
+                            console.warn(
+                                `MISMATCH detected (current=${currentTabId}, active=${activeTab.id}) → switching now`
+                            );
+                            await this.screenCapture.switchToTab(activeTab.id);
+                            // Skip this tick to avoid capturing mid-transition
+                            return;
+                        }
+                    } else {
+                        // In static mode, still warn if we detect a mismatch for diagnostics only
+                        const [activeTab] = await chrome.tabs.query({
+                            active: true,
+                            currentWindow: true,
+                        });
+                        const currentTabId =
+                            this.screenCapture.getCurrentTabId();
+                        if (
+                            activeTab &&
+                            currentTabId &&
+                            currentTabId !== activeTab.id
+                        ) {
+                            console.warn(
+                                `Static capture mismatch (current=${currentTabId}, active=${activeTab.id})`
+                            );
+                        }
                     }
                 } catch (_) {}
                 const currIdBefore = this.screenCapture.getCurrentTabId();

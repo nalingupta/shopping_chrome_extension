@@ -48,10 +48,12 @@ export class StaticWindowTracker {
 
     async #primeState() {
         try {
-            const win = await chrome.windows.getLastFocused({
+            const wins = await chrome.windows.getAll({
                 populate: false,
+                windowTypes: ["normal"],
             });
-            if (win && typeof win.id === "number") {
+            if (Array.isArray(wins) && wins.length > 0) {
+                const win = wins.find((w) => w.focused) || wins[0];
                 this.lastFocusedWindowId = win.id;
                 const tabs = await chrome.tabs.query({
                     active: true,
@@ -92,22 +94,31 @@ export class StaticWindowTracker {
             },
             onFocusChanged: async (windowId) => {
                 try {
-                    // WINDOW_ID_NONE when Chrome lost focus
+                    // WINDOW_ID_NONE when Chrome lost focus (e.g., switched apps)
                     if (windowId === chrome.windows.WINDOW_ID_NONE) {
-                        this.lastFocusedWindowId = null;
+                        // Keep last known normal window id for continuity
                         return;
                     }
-                    this.lastFocusedWindowId = windowId;
                     try {
-                        const tabs = await chrome.tabs.query({
-                            active: true,
-                            windowId,
+                        const win = await chrome.windows.get(windowId, {
+                            populate: false,
                         });
-                        if (Array.isArray(tabs) && tabs.length > 0) {
-                            this.windowIdToActiveTabId.set(
-                                windowId,
-                                tabs[0].id
-                            );
+                        if (win && win.type === "normal") {
+                            this.lastFocusedWindowId = windowId;
+                            try {
+                                const tabs = await chrome.tabs.query({
+                                    active: true,
+                                    windowId,
+                                });
+                                if (Array.isArray(tabs) && tabs.length > 0) {
+                                    this.windowIdToActiveTabId.set(
+                                        windowId,
+                                        tabs[0].id
+                                    );
+                                }
+                            } catch (_) {}
+                        } else {
+                            // Ignore focus to devtools/panel/etc.
                         }
                     } catch (_) {}
                 } catch (_) {}

@@ -136,10 +136,16 @@ export class StaticScreenshotService {
 
     async #getLastFocusedWindowSafe() {
         try {
-            const win = await chrome.windows.getLastFocused({
+            // Prefer a focused normal browser window. If none, pick any normal window.
+            const wins = await chrome.windows.getAll({
                 populate: false,
+                windowTypes: ["normal"],
             });
-            return win || null;
+            if (Array.isArray(wins) && wins.length > 0) {
+                const focused = wins.find((w) => w.focused);
+                return focused || wins[0];
+            }
+            return null;
         } catch (_) {
             return null;
         }
