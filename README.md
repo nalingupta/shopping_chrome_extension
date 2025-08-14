@@ -77,18 +77,25 @@ The extension uses a unified conversation management system:
 -   `chrome.storage.local`: Extension-specific settings
 -   Automatic cleanup and migration utilities
 
-### Cross-Window Communication
-
 ### Local development
 
--   Conda env: `shopping-chrome-ext` (Python 3.11). Install: `fastapi uvicorn[standard] websockets pydantic python-dotenv google-genai ffmpeg-python webrtcvad soundfile pillow`.
+-   Conda env: `shopping-chrome-ext` (Python 3.11). Install deps:
+    -   `pip install "fastapi[all]" uvicorn python-dotenv google-genai`
 -   ffmpeg required (installed via conda-forge).
 -   Backend env in `server/.env`:
     -   `GEMINI_API_KEY=...`
-    -   Optional: `CAPTURE_FPS=10`, `ENCODE_FPS=2.0`, VAD env vars.
--   Start server: `uvicorn server.main:app --port 8787 --reload`
+    -   Optional: `CAPTURE_FPS=1` (default), `ENCODE_FPS=1.0`, VAD env vars
+-   Start server (recommended for WS stability):
+    -   `lsof -nP -iTCP:8787 -sTCP:LISTEN -t | xargs -r kill`
+    -   `conda run -n shopping-chrome-ext env SERVER_LOG_LEVEL=INFO PYTHONUNBUFFERED=1 python -m uvicorn server.main:app --host 127.0.0.1 --port 8787 --log-level info`
+-   Health check:
+    -   `curl http://127.0.0.1:8787/healthz`
 -   Extension CSP must allow `ws://127.0.0.1:*`.
+-   Expected logs when testing voice:
+    -   Client: `Connected to AI`, `AudioWorklet started | sampleRate=...`
+    -   Server: `WebSocket /ws [accepted]`, `SEG window ...`, `ENCODE result ...`, `GEMINI chosen_path=...`
 
--   Chrome runtime messaging for real-time updates
--   Storage change listeners for automatic synchronization
--   Broadcast messaging for immediate UI refresh
+### Notes
+
+-   Web Speech API is retained in the codebase for legacy reference but is not used in the current pipeline; the backend owns VAD/segmentation.
+-   Client is ready to consume `{type:"transcript"}` messages from the server; interim transcripts will be provided after Deepgram integration.

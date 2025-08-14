@@ -10,6 +10,7 @@ export class ServerWsClient {
             onStatus: null,
             onError: null,
             onConnectionStateChange: null,
+            onTranscript: null,
         };
         this.sessionStartMs = null;
         // Default to 1 FPS to avoid initial high-rate capture before server config arrives
@@ -27,6 +28,9 @@ export class ServerWsClient {
     }
     setConnectionStateCallback(cb) {
         this.callbacks.onConnectionStateChange = cb;
+    }
+    setTranscriptCallback(cb) {
+        this.callbacks.onTranscript = cb;
     }
 
     getConnectionStatus() {
@@ -148,6 +152,13 @@ export class ServerWsClient {
                     type: "config",
                     captureFps: this.captureFps,
                 });
+            } else if (t === "transcript") {
+                const payload = {
+                    text: String(data?.text || ""),
+                    isFinal: !!data?.isFinal,
+                    tsMs: typeof data?.tsMs === "number" ? data.tsMs : null,
+                };
+                this.callbacks.onTranscript?.(payload);
             }
         } catch (error) {
             this.#emitError(error);

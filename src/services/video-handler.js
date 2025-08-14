@@ -37,6 +37,7 @@ export class VideoHandler {
         this._suppressionStartWallMs = null;
         this._firstFrameDims = null; // { width, height } set once on first real frame
         this._whiteFrameCache = null; // base64 JPEG for current chosen dims
+        this._firstVideoLogEmitted = false;
     }
 
     async setupScreenCapture() {

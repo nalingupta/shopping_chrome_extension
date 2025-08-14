@@ -1,5 +1,9 @@
 import { streamingLogger } from "../../utils/streaming-logger.js";
 
+// LEGACY (unused in new audio pipeline):
+// This Web Speech API wrapper is retained for reference only.
+// The current production path streams PCM via AudioWorklet and relies on server-side VAD/transcription.
+// Safe to remove once we sunset the legacy UI transcription path.
 export class SpeechRecognitionService {
     constructor() {
         this.speechRecognition = null;
@@ -45,6 +49,7 @@ export class SpeechRecognitionService {
         this.speechBuffer = { ...this.speechBuffer, ...speechBuffer };
     }
 
+    // LEGACY: Not invoked by the new pipeline. Kept for reference/testing only.
     startLocalSpeechRecognition() {
         const SpeechRecognition =
             window.SpeechRecognition || window.webkitSpeechRecognition;

@@ -34,8 +34,15 @@ export class MultimediaOrchestrator {
             // Set speech buffer for coordination
             this.audioHandler.setSpeechBuffer(this.speechBuffer);
 
-            // Connect to Gemini
-            const geminiResult = await this.aiHandler.connectToGemini();
+            // Setup audio capture first to learn actual sample rate
+            await this.audioHandler.setupAudioCapture();
+
+            // Connect to Gemini with real sample rate and default FPS
+            const sr =
+                this.audioHandler?.audioCapture?.getSampleRate?.() ?? 16000;
+            const geminiResult = await this.aiHandler.connectToGemini({
+                sampleRate: sr,
+            });
             if (!geminiResult.success) {
                 throw new Error(
                     geminiResult.error || "Failed to connect to Gemini"
@@ -65,14 +72,11 @@ export class MultimediaOrchestrator {
                 );
             }
 
-            // Setup audio capture
-            await this.audioHandler.setupAudioCapture();
+            // Ensure WS is ready
             await this.startMediaStreaming();
 
-            // Start audio processing
-            this.audioHandler.startLocalSpeechRecognition();
-            this.audioHandler.startEndpointDetection();
-            this.audioHandler.startSpeechKeepAlive();
+            // Start audio streaming immediately (no Web Speech dependency)
+            await this.audioHandler.startAudioStreaming();
 
             // Set listening state
             this.audioHandler.setListeningState(true);
