@@ -120,6 +120,35 @@ export class SpeechRecognitionService {
 
         this.speechRecognition.onerror = (event) => {
             this._lastError = event?.error || null;
+            
+            // Handle permission-related errors
+            if (this._lastError === "not-allowed") {
+                console.error("[SpeechRec] Microphone permission denied. Please allow microphone access in Chrome settings.");
+                if (this.callbacks.onError) {
+                    this.callbacks.onError("Microphone permission denied. Please allow microphone access.");
+                }
+                return;
+            }
+            
+            // Handle aborted errors (often due to permission issues or conflicts)
+            if (this._lastError === "aborted") {
+                console.warn("[SpeechRec] Speech recognition aborted. This may be due to permission issues or browser restrictions.");
+                if (this.state.isListening && this._retryCount < this._maxRetries) {
+                    this._retryCount += 1;
+                    const backoff = Math.min(
+                        this._backoffBaseMs * Math.pow(2, this._retryCount),
+                        2000
+                    );
+                    console.warn(`[SpeechRec] Retrying after abort in ${backoff}ms (attempt ${this._retryCount}/${this._maxRetries})`);
+                    setTimeout(() => {
+                        if (this.state.isListening) {
+                            this.restartSpeechRecognition();
+                        }
+                    }, backoff);
+                }
+                return;
+            }
+            
             const timeoutErrors = ["no-speech", "network"];
             if (
                 this.state.isListening &&
@@ -251,5 +280,37 @@ export class SpeechRecognitionService {
 
     isSpeechRecognitionActive() {
         return this.speechRecognition !== null;
+    }
+
+    async requestMicrophonePermission() {
+        try {
+            // Request microphone permission explicitly
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            // Stop the stream immediately as we only needed permission
+            stream.getTracks().forEach(track => track.stop());
+            console.log("[SpeechRec] Microphone permission granted");
+            return true;
+        } catch (error) {
+            console.error("[SpeechRec] Microphone permission denied:", error);
+            if (this.callbacks.onError) {
+                this.callbacks.onError("Microphone access denied. Please allow microphone permission in your browser.");
+            }
+            return false;
+        }
+    }
+
+    async startWithPermissionCheck() {
+        // First check if we have microphone permission
+        const hasPermission = await this.requestMicrophonePermission();
+        if (!hasPermission) {
+            return false;
+        }
+        
+        // Reset retry count when starting fresh
+        this._retryCount = 0;
+        this._lastError = null;
+        
+        this.startLocalSpeechRecognition();
+        return true;
     }
 }

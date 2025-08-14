@@ -5,7 +5,7 @@ run_server() {
   # Optionally free the port if occupied
   lsof -nP -iTCP:8787 -sTCP:LISTEN -t 2>/dev/null | xargs -r kill || true
   # Run from repo root
-  cd /Users/nalin/dev/side_projects/shopping_chrome_extension
+  cd /Users/subham/Desktop/codes/wextension/shopping_chrome_extension
   exec "${1}" -m uvicorn server.main:app --host 127.0.0.1 --port 8787 --reload
 }
 
