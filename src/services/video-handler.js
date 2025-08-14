@@ -37,6 +37,7 @@ export class VideoHandler {
         this._suppressionStartWallMs = null;
         this._firstFrameDims = null; // { width, height } set once on first real frame
         this._whiteFrameCache = null; // base64 JPEG for current chosen dims
+        this._firstVideoLogEmitted = false;
     }
 
     async setupScreenCapture() {
@@ -412,6 +413,15 @@ export class VideoHandler {
                     const tsMs = sessionStart
                         ? (performance?.now?.() || Date.now()) - sessionStart
                         : performance?.now?.() || Date.now();
+                    // One-time debug log for first frame timestamp alignment
+                    if (!this._firstVideoLogEmitted) {
+                        try {
+                            console.info(
+                                `VIDEO firstFrame tsMs=${Math.round(tsMs)}`
+                            );
+                        } catch (_) {}
+                        this._firstVideoLogEmitted = true;
+                    }
                     this.aiHandler.sendImageFrame(frameData, tsMs);
                 }
 
