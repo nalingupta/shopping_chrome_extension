@@ -1,5 +1,4 @@
 import { MESSAGE_TYPES } from "../utils/constants.js";
-import { PageAnalyzer } from "../services/page-analyzer.js";
 
 class MicPermissionHandler {
     constructor() {
@@ -86,59 +85,18 @@ class ContentScript {
     }
 
     initialize() {
-        this.sendPageInfoToSidebar();
         this.setupEventListeners();
-        this.observeUrlChanges();
-    }
-
-    sendPageInfoToSidebar() {
-        const pageInfo = PageAnalyzer.getCompletePageInfo();
-
-        chrome.runtime.sendMessage({
-            type: MESSAGE_TYPES.PAGE_INFO_UPDATE,
-            data: pageInfo,
-        });
     }
 
     setupEventListeners() {
-        window.addEventListener("load", () => {
-            this.sendPageInfoToSidebar();
-        });
-
         chrome.runtime.onMessage.addListener(
             (request, sender, sendResponse) => {
-                if (request.type === MESSAGE_TYPES.GET_PAGE_INFO) {
-                    const pageInfo = PageAnalyzer.getCompletePageInfo();
-                    sendResponse(pageInfo);
-                }
-
                 if (request.type === MESSAGE_TYPES.REQUEST_MIC_PERMISSION) {
                     this.handleMicrophoneRequest(sendResponse);
                     return true;
                 }
             }
         );
-    }
-
-    observeUrlChanges() {
-        let lastUrl = this.currentUrl;
-
-        const observer = new MutationObserver(() => {
-            if (window.location.href !== lastUrl) {
-                lastUrl = window.location.href;
-                this.currentUrl = lastUrl;
-                this.currentDomain = window.location.hostname;
-
-                setTimeout(() => {
-                    this.sendPageInfoToSidebar();
-                }, 1000);
-            }
-        });
-
-        observer.observe(document.body, {
-            childList: true,
-            subtree: true,
-        });
     }
 
     async handleMicrophoneRequest(sendResponse) {

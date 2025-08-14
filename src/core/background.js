@@ -60,10 +60,6 @@ class BackgroundService {
 
     getMessageHandler(type) {
         const handlers = {
-            [MESSAGE_TYPES.PAGE_INFO_UPDATE]:
-                this.handlePageInfoUpdate.bind(this),
-            [MESSAGE_TYPES.GET_CURRENT_TAB_INFO]:
-                this.handleGetCurrentTabInfo.bind(this),
             [MESSAGE_TYPES.PROCESS_USER_QUERY]:
                 this.handleProcessUserQuery.bind(this),
             [MESSAGE_TYPES.REQUEST_MIC_PERMISSION]:
@@ -81,39 +77,7 @@ class BackgroundService {
         return handlers[type] || null;
     }
 
-    handlePageInfoUpdate(request, sender) {
-        chrome.runtime.sendMessage({
-            type: MESSAGE_TYPES.PAGE_INFO_BROADCAST,
-            data: request.data,
-            tabId: sender.tab?.id,
-        });
-    }
-
-    async handleGetCurrentTabInfo(request, sender, sendResponse) {
-        try {
-            const [tab] = await chrome.tabs.query({
-                active: true,
-                currentWindow: true,
-            });
-
-            if (!tab) {
-                sendResponse(null);
-                return;
-            }
-
-            await this.injectContentScript(tab.id, ["content.js"]);
-
-            chrome.tabs.sendMessage(
-                tab.id,
-                { type: MESSAGE_TYPES.GET_PAGE_INFO },
-                (response) => {
-                    sendResponse(chrome.runtime.lastError ? null : response);
-                }
-            );
-        } catch (error) {
-            sendResponse(null);
-        }
-    }
+    // Page info update handlers removed
 
     async handleProcessUserQuery(request, sender, sendResponse) {
         // Route text to side panel UI; server client will forward to server over WS

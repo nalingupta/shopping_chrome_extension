@@ -9,13 +9,13 @@ import { streamingLogger } from "../utils/streaming-logger.js";
 // Facade with the same public API as the old VideoHandler (to avoid import churn)
 export class VideoHandler {
     constructor(serverClient) {
-        this.aiHandler = serverClient;
+        this.serverClient = serverClient;
         this.screenCapture = new ScreenCaptureService();
         this.preview = new PreviewAdapter();
         this.series = new SeriesLogger();
         this.scheduler = null;
         this.pipeline = new FramePipeline({
-            aiHandler: this.aiHandler,
+            serverClient: this.serverClient,
             screenCapture: this.screenCapture,
             seriesLogger: this.series,
             preview: this.preview,
@@ -70,10 +70,10 @@ export class VideoHandler {
     startScreenshotStreaming() {
         if (
             !this.screenCapture.hasStream() ||
-            !this.aiHandler.isConnectionActive()
+            !this.serverClient.isConnectionActive()
         )
             return;
-        const backendFps = this.aiHandler?.serverAPI?.getCaptureFps?.();
+        const backendFps = this.serverClient?.serverAPI?.getCaptureFps?.();
         const captureFps =
             typeof backendFps === "number" && backendFps > 0
                 ? backendFps

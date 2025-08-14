@@ -5,7 +5,6 @@ export class ServerClient {
     constructor() {
         this.serverAPI = new ServerWsClient();
         this._isConnected = false;
-        this.currentPageInfo = null;
         this._lastUserMessage = null;
 
         this._setupCallbacks();
@@ -103,9 +102,7 @@ export class ServerClient {
         return this.serverAPI.sessionStartMs || null;
     }
 
-    setCurrentPageInfo(pageInfo) {
-        this.currentPageInfo = pageInfo || null;
-    }
+    // Page info handling removed
 
     setLastUserMessage(text) {
         this._lastUserMessage = typeof text === "string" ? text : null;

@@ -1,7 +1,7 @@
 // Per-tick capture pipeline
 export class FramePipeline {
-    constructor({ aiHandler, screenCapture, seriesLogger, preview }) {
-        this.aiHandler = aiHandler;
+    constructor({ serverClient, screenCapture, seriesLogger, preview }) {
+        this.serverClient = serverClient;
         this.screenCapture = screenCapture;
         this.series = seriesLogger;
         this.preview = preview;
@@ -29,12 +29,13 @@ export class FramePipeline {
                 this.series.noteSegment("miss");
                 return { advanced: 1 };
             }
-            const sessionStart = this.aiHandler.getSessionStartMs?.() || null;
+            const sessionStart =
+                this.serverClient.getSessionStartMs?.() || null;
             const tsMs = sessionStart
                 ? (performance?.now?.() || Date.now()) - sessionStart
                 : performance?.now?.() || Date.now();
-            if (this.aiHandler.isConnectionActive()) {
-                this.aiHandler.sendImageFrame(frameData, tsMs);
+            if (this.serverClient.isConnectionActive()) {
+                this.serverClient.sendImageFrame(frameData, tsMs);
             }
             this.preview.updatePreview(frameData);
             // Capture first frame dimensions asynchronously for future white-frame substitution
@@ -54,14 +55,14 @@ export class FramePipeline {
                 // Try to substitute with a white frame if we know frame dimensions
                 if (this._firstFrameDims) {
                     const sessionStart =
-                        this.aiHandler.getSessionStartMs?.() || null;
+                        this.serverClient.getSessionStartMs?.() || null;
                     const tsMs = sessionStart
                         ? (performance?.now?.() || Date.now()) - sessionStart
                         : performance?.now?.() || Date.now();
                     const whiteBase64 = await this._ensureWhiteFrameBase64();
                     if (whiteBase64) {
-                        if (this.aiHandler.isConnectionActive()) {
-                            this.aiHandler.sendImageFrame(whiteBase64, tsMs);
+                        if (this.serverClient.isConnectionActive()) {
+                            this.serverClient.sendImageFrame(whiteBase64, tsMs);
                         }
                         this.preview.updatePreview(whiteBase64);
                         this.series.note("substitute");

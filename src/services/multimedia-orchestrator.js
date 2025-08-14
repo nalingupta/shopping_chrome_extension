@@ -2,7 +2,7 @@ export class MultimediaOrchestrator {
     constructor(audioHandler, videoHandler, serverClient) {
         this.audioHandler = audioHandler;
         this.videoHandler = videoHandler;
-        this.aiHandler = serverClient;
+        this.serverClient = serverClient;
 
         // Multimedia session state
         this.isMultimediaActive = false;
@@ -40,7 +40,7 @@ export class MultimediaOrchestrator {
             // Connect to server with real sample rate and default FPS
             const sr =
                 this.audioHandler?.audioCapture?.getSampleRate?.() ?? 16000;
-            const geminiResult = await this.aiHandler.connect({
+            const geminiResult = await this.serverClient.connect({
                 sampleRate: sr,
             });
             if (!geminiResult.success) {
@@ -50,7 +50,7 @@ export class MultimediaOrchestrator {
             }
 
             // Wire server status updates to video handler (apply server FPS override once if needed)
-            this.aiHandler.setStreamingUpdateCallback?.((update) => {
+            this.serverClient.setStreamingUpdateCallback?.((update) => {
                 try {
                     if (
                         update &&
@@ -126,7 +126,7 @@ export class MultimediaOrchestrator {
             await this.videoHandler.cleanup();
 
             // Disconnect from server
-            await this.aiHandler.disconnect();
+            await this.serverClient.disconnect();
 
             // Reset states
             this.audioHandler.setListeningState(false);
@@ -150,12 +150,12 @@ export class MultimediaOrchestrator {
 
     async startMediaStreaming() {
         let waitCount = 0;
-        while (!this.aiHandler.isConnected() && waitCount < 50) {
+        while (!this.serverClient.isConnected() && waitCount < 50) {
             await new Promise((resolve) => setTimeout(resolve, 100));
             waitCount++;
         }
 
-        if (!this.aiHandler.isConnected()) {
+        if (!this.serverClient.isConnected()) {
             throw new Error("AI connection did not complete in time");
         }
 
@@ -175,7 +175,7 @@ export class MultimediaOrchestrator {
     setBotResponseCallback(callback) {
         this.audioHandler.setBotResponseCallback(callback);
         // Also set up server client callbacks for text message responses
-        this.aiHandler.setBotResponseCallback(callback);
+        this.serverClient.setBotResponseCallback(callback);
     }
 
     setStatusCallback(callback) {

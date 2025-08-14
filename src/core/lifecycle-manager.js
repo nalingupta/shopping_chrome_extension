@@ -98,9 +98,7 @@ export class LifecycleManager {
         });
     }
 
-    updatePageInfo(pageInfo) {
-        return this.eventManager.updatePageInfo(pageInfo);
-    }
+    // Page info update path removed
 
     async saveState() {
         return this.uiManager.saveState();
