@@ -57,6 +57,50 @@ async function run() {
         })
     );
     await waitFor(ws, (m) => m.type === "ack" && m.ackType === "imageFrame");
+    // send a small audioChunk (16kHz mono PCM silence of 30ms)
+    const sampleRate = 16000;
+    const durationMs = 30;
+    const numSamples = Math.floor((sampleRate * durationMs) / 1000);
+    const pcm = new Uint8Array(numSamples * 2); // 16-bit PCM, silence
+    let b64 = Buffer.from(pcm).toString("base64");
+    ws.send(
+        JSON.stringify({
+            type: "audioChunk",
+            base64: b64,
+            tsStartMs: Date.now(),
+            numSamples,
+            sampleRate,
+            seq: 5,
+        })
+    );
+    await waitFor(ws, (m) => m.type === "ack" && m.ackType === "audioChunk");
+    // send a final transcript (UI echo path)
+    ws.send(
+        JSON.stringify({
+            type: "transcript",
+            text: "final transcript",
+            tsMs: Date.now(),
+            isFinal: true,
+            seq: 6,
+        })
+    );
+    await waitFor(ws, (m) => m.type === "ack" && m.ackType === "transcript");
+    // send a control to force segment close
+    ws.send(
+        JSON.stringify({
+            type: "control",
+            action: "forceSegmentClose",
+            seq: 7,
+        })
+    );
+    await waitFor(ws, (m) => m.type === "ack" && m.ackType === "control");
+    // expect a status about segment_forced and possibly a segment payload
+    await waitFor(
+        ws,
+        (m) => m.type === "status" && m.state === "segment_forced",
+        5000
+    ).catch(() => {});
+    await waitFor(ws, (m) => m.type === "segment", 10000).catch(() => {});
     // send a text
     ws.send(
         JSON.stringify({
