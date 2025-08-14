@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     
     # Server settings
     HOST: str = "0.0.0.0"
-    PORT: int = int(os.getenv("PORT", "8000"))  # Railway sets PORT automatically
+    PORT: int = int(os.getenv("PORT", "8767"))  # Railway sets PORT automatically
     DEBUG: bool = False
     
     # CORS settings

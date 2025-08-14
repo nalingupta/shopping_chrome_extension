@@ -90,7 +90,7 @@ async def main():
         print("\nTo start the server:")
         print("  Development: python -m app.main")
         print("  Production:  python main_prod.py")
-        print("  Direct:      uvicorn app.main:app --host 0.0.0.0 --port 8000")
+        print("  Direct:      uvicorn app.main:app --host 0.0.0.0 --port 8767")
     else:
         print("\n❌ Some tests failed. Please check the setup.")
         sys.exit(1)
