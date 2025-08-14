@@ -2,6 +2,7 @@
  * Compact streaming logger for media and audio data
  * Provides a cleaner way to display streaming status without console spam
  */
+import { DEBUG_MEDIA } from "../config/debug.js";
 export class StreamingLogger {
     constructor() {
         this.audioStats = {
@@ -78,6 +79,15 @@ export class StreamingLogger {
             : "📹 VIDEO: inactive";
 
         // Suppressed periodic stream status logs to reduce console noise
+        // If explicitly enabled, emit a concise status line.
+        if (DEBUG_MEDIA) {
+            try {
+                const a = audioStatus;
+                const v = videoStatus;
+                // eslint-disable-next-line no-console
+                console.log(`[Media] ${a} | ${v}`);
+            } catch (_) {}
+        }
 
         // Reset counters for next interval
         this.audioStats.chunksSent = 0;
@@ -96,7 +106,14 @@ export class StreamingLogger {
         console.error(`❌ ${type} error:`, error?.message || error);
     }
 
-    logInfo(message) {}
+    logInfo(message) {
+        if (DEBUG_MEDIA) {
+            try {
+                // eslint-disable-next-line no-console
+                console.log(String(message || ""));
+            } catch (_) {}
+        }
+    }
 
     // Manual trigger for testing
     forceStatusUpdate() {
@@ -109,32 +126,44 @@ export class StreamingLogger {
         const audioActive = now - this.audioStats.lastSent < 10000;
         const videoActive = now - this.videoStats.lastSent < 10000;
 
-        console.log("🔍 STREAM DETAILS:");
-        console.log(
-            `   🎤 Audio Stream: ${audioActive ? "ACTIVE" : "INACTIVE"}`
-        );
-        console.log(`      - Chunks sent: ${this.audioStats.chunksSent}`);
-        console.log(
-            `      - Total data: ${this.formatBytes(
-                this.audioStats.totalBytes
-            )}`
-        );
-        console.log(
-            `      - Last activity: ${audioActive ? "Recent" : "None"}`
-        );
+        if (!DEBUG_MEDIA) return;
+        try {
+            // eslint-disable-next-line no-console
+            console.log("🔍 STREAM DETAILS:");
+            // eslint-disable-next-line no-console
+            console.log(
+                `   🎤 Audio Stream: ${audioActive ? "ACTIVE" : "INACTIVE"}`
+            );
+            // eslint-disable-next-line no-console
+            console.log(`      - Chunks sent: ${this.audioStats.chunksSent}`);
+            // eslint-disable-next-line no-console
+            console.log(
+                `      - Total data: ${this.formatBytes(
+                    this.audioStats.totalBytes
+                )}`
+            );
+            // eslint-disable-next-line no-console
+            console.log(
+                `      - Last activity: ${audioActive ? "Recent" : "None"}`
+            );
 
-        console.log(
-            `   📹 Video Stream: ${videoActive ? "ACTIVE" : "INACTIVE"}`
-        );
-        console.log(`      - Frames sent: ${this.videoStats.framesSent}`);
-        console.log(
-            `      - Total data: ${this.formatBytes(
-                this.videoStats.totalBytes
-            )}`
-        );
-        console.log(
-            `      - Last activity: ${videoActive ? "Recent" : "None"}`
-        );
+            // eslint-disable-next-line no-console
+            console.log(
+                `   📹 Video Stream: ${videoActive ? "ACTIVE" : "INACTIVE"}`
+            );
+            // eslint-disable-next-line no-console
+            console.log(`      - Frames sent: ${this.videoStats.framesSent}`);
+            // eslint-disable-next-line no-console
+            console.log(
+                `      - Total data: ${this.formatBytes(
+                    this.videoStats.totalBytes
+                )}`
+            );
+            // eslint-disable-next-line no-console
+            console.log(
+                `      - Last activity: ${videoActive ? "Recent" : "None"}`
+            );
+        } catch (_) {}
     }
 }
 
