@@ -9,6 +9,7 @@ import { ServerClient } from "../services/ai/server-client.js";
 import { UIManager } from "./ui-manager.js";
 import { EventManager } from "./event-manager.js";
 import { LifecycleManager } from "./lifecycle-manager.js";
+// Debug logging removed after verification
 
 export class ShoppingAssistant {
     constructor() {
@@ -105,6 +106,30 @@ export class ShoppingAssistant {
                 "error",
                 3000
             );
+        });
+
+        // Frontend VAD: app-level hooks for orchestration
+        this.multimediaOrchestrator.setSpeechActivityCallbacks({
+            onStart: () => {
+                try {
+                    // Optional UI hint: mark speaking state while session active
+                    if (
+                        this.multimediaOrchestrator.isMultimediaSessionActive()
+                    ) {
+                        this.uiManager.uiState.setSpeechState?.("speaking");
+                    }
+                } catch (_) {}
+            },
+            onEnd: ({ segmentStartMs, segmentEndMs }) => {
+                try {
+                    // Optional UI hint: return to listening state if session still active
+                    if (
+                        this.multimediaOrchestrator.isMultimediaSessionActive()
+                    ) {
+                        this.uiManager.uiState.setSpeechState?.("listening");
+                    }
+                } catch (_) {}
+            },
         });
     }
 

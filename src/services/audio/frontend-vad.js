@@ -3,7 +3,7 @@
 // - Emits onStart() and onEnd({ segmentStartMs, segmentEndMs })
 // - Does not gate or alter audio transport
 
-import { DEBUG_FRONTEND_VAD } from "../../config/debug.js";
+// Debug logging removed after verification
 
 export class FrontendVad {
     /**
@@ -41,8 +41,7 @@ export class FrontendVad {
             onStart: null,
             onEnd: null,
         };
-        // Debug toggle from static import
-        this._DEBUG_VAD = !!DEBUG_FRONTEND_VAD;
+        // Debug toggle removed
     }
 
     /**
@@ -100,15 +99,6 @@ export class FrontendVad {
 
                 if (this.callbacks.onStart) {
                     try {
-                        if (this._DEBUG_VAD) {
-                            console.groupCollapsed("frontend-vad:start", {
-                                estStartMs: this.firstSpeechTsMs,
-                                ema: Number(this.emaLevel.toFixed(6)),
-                                startThreshold: this.cfg.startThreshold,
-                                minSpeechMs: this.cfg.minSpeechMs,
-                            });
-                            console.groupEnd();
-                        }
                         this.callbacks.onStart();
                     } catch (_) {}
                 }
@@ -143,16 +133,6 @@ export class FrontendVad {
 
             if (this.callbacks.onEnd) {
                 try {
-                    if (this._DEBUG_VAD) {
-                        console.groupCollapsed("frontend-vad:end", {
-                            segmentStartMs: segStart ?? null,
-                            segmentEndMs: segEnd ?? null,
-                            ema: Number(this.emaLevel?.toFixed?.(6) || 0),
-                            endThreshold: this.cfg.endThreshold,
-                            endSilenceMs: this.cfg.endSilenceMs,
-                        });
-                        console.groupEnd();
-                    }
                     this.callbacks.onEnd({
                         segmentStartMs: segStart ?? null,
                         segmentEndMs: segEnd ?? null,

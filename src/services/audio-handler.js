@@ -1,7 +1,7 @@
 import { AudioCaptureService } from "./audio/audio-capture-service.js";
 import { FrontendVad } from "./audio/frontend-vad.js";
 import { FEATURES } from "../config/features.js";
-import { DEBUG_FRONTEND_VAD } from "../config/debug.js";
+// Debug logging removed after verification
 // Local endpoint detection and audio state manager removed in Phase 3
 
 export class AudioHandler {
@@ -71,11 +71,7 @@ export class AudioHandler {
                         try {
                             this.speechActivityCallbacks?.onStart?.();
                         } catch (_) {}
-                        if (DEBUG_FRONTEND_VAD) {
-                            try {
-                                console.log("speech:active(frontend)", true);
-                            } catch (_) {}
-                        }
+                        // Debug logging removed
                     },
                     onEnd: (info) => {
                         // Internal effect
@@ -84,11 +80,7 @@ export class AudioHandler {
                         try {
                             this.speechActivityCallbacks?.onEnd?.(info);
                         } catch (_) {}
-                        if (DEBUG_FRONTEND_VAD) {
-                            try {
-                                console.log("speech:active(frontend)", false);
-                            } catch (_) {}
-                        }
+                        // Debug logging removed
                     },
                 });
 
