@@ -80,7 +80,7 @@ multimediaOrchestrator.audioHandler.setSpeechActivityCallbacks({
 -   `src/config/debug.js` flags:
     -   `DEBUG_MEDIA` – per-frame audio logs
     -   `DEBUG_MEDIA_GROUP` – group `DEBUG_MEDIA` logs (recommended)
-    -   `DEBUG_VAD` – concise `vad:start` / `vad:end` and `speech:active` logs
+    -   `DEBUG_FRONTEND_VAD` – concise `frontend-vad:start` / `frontend-vad:end` and `speech:active(frontend)` logs
 
 ### 4. Video Processing Pipeline
 

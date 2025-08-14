@@ -1,7 +1,7 @@
 import { AudioCaptureService } from "./audio/audio-capture-service.js";
-import { SimpleVad } from "./audio/simple-vad.js";
+import { FrontendVad } from "./audio/frontend-vad.js";
 import { FEATURES } from "../config/features.js";
-import { DEBUG_VAD } from "../config/debug.js";
+import { DEBUG_FRONTEND_VAD } from "../config/debug.js";
 // Local endpoint detection and audio state manager removed in Phase 3
 
 export class AudioHandler {
@@ -13,7 +13,7 @@ export class AudioHandler {
         this.audioCapture = new AudioCaptureService(this.serverClient);
         this.endpointDetection = null;
         // Frontend VAD (UI/orchestration only)
-        this.simpleVad = null;
+        this.frontendVad = null;
         this.speechActivityCallbacks = { onStart: null, onEnd: null };
         this.stateManager = {
             callbacks: {
@@ -57,11 +57,13 @@ export class AudioHandler {
 
         // Endpoint detection removed; backend handles segmentation
 
-        // Initialize SimpleVad if enabled
+        // Initialize FrontendVad if enabled
         try {
             if (FEATURES?.FRONTEND_VAD?.enabled) {
-                this.simpleVad = new SimpleVad({ ...FEATURES.FRONTEND_VAD });
-                this.simpleVad.setCallbacks({
+                this.frontendVad = new FrontendVad({
+                    ...FEATURES.FRONTEND_VAD,
+                });
+                this.frontendVad.setCallbacks({
                     onStart: () => {
                         // Internal effect
                         this.onSpeechDetected();
@@ -69,9 +71,9 @@ export class AudioHandler {
                         try {
                             this.speechActivityCallbacks?.onStart?.();
                         } catch (_) {}
-                        if (DEBUG_VAD) {
+                        if (DEBUG_FRONTEND_VAD) {
                             try {
-                                console.log("speech:active", true);
+                                console.log("speech:active(frontend)", true);
                             } catch (_) {}
                         }
                     },
@@ -82,9 +84,9 @@ export class AudioHandler {
                         try {
                             this.speechActivityCallbacks?.onEnd?.(info);
                         } catch (_) {}
-                        if (DEBUG_VAD) {
+                        if (DEBUG_FRONTEND_VAD) {
                             try {
-                                console.log("speech:active", false);
+                                console.log("speech:active(frontend)", false);
                             } catch (_) {}
                         }
                     },
@@ -94,7 +96,7 @@ export class AudioHandler {
                 this.audioCapture.setAudioFrameCallback(
                     (level, blockMs, tsStartMs) => {
                         try {
-                            this.simpleVad?.update(level, blockMs, tsStartMs);
+                            this.frontendVad?.update(level, blockMs, tsStartMs);
                         } catch (_) {}
                     }
                 );

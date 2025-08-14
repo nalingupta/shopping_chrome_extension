@@ -1,11 +1,11 @@
-// SimpleVad: Lightweight frontend VAD for orchestration/UI only
+// FrontendVad: Lightweight frontend VAD for orchestration/UI only
 // - Uses EMA-smoothed maxAmplitude with hysteresis and debounce
 // - Emits onStart() and onEnd({ segmentStartMs, segmentEndMs })
 // - Does not gate or alter audio transport
 
-import { DEBUG_VAD } from "../../config/debug.js";
+import { DEBUG_FRONTEND_VAD } from "../../config/debug.js";
 
-export class SimpleVad {
+export class FrontendVad {
     /**
      * @param {Object} [config]
      * @param {number} [config.startThreshold] EMA level to trigger speech start (0..1)
@@ -42,7 +42,7 @@ export class SimpleVad {
             onEnd: null,
         };
         // Debug toggle from static import
-        this._DEBUG_VAD = !!DEBUG_VAD;
+        this._DEBUG_VAD = !!DEBUG_FRONTEND_VAD;
     }
 
     /**
@@ -101,7 +101,7 @@ export class SimpleVad {
                 if (this.callbacks.onStart) {
                     try {
                         if (this._DEBUG_VAD) {
-                            console.groupCollapsed("vad:start", {
+                            console.groupCollapsed("frontend-vad:start", {
                                 estStartMs: this.firstSpeechTsMs,
                                 ema: Number(this.emaLevel.toFixed(6)),
                                 startThreshold: this.cfg.startThreshold,
@@ -144,7 +144,7 @@ export class SimpleVad {
             if (this.callbacks.onEnd) {
                 try {
                     if (this._DEBUG_VAD) {
-                        console.groupCollapsed("vad:end", {
+                        console.groupCollapsed("frontend-vad:end", {
                             segmentStartMs: segStart ?? null,
                             segmentEndMs: segEnd ?? null,
                             ema: Number(this.emaLevel?.toFixed?.(6) || 0),

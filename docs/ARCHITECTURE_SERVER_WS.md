@@ -1,13 +1,13 @@
 # Server-mediated Architecture
 
-This extension streams timestamped image frames and PCM audio to a local backend over WebSocket. The backend segments speech (VAD), encodes aligned audio+frames into WebM at a server-chosen FPS, and calls Gemini 2.5 Flash via the Google GenAI SDK. Responses are sent back to the extension.
+This extension streams timestamped image frames and PCM audio to a local backend over WebSocket. The backend segments speech (Server VAD), encodes aligned audio+frames into WebM at a server-chosen FPS, and calls Gemini 2.5 Flash via the Google GenAI SDK. Responses are sent back to the extension.
 
 ## Components
 
 -   Backend (FastAPI)
     -   `GET /healthz`
     -   `WS /ws`
-    -   Segmentation: VAD with 2s transcript wait timeout
+    -   Segmentation: Server VAD with 2s transcript wait timeout
     -   Encoding: ffmpeg (VP9/Opus), ENCODE_FPS downsampling
     -   Fallback: Video → Audio → Text (never skip Gemini)
     -   Env-driven knobs (see below)
@@ -43,9 +43,9 @@ Server → Client
 -   `imageFrame.tsMs` marks frame capture time
 -   Backend slices audio for `[segmentStart, segmentEnd]` and selects frames near uniform sampling instants for ENCODE_FPS (e.g., 2 FPS), adjusting last frame duration to match audio length
 
-## VAD and Transcript Wait
+## Server VAD and Transcript Wait
 
--   VAD params (defaults): `frame_ms=30`, `min_speech_ms=300`, `end_silence_ms=800`, `pre_roll_ms=200`, `post_roll_ms=300`, `amplitude_threshold=0.02`
+-   Server VAD params (defaults): `frame_ms=30`, `min_speech_ms=300`, `end_silence_ms=800`, `pre_roll_ms=200`, `post_roll_ms=300`, `amplitude_threshold=0.02`
 -   On segment close, wait up to 2s for a final transcript overlapping the window; if none arrives, proceed without it
 
 ## Fallback Hierarchy

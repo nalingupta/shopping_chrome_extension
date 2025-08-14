@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 
 @dataclass
-class VadConfig:
+class ServerVadConfig:
     frame_ms: int = 30
     min_speech_ms: int = 300
     end_silence_ms: int = 800
@@ -13,9 +13,9 @@ class VadConfig:
     amplitude_threshold: float = 0.02  # normalized (0..1) RMS threshold
 
 
-class RmsVadSegmenter:
-    def __init__(self, sample_rate_hz: int = 16000, cfg: VadConfig | None = None) -> None:
-        self.cfg = cfg or VadConfig()
+class ServerRmsVadSegmenter:
+    def __init__(self, sample_rate_hz: int = 16000, cfg: ServerVadConfig | None = None) -> None:
+        self.cfg = cfg or ServerVadConfig()
         self.sample_rate_hz = sample_rate_hz
         self.state = "idle"  # idle | speaking
         self.speech_ms = 0
