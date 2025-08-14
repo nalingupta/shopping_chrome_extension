@@ -413,15 +413,6 @@ export class VideoHandler {
                     const tsMs = sessionStart
                         ? (performance?.now?.() || Date.now()) - sessionStart
                         : performance?.now?.() || Date.now();
-                    // One-time debug log for first frame timestamp alignment
-                    if (!this._firstVideoLogEmitted) {
-                        try {
-                            console.info(
-                                `VIDEO firstFrame tsMs=${Math.round(tsMs)}`
-                            );
-                        } catch (_) {}
-                        this._firstVideoLogEmitted = true;
-                    }
                     this.aiHandler.sendImageFrame(frameData, tsMs);
                 }
 

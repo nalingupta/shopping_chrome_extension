@@ -147,17 +147,7 @@ export class AudioCaptureService {
                 this.audioSessionOffsetMs +
                 (this.totalSamplesSent / sampleRate) * 1000;
 
-            // One-time debug log for timestamp alignment
-            if (!this._firstAudioLogEmitted) {
-                try {
-                    console.info(
-                        `AUDIO firstChunk tsStartMs=${Math.round(
-                            tsStartMs
-                        )} SR=${sampleRate} numSamples=${numSamples}`
-                    );
-                } catch (_) {}
-                this._firstAudioLogEmitted = true;
-            }
+            // Removed one-time Phase 4 debug log
 
             if (this.geminiAPI.isGeminiConnectionActive()) {
                 const uint8Array = new Uint8Array(pcmData.buffer);
@@ -190,6 +180,8 @@ export class AudioCaptureService {
         } catch (_) {}
     }
 
+    // LEGACY (not invoked in new pipeline): retained for historical compatibility only.
+    // The new architecture uses AudioWorklet exclusively.
     startScriptProcessorFallback() {
         if (!this.audioContext) {
             try {
