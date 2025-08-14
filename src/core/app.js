@@ -45,7 +45,6 @@ export class ShoppingAssistant {
         this.lifecycleManager.checkAndClearChatHistoryOnReload();
         this.eventManager.initializeCrossWindowSync();
         this.lifecycleManager.restoreState();
-        this.getCurrentPageInfo();
     }
 
     initializeCallbacks() {
@@ -74,7 +73,7 @@ export class ShoppingAssistant {
             this.handleListeningStopped(reason);
         });
 
-        // Set up AIHandler callbacks for text message responses
+        // Set up ServerClient callbacks for text message responses
         this.serverClient.setBotResponseCallback((response) => {
             this.handleBotResponse(response);
         });
@@ -100,7 +99,7 @@ export class ShoppingAssistant {
         });
 
         this.serverClient.setErrorCallback((error) => {
-            console.error("AI Handler error:", error);
+            console.error("Server client error:", error);
             this.uiManager.uiState.showStatus(
                 "AI connection error",
                 "error",
@@ -109,22 +108,7 @@ export class ShoppingAssistant {
         });
     }
 
-    async getCurrentPageInfo() {
-        try {
-            const response = await new Promise((resolve) => {
-                chrome.runtime.sendMessage(
-                    { type: MESSAGE_TYPES.GET_CURRENT_TAB_INFO },
-                    resolve
-                );
-            });
-
-            if (response) {
-                this.eventManager.updatePageInfo(response);
-            }
-        } catch (error) {
-            // Ignore errors
-        }
-    }
+    // Page info request removed
 
     // Audio handler callback methods - maintain proper context
     handleTranscriptionReceived(transcription) {

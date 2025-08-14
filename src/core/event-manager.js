@@ -9,8 +9,8 @@ export class EventManager {
 
         // Wire transcript callback (Phase 5): interim/final from server
         try {
-            const aiHandler = this.multimediaOrchestrator?.aiHandler;
-            aiHandler?.serverAPI?.setTranscriptCallback?.((t) => {
+            const serverClient = this.multimediaOrchestrator?.serverClient;
+            serverClient?.serverAPI?.setTranscriptCallback?.((t) => {
                 if (t && typeof t.text === "string") {
                     if (t.isFinal) {
                         this.handleTranscriptionReceived(t.text);
@@ -50,11 +50,7 @@ export class EventManager {
         );
         chrome.runtime.onMessage.addListener(
             (request, sender, sendResponse) => {
-                if (request.type === MESSAGE_TYPES.PAGE_INFO_BROADCAST) {
-                    this.updatePageInfo(request.data);
-                } else if (
-                    request.type === MESSAGE_TYPES.CONVERSATION_UPDATED
-                ) {
+                if (request.type === MESSAGE_TYPES.CONVERSATION_UPDATED) {
                     // Handle cross-window conversation updates
                     this.handleConversationUpdate();
                 }
@@ -114,12 +110,6 @@ export class EventManager {
 
     updatePageInfo(pageInfo) {
         this.currentPageInfo = pageInfo;
-        // Share page info with AI so it can include it in context assembly
-        try {
-            this.multimediaOrchestrator?.aiHandler?.setCurrentPageInfo(
-                pageInfo
-            );
-        } catch (_) {}
     }
 
     async handleSendMessage() {
@@ -142,7 +132,7 @@ export class EventManager {
         try {
             // Send text message directly to server client
             const result =
-                await this.multimediaOrchestrator.aiHandler.sendTextMessage(
+                await this.multimediaOrchestrator.serverClient.sendTextMessage(
                     message
                 );
 
@@ -284,7 +274,7 @@ export class EventManager {
         if (transcription) {
             try {
                 // Store the finalized transcript for server client to send as the user message
-                this.multimediaOrchestrator?.aiHandler?.setLastUserMessage?.(
+                this.multimediaOrchestrator?.serverClient?.setLastUserMessage?.(
                     transcription
                 );
             } catch (_) {}

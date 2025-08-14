@@ -3,11 +3,11 @@ import { AudioCaptureService } from "./audio/audio-capture-service.js";
 
 export class AudioHandler {
     constructor(serverClient, videoHandler) {
-        this.aiHandler = serverClient;
+        this.serverClient = serverClient;
         this.videoHandler = videoHandler;
 
         // Audio services
-        this.audioCapture = new AudioCaptureService(this.aiHandler);
+        this.audioCapture = new AudioCaptureService(this.serverClient);
         this.endpointDetection = null;
         this.stateManager = {
             callbacks: {
@@ -137,7 +137,7 @@ export class AudioHandler {
             }
         } catch (_) {}
         try {
-            this.aiHandler?.endUtterance?.();
+            this.serverClient?.endUtterance?.();
         } catch (_) {}
     }
 
