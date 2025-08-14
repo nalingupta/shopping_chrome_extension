@@ -2,6 +2,7 @@ import { streamingLogger } from "../../utils/streaming-logger.js";
 
 export class AudioCaptureService {
     constructor(geminiAPI) {
+        // geminiAPI is actually a neutral AI connection; rename for clarity
         this.geminiAPI = geminiAPI;
         this.audioStream = null;
         this.audioWorkletNode = null;

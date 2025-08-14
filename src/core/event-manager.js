@@ -258,10 +258,8 @@ export class EventManager {
                 );
                 break;
             case "debugger_detached":
-                this.uiManager.uiState.showStatus(
-                    "Screen capture cancelled - listening stopped",
-                    "error"
-                );
+                // Legacy debugger path no longer used; treat as generic stop
+                this.uiManager.uiState.showStatus("Listening stopped", "info");
                 break;
             default:
                 this.uiManager.uiState.showStatus("Listening stopped", "info");

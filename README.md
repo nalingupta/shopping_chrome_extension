@@ -6,7 +6,7 @@ An AI-powered shopping assistant Chrome extension with voice and visual input ca
 
 -   **Voice Input**: Speak to the assistant using your microphone
 -   **Visual Context**: The assistant can see what's on your screen to provide relevant shopping advice
--   **AI-Powered**: Powered by Google's Gemini AI for intelligent responses
+-   **AI-Powered**: Uses a local backend server that calls the configured multimodal model (e.g., Gemini) for intelligent responses
 -   **Cross-Window Synchronization**: Conversation history and state are synchronized across all Chrome windows
 -   **Real-time Updates**: Changes in one window are immediately reflected in all other windows
 
@@ -64,9 +64,9 @@ The extension uses a unified conversation management system:
 
 -   **Backend (FastAPI)**: WebSocket `/ws` for realtime media; health endpoint `/healthz`.
     -   VAD-based segmentation with 2s transcript wait; server-side FPS downsampling and ffmpeg mux.
-    -   Fallback hierarchy: Video→Audio→Text; always calls Gemini 2.5 Flash via Google GenAI SDK.
+    -   Fallback hierarchy: Video→Audio→Text; backend invokes the configured model via its SDK.
     -   Env-driven knobs: `CAPTURE_FPS`, `ENCODE_FPS`, VAD params.
--   **Background Script**: Handles messaging and state management; no direct Gemini calls.
+-   **Background Script**: Handles messaging and state management; no direct model calls from the extension.
 -   **Side Panel**: Main UI; streams image frames and PCM audio to backend via WebSocket.
 -   **Content Script**: Captures page info.
 -   **Services**: Audio capture, screenshot capture, server WS client, UI orchestration.
@@ -83,7 +83,7 @@ The extension uses a unified conversation management system:
     -   `pip install "fastapi[all]" uvicorn python-dotenv google-genai`
 -   ffmpeg required (installed via conda-forge).
 -   Backend env in `server/.env`:
-    -   `GEMINI_API_KEY=...`
+    -   If using Gemini: `GEMINI_API_KEY=...`
     -   Optional: `CAPTURE_FPS=1` (default), `ENCODE_FPS=1.0`, VAD env vars
 -   Start server (recommended for WS stability):
     -   `lsof -nP -iTCP:8787 -sTCP:LISTEN -t | xargs -r kill`
@@ -93,7 +93,7 @@ The extension uses a unified conversation management system:
 -   Extension CSP must allow `ws://127.0.0.1:*`.
 -   Expected logs when testing voice:
     -   Client: `Connected to AI`, `AudioWorklet started | sampleRate=...`
-    -   Server: `WebSocket /ws [accepted]`, `SEG window ...`, `ENCODE result ...`, `GEMINI chosen_path=...`
+    -   Server: `WebSocket /ws [accepted]`, `SEG window ...`, `ENCODE result ...`, `chosen_path=...`
 
 ### Notes
 

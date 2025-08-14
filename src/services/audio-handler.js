@@ -105,21 +105,13 @@ export class AudioHandler {
         this.stateManager.clearInactivityTimer();
     }
 
-    startEndpointDetection() {
-        // No-op; backend handles endpoint detection
-    }
+    startEndpointDetection() {}
 
-    stopEndpointDetection() {
-        // No-op
-    }
+    stopEndpointDetection() {}
 
-    resetSilenceTimer() {
-        // No-op
-    }
+    resetSilenceTimer() {}
 
-    clearSilenceTimer() {
-        // No-op
-    }
+    clearSilenceTimer() {}
 
     onSpeechDetected() {
         // No-op; backend handles speech detection
@@ -147,8 +139,6 @@ export class AudioHandler {
     }
 
     handleWebSpeechFinalResult() {
-        // No-op
-        // Stop sending video frames when speech finalizes
         try {
             if (this.videoHandler) {
                 this.videoHandler.speechActive = false;
@@ -157,18 +147,14 @@ export class AudioHandler {
     }
 
     onExplicitUtteranceEnd() {
-        // Freeze both streams and send activityEnd
         try {
             if (this.videoHandler) {
                 this.videoHandler.speechActive = false;
                 this.videoHandler.setVideoStreamingStarted(false);
             }
         } catch (_) {}
-        // WebSpeech state sync removed
         try {
-            if (this.aiHandler) {
-                this.aiHandler.endUtterance();
-            }
+            this.aiHandler?.endUtterance?.();
         } catch (_) {}
     }
 

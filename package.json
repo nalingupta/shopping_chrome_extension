@@ -8,7 +8,8 @@
         "server:noreload": "zsh scripts/server.sh --no-reload --log-level info --restart",
         "serve": "npm run server",
         "test:server:health": "curl -sSf http://127.0.0.1:8787/healthz | cat",
-        "test:ws:smoke": "node chrome-extension/scripts/tests/ws_smoke.mjs"
+        "test:ws:smoke": "node chrome-extension/scripts/tests/ws_smoke.mjs",
+        "test:extension:logs": "node chrome-extension/scripts/tests/console_assertions.mjs"
     },
     "type": "module",
     "dependencies": {},
