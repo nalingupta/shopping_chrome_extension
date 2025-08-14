@@ -1,5 +1,3 @@
-import { TabManager } from "./screen-capture/tab-manager.js";
-import { ScreenshotService } from "./screen-capture/screenshot-service.js";
 import { URLMonitor } from "./screen-capture/url-monitor.js";
 import { FEATURES } from "../config/features.js";
 import { StaticScreenshotService } from "./screen-capture/static-screenshot-service.js";
@@ -8,9 +6,10 @@ import { StaticWindowTracker } from "./screen-capture/static-window-tracker.js";
 export class ScreenCaptureService {
     constructor() {
         this.urlMonitor = new URLMonitor();
-        this.tabManager = new TabManager(this.urlMonitor);
-        this.urlMonitor.setTabManager(this.tabManager);
-        this.screenshotService = new ScreenshotService(this.tabManager);
+        // Debugger-based capture removed; static capture only
+        this.tabManager = null;
+        this.urlMonitor.setTabManager?.(null);
+        this.screenshotService = null;
 
         // Static capture stack (independent; legacy TabManager untouched)
         this.staticScreenshotService = new StaticScreenshotService();
@@ -25,143 +24,103 @@ export class ScreenCaptureService {
         return this.tabManager.getTabsByUsage(ascending);
     }
 
-    async isDebuggerAttached(tabId) {
-        if (FEATURES.USE_STATIC_SCREEN_CAPTURE) return false;
-        return this.tabManager.isDebuggerAttached(tabId);
+    async isDebuggerAttached(_tabId) {
+        return false;
     }
 
     async setup(tabId) {
-        if (FEATURES.USE_STATIC_SCREEN_CAPTURE) {
-            await this.staticWindowTracker.start();
-            return { success: true };
-        }
-        return this.tabManager.setup(tabId);
+        await this.staticWindowTracker.start();
+        return { success: true };
     }
 
     async startRecording() {
-        if (FEATURES.USE_STATIC_SCREEN_CAPTURE) {
-            return this.staticScreenshotService.startRecording();
-        }
-        return this.screenshotService.startRecording();
+        return this.staticScreenshotService.startRecording();
     }
 
     async captureFrame() {
-        if (FEATURES.USE_STATIC_SCREEN_CAPTURE) {
-            return this.staticScreenshotService.captureFrame();
-        }
-        const tabId = this.tabManager.getCurrentTabId();
-        return this.screenshotService.captureFrame();
+        return this.staticScreenshotService.captureFrame();
     }
 
     handleDebuggerEvent(source, method, params) {
-        if (FEATURES.USE_STATIC_SCREEN_CAPTURE) return;
-        this.tabManager.handleDebuggerEvent(source, method, params);
+        return;
     }
 
     async handleDebuggerDetach(source, reason) {
-        if (FEATURES.USE_STATIC_SCREEN_CAPTURE) return { success: true };
-        return this.tabManager.handleDebuggerDetach(source, reason);
+        return { success: true };
     }
 
     async switchToTab(tabId) {
-        if (FEATURES.USE_STATIC_SCREEN_CAPTURE) return { success: true };
-        return this.tabManager.switchToTab(tabId);
+        return { success: true };
     }
 
     async forceCleanupForNewTab(newTabId) {
-        if (FEATURES.USE_STATIC_SCREEN_CAPTURE) return { success: true };
-        return this.tabManager.forceCleanupForNewTab(newTabId);
+        return { success: true };
     }
 
     async preAttachToVisibleTabs() {
-        if (FEATURES.USE_STATIC_SCREEN_CAPTURE) return [];
-        return this.tabManager.preAttachToVisibleTabs();
+        return [];
     }
 
     async stopRecording() {
-        if (FEATURES.USE_STATIC_SCREEN_CAPTURE) {
-            const res = await this.staticScreenshotService.stopRecording();
-            await this.staticWindowTracker.stop();
-            return res;
-        }
-        return this.screenshotService.stopRecording();
+        const res = await this.staticScreenshotService.stopRecording();
+        await this.staticWindowTracker.stop();
+        return res;
     }
 
     isActive() {
-        if (FEATURES.USE_STATIC_SCREEN_CAPTURE) {
-            return this.staticScreenshotService.isActive();
-        }
-        return this.screenshotService.isActive();
+        return this.staticScreenshotService.isActive();
     }
 
     hasStream() {
-        if (FEATURES.USE_STATIC_SCREEN_CAPTURE) {
-            return this.staticScreenshotService.hasStream();
-        }
-        return this.screenshotService.hasStream();
+        return this.staticScreenshotService.hasStream();
     }
 
     async validateCurrentTab() {
-        if (FEATURES.USE_STATIC_SCREEN_CAPTURE) return true;
-        return this.tabManager.validateCurrentTab();
+        return true;
     }
 
     cleanupInvalidTab(tabId) {
-        if (FEATURES.USE_STATIC_SCREEN_CAPTURE) return;
-        this.tabManager.cleanupInvalidTab(tabId);
+        return;
     }
 
     async detachFromTab(tabId) {
-        if (FEATURES.USE_STATIC_SCREEN_CAPTURE) return { success: true };
-        return this.tabManager.detachFromTab(tabId);
+        return { success: true };
     }
 
     async cleanup() {
         try {
-            if (FEATURES.USE_STATIC_SCREEN_CAPTURE) {
-                await this.staticScreenshotService.stopRecording();
-                await this.staticWindowTracker.stop();
-            } else {
-                await this.screenshotService.stopRecording();
-                await this.tabManager.cleanup();
-            }
+            await this.staticScreenshotService.stopRecording();
+            await this.staticWindowTracker.stop();
         } catch (error) {
             console.error("Error during cleanup:", error);
         }
     }
 
     cleanupDebuggerListeners() {
-        if (FEATURES.USE_STATIC_SCREEN_CAPTURE) return;
-        this.tabManager.cleanupDebuggerListeners();
+        return;
     }
 
     async cleanupUnusedAttachments() {
-        if (FEATURES.USE_STATIC_SCREEN_CAPTURE) return 0;
-        return this.tabManager.cleanupUnusedAttachments();
+        return 0;
     }
 
     async validateAttachedTabs() {
-        if (FEATURES.USE_STATIC_SCREEN_CAPTURE) return 0;
-        return this.tabManager.validateAttachedTabs();
+        return 0;
     }
 
     getCurrentTabId() {
-        if (FEATURES.USE_STATIC_SCREEN_CAPTURE) {
-            const wId = this.staticWindowTracker.getLastFocusedWindowId();
-            return wId != null
-                ? this.staticWindowTracker.getActiveTabId(wId)
-                : null;
-        }
-        return this.tabManager.getCurrentTabId();
+        const wId = this.staticWindowTracker.getLastFocusedWindowId();
+        return wId != null
+            ? this.staticWindowTracker.getActiveTabId(wId)
+            : null;
     }
 
     getAttachedTabs() {
-        if (FEATURES.USE_STATIC_SCREEN_CAPTURE) return [];
-        return this.tabManager.getAttachedTabs();
+        return [];
     }
 
     get attachedTabs() {
-        return this.tabManager.attachedTabs;
+        return new Map();
     }
 
     get monitoredTabs() {
@@ -169,15 +128,12 @@ export class ScreenCaptureService {
     }
 
     async getTabUrl(tabId) {
-        if (FEATURES.USE_STATIC_SCREEN_CAPTURE) {
-            try {
-                const tab = await chrome.tabs.get(tabId);
-                return tab?.url || "unknown";
-            } catch (_) {
-                return "unknown";
-            }
+        try {
+            const tab = await chrome.tabs.get(tabId);
+            return tab?.url || "unknown";
+        } catch (_) {
+            return "unknown";
         }
-        return this.tabManager.getTabUrl(tabId);
     }
 
     isRestrictedUrl(url) {
@@ -189,21 +145,15 @@ export class ScreenCaptureService {
     }
 
     isDebuggerConflictError(error) {
-        if (FEATURES.USE_STATIC_SCREEN_CAPTURE) return false;
-        return this.screenshotService.isDebuggerConflictError(error);
+        return false;
     }
 
     isScreenshotCommandFailure(error) {
-        if (FEATURES.USE_STATIC_SCREEN_CAPTURE) return false;
-        return this.screenshotService.isScreenshotCommandFailure(error);
+        return false;
     }
 
     async tryStaticFallback(failureType, originalError) {
-        if (FEATURES.USE_STATIC_SCREEN_CAPTURE) return null;
-        return this.screenshotService.tryStaticFallback(
-            failureType,
-            originalError
-        );
+        return null;
     }
 
     incrementFailureCount(tabId, failureType) {
@@ -218,8 +168,8 @@ export class ScreenCaptureService {
         this.urlMonitor.resetFailureCount(tabId, failureType);
     }
 
-    async validateTabEligibility(tabId) {
-        return this.tabManager.validateTabEligibility(tabId);
+    async validateTabEligibility(_tabId) {
+        return { eligible: true };
     }
 
     startUrlMonitoring(tabId, title) {
