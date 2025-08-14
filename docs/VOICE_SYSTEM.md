@@ -1,42 +1,37 @@
-# Voice Input System - Gemini Live API Integration
+# Voice Input System – Backend‑Mediated Architecture (Current)
 
 ## Overview
 
-The Chrome extension uses **direct integration with Gemini Live API** for voice input:
+The Chrome extension streams microphone PCM and static screenshots to a local backend over WebSocket. The backend performs VAD/segmentation, encodes segments, and calls the configured model (e.g., Gemini) to generate responses. The extension displays server‑provided transcripts (if emitted) and assistant responses.
 
--   **Primary**: Direct WebSocket connection to Gemini Live API
--   **Audio Processing**: Native AudioWorkletNode/ScriptProcessorNode for PCM conversion
--   **Screen Capture**: Chrome debugger API for browser-only video streaming
--   **No external dependencies** - Pure Gemini integration
+-   **Primary**: Local backend WebSocket `/ws`
+-   **Audio Processing**: `AudioWorkletNode` for PCM at 16 kHz (no ScriptProcessor fallback)
+-   **Screen Capture**: Static `chrome.tabs.captureVisibleTab` (no debugger)
+-   **Model Integration**: Done on the backend, not from the extension
 
 ## Architecture Components
 
-### 1. Gemini Voice Handler (`gemini-voice-handler.js`)
+### 1. Server Client (`ServerClient` in the side panel)
 
 ```javascript
-class GeminiVoiceHandler {
-    // Core: Gemini Live Streaming Service
-    this.geminiService = new GeminiLiveStreamingService();
-    // Local speech recognition for UI feedback only
-    this.speechRecognition = new SpeechRecognition();
+class ServerClient {
+    // Core: WebSocket to local backend
+    // Streams PCM/imageFrame; receives acks/status/transcript/response
 }
 ```
 
 **Features:**
 
--   Real-time audio/video streaming to Gemini Live API
--   Local speech recognition for UI transcription display
+-   Realtime audio/video streaming to backend
+-   Server‑side transcription and segmentation
 -   Screen capture integration for multimodal AI
--   Direct conversation with Gemini without intermediaries
+-   No direct Gemini calls from the extension
 
-### 2. Gemini Live Streaming Service (`gemini-live-streaming.js`)
+### 2. Backend WebSocket Service
 
 ```javascript
-class GeminiLiveStreamingService {
-    // Direct WebSocket to Gemini Live API
-    const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent`;
-    this.ws = new WebSocket(wsUrl);
-}
+// The extension connects to ws://127.0.0.1:8787/ws (configurable)
+// Backend proxies to the selected model (e.g., Gemini) and returns responses
 ```
 
 **Core Functions:**
@@ -49,11 +44,8 @@ class GeminiLiveStreamingService {
 ### 3. Audio Processing Pipeline
 
 ```javascript
-// Modern approach: AudioWorkletNode
+// Modern approach: AudioWorkletNode (exclusive – fallback removed)
 const workletNode = new AudioWorkletNode(this.audioContext, "pcm-processor");
-
-// Fallback: ScriptProcessorNode
-const processor = this.audioContext.createScriptProcessor(4096, 1, 1);
 ```
 
 **Audio Flow:**
@@ -61,25 +53,16 @@ const processor = this.audioContext.createScriptProcessor(4096, 1, 1);
 1. Microphone → MediaStream
 2. AudioContext → AudioWorkletNode/ScriptProcessorNode
 3. Float32 → Int16 PCM conversion
-4. Base64 encoding → WebSocket to Gemini
+4. Base64 encoding → WebSocket to backend
 
 ### 4. Video Processing Pipeline
 
 ```javascript
 // Screen capture via Chrome API
-// Using Chrome debugger API for screen capture
-await chrome.debugger.attach({ tabId }, '1.3');
-await chrome.debugger.sendCommand({ tabId }, 'Page.enable');
-const screenStream = await navigator.mediaDevices.getUserMedia({...});
-
-// Frame extraction
-canvas.drawImage(video, 0, 0);
-canvas.toBlob((blob) => {
-    // Convert to base64 JPEG → WebSocket to Gemini
-});
+// Static capture via chrome.tabs.captureVisibleTab → base64 JPEG to backend
 ```
 
-## Message Flow Diagram
+## Message Flow Diagram (conceptual)
 
 ```
 ┌─────────────┐  startListening()  ┌─────────────────┐
@@ -98,9 +81,9 @@ canvas.toBlob((blob) => {
                            WebSocket│             │Screen/Audio
                                    ▼             ▼
                           ┌─────────────┐ ┌─────────────┐
-                          │Gemini Live  │ │Native APIs  │
-                          │API          │ │- desktopCapture│
-                          │(WebSocket)  │ │- getUserMedia │
+                           │ Backend     │ │Native APIs  │
+                           │ (WS / SDK)  │ │- captureVisibleTab │
+                           │             │ │- getUserMedia     │
                           └─────────────┘ └─────────────┘
 ```
 
@@ -109,20 +92,8 @@ canvas.toBlob((blob) => {
 ### WebSocket Connection Setup
 
 ```javascript
-const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${API_KEY}`;
-
-const setupMessage = {
-    setup: {
-        model: "models/gemini-2.0-flash-exp",
-        systemInstruction: {
-            parts: [{ text: "You are a helpful shopping assistant..." }],
-        },
-        generationConfig: {
-            responseModalities: ["TEXT"],
-            temperature: 0.7,
-        },
-    },
-};
+// Extension connects to ws://127.0.0.1:8787/ws and sends init/imageFrame/audioChunk/text
+// Backend decides model routing and returns transcript/response/status/ack
 ```
 
 ### Audio Data Format
@@ -169,7 +140,7 @@ const message = {
 ### Technical Limitations
 
 1. **Chrome Required**: Screen capture only works in Chrome
-2. **Internet Required**: Gemini Live API needs network connection
+2. **Backend Required**: Local backend must be running (and configured with model credentials)
 3. **Real-time Processing**: Continuous WebSocket connection required
 4. **API Limits**: Subject to Gemini API rate limits and quotas
 
@@ -203,12 +174,7 @@ this.ws.onclose = (event) => {
 ### Audio Processing Failures
 
 ```javascript
-// Fallback from AudioWorklet to ScriptProcessor
-if (this.audioContext.audioWorklet) {
-    await this.startAudioWorkletProcessing();
-} else {
-    // ScriptProcessor fallback removed; AudioWorklet is used exclusively.
-}
+// AudioWorklet is used exclusively in the current architecture
 ```
 
 ### Screen Capture Issues
