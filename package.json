@@ -4,7 +4,9 @@
     "scripts": {
         "build": "echo 'No build process needed for this extension'",
         "lint": "echo 'Linting completed - no linter configured'",
-        "serve": "zsh scripts/serve.sh"
+        "server": "zsh scripts/server.sh --reload --log-level debug --restart",
+        "server:prod": "zsh scripts/server.sh --no-reload --log-level info",
+        "serve": "npm run server"
     },
     "type": "module",
     "dependencies": {},

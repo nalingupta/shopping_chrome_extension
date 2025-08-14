@@ -6,11 +6,13 @@ export class AudioCaptureService {
         this.audioStream = null;
         this.audioWorkletNode = null;
         this.audioSource = null;
+        this.silentGain = null;
         this.onAudioLevelCallback = null;
         // Local audio processing state
         this.audioContext = null;
         this.audioSessionOffsetMs = null; // session-relative base time for the first audio sample
         this.totalSamplesSent = 0; // running count for sample-accurate tsStartMs
+        this._firstAudioLogEmitted = false;
     }
 
     async setupAudioCapture() {
@@ -69,33 +71,44 @@ export class AudioCaptureService {
                 }
             }
 
-            if (this.audioContext.audioWorklet) {
-                await this.startAudioWorkletProcessing();
-                streamingLogger.logInfo(
-                    "🎤 Audio stream started (AudioWorklet)"
-                );
-            } else {
-                console.warn("AudioWorklet not supported, using fallback");
-                this.startScriptProcessorFallback();
-                streamingLogger.logInfo(
-                    "🎤 Audio stream started (ScriptProcessor)"
-                );
+            // Worklet-only path; do not use ScriptProcessor fallback
+            if (!this.audioContext.audioWorklet) {
+                console.error("AudioWorklet not supported in this context");
+                return;
             }
+            await this.startAudioWorkletProcessing();
+            try {
+                const sr = this.audioContext?.sampleRate;
+                console.info(
+                    `AudioWorklet started | sampleRate=${
+                        typeof sr === "number" ? sr : "unknown"
+                    } Hz`
+                );
+            } catch (_) {}
         } catch (error) {
             console.error("Audio streaming failed:", error);
-            this.startScriptProcessorFallback();
-            streamingLogger.logInfo("🎤 Audio stream started (fallback)");
         }
     }
 
     stopAudioStreaming() {
         if (this.audioWorkletNode) {
-            this.audioWorkletNode.disconnect();
+            try {
+                this.audioWorkletNode.disconnect();
+            } catch (_) {}
             this.audioWorkletNode = null;
         }
 
+        if (this.silentGain) {
+            try {
+                this.silentGain.disconnect();
+            } catch (_) {}
+            this.silentGain = null;
+        }
+
         if (this.audioSource) {
-            this.audioSource.disconnect();
+            try {
+                this.audioSource.disconnect();
+            } catch (_) {}
             this.audioSource = null;
         }
 
@@ -119,7 +132,7 @@ export class AudioCaptureService {
 
             // Sample-accurate session-relative timestamps
             const numSamples = pcmData?.length || 0;
-            const sampleRate = 16000;
+            const sampleRate = this.audioContext?.sampleRate || 16000;
             const durationMs = (numSamples / sampleRate) * 1000;
             const sessionStartMs = this.geminiAPI.getSessionStartMs?.() || null;
             if (this.audioSessionOffsetMs == null) {
@@ -133,6 +146,18 @@ export class AudioCaptureService {
             const tsStartMs =
                 this.audioSessionOffsetMs +
                 (this.totalSamplesSent / sampleRate) * 1000;
+
+            // One-time debug log for timestamp alignment
+            if (!this._firstAudioLogEmitted) {
+                try {
+                    console.info(
+                        `AUDIO firstChunk tsStartMs=${Math.round(
+                            tsStartMs
+                        )} SR=${sampleRate} numSamples=${numSamples}`
+                    );
+                } catch (_) {}
+                this._firstAudioLogEmitted = true;
+            }
 
             if (this.geminiAPI.isGeminiConnectionActive()) {
                 const uint8Array = new Uint8Array(pcmData.buffer);
@@ -155,6 +180,14 @@ export class AudioCaptureService {
             this.audioStream
         );
         this.audioSource.connect(this.audioWorkletNode);
+
+        // Ensure the graph is pulled by connecting to a muted sink
+        try {
+            this.silentGain = this.audioContext.createGain();
+            this.silentGain.gain.value = 0.0;
+            this.audioWorkletNode.connect(this.silentGain);
+            this.silentGain.connect(this.audioContext.destination);
+        } catch (_) {}
     }
 
     startScriptProcessorFallback() {
@@ -253,5 +286,13 @@ export class AudioCaptureService {
 
     hasAudioStream() {
         return this.audioStream !== null;
+    }
+
+    getSampleRate() {
+        try {
+            return this.audioContext?.sampleRate || 16000;
+        } catch (_) {
+            return 16000;
+        }
     }
 }

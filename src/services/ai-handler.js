@@ -44,7 +44,7 @@ export class AIHandler {
     }
 
     // Gemini Methods
-    async connectToGemini() {
+    async connectToGemini(opts = {}) {
         if (this.isGeminiConnected) {
             return { success: true };
         }
@@ -52,7 +52,10 @@ export class AIHandler {
         try {
             const result = await this.serverAPI.connect({
                 fps: DEFAULT_CAPTURE_FPS,
-                sampleRate: 16000,
+                sampleRate:
+                    typeof opts.sampleRate === "number" && opts.sampleRate > 0
+                        ? opts.sampleRate
+                        : 16000,
             });
             if (!result.success) {
                 throw new Error(result.error || "Failed to connect to Gemini");
