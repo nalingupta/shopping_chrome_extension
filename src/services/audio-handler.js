@@ -1,7 +1,5 @@
 import { AudioCaptureService } from "./audio/audio-capture-service.js";
-import { SpeechRecognitionService } from "./audio/speech-recognition-service.js";
-import { EndpointDetectionService } from "./audio/endpoint-detection-service.js";
-import { AudioStateManager } from "./audio/audio-state-manager.js";
+// Local endpoint detection and audio state manager removed in Phase 3
 
 export class AudioHandler {
     constructor(aiHandler, videoHandler) {
@@ -10,9 +8,32 @@ export class AudioHandler {
 
         // Audio services
         this.audioCapture = new AudioCaptureService(this.aiHandler);
-        this.speechRecognition = new SpeechRecognitionService();
-        this.endpointDetection = new EndpointDetectionService();
-        this.stateManager = new AudioStateManager();
+        this.endpointDetection = null;
+        this.stateManager = {
+            callbacks: {
+                transcription: null,
+                interim: null,
+                botResponse: null,
+                status: null,
+                listeningStopped: null,
+            },
+            isListening: false,
+            setTranscriptionCallback: (cb) =>
+                (this.stateManager.callbacks.transcription = cb),
+            setInterimCallback: (cb) =>
+                (this.stateManager.callbacks.interim = cb),
+            setBotResponseCallback: (cb) =>
+                (this.stateManager.callbacks.botResponse = cb),
+            setStatusCallback: (cb) =>
+                (this.stateManager.callbacks.status = cb),
+            setListeningStoppedCallback: (cb) =>
+                (this.stateManager.callbacks.listeningStopped = cb),
+            getCallbacks: () => this.stateManager.callbacks,
+            isListening: () => this.stateManager.isListening,
+            setListeningState: (v) => (this.stateManager.isListening = !!v),
+            resetInactivityTimer: () => {},
+            clearInactivityTimer: () => {},
+        };
 
         // Audio state
         this.audioStreamingStarted = false;
@@ -26,81 +47,9 @@ export class AudioHandler {
             this.onAudioLevelDetected(level);
         });
 
-        // Set up speech recognition callbacks
-        this.speechRecognition.setCallbacks({
-            onSpeechDetected: () => this.onSpeechDetected(),
-            onInterimResult: (text) => {
-                const callbacks = this.stateManager.getCallbacks();
-                if (callbacks.interim) {
-                    callbacks.interim(text);
-                }
-            },
-            onFinalResult: (finalText) => {
-                try {
-                    // Ensure finalized transcript is available to AIHandler before endUtterance
-                    this.aiHandler?.setLastUserMessage(finalText);
-                    // Keep UI in sync using existing pipeline
-                    const callbacks = this.stateManager.getCallbacks();
-                    if (callbacks.transcription)
-                        callbacks.transcription(finalText);
-                } catch (_) {}
-                // Send final transcript to backend with session-relative timestamp
-                try {
-                    const sessionStart =
-                        this.aiHandler.getSessionStartMs?.() || null;
-                    const tsMs = sessionStart
-                        ? (performance?.now?.() || Date.now()) - sessionStart
-                        : 0;
-                    this.aiHandler.serverAPI?.sendTranscript(
-                        String(finalText || ""),
-                        tsMs,
-                        true
-                    );
-                } catch (_) {}
-            },
-            onAudioStreamingStart: async () => {
-                await this.startAudioStreaming();
-                this.audioStreamingStarted = true;
-                // Start sending video frames only while speaking
-                try {
-                    if (this.videoHandler) {
-                        this.videoHandler.speechActive = true;
-                        this.videoHandler.setVideoStreamingStarted(true);
-                    }
-                } catch (_) {}
-                // Explicit utterance start: enable audio and inform Gemini
-                try {
-                    if (this.aiHandler) {
-                        this.aiHandler.startUtterance();
-                    }
-                } catch (_) {}
-            },
-            onVideoStreamingStart: () => {
-                // This will be handled by VideoHandler
-            },
-            onEndpointDetectionStart: () => this.startEndpointDetection(),
-            onWebSpeechFinalResult: () => this.handleWebSpeechFinalResult(),
-            onCheckOrphanedSpeech: () => this.checkForOrphanedSpeech(),
-        });
+        // WebSpeech API has been removed; audio streaming begins directly when session starts.
 
-        // Set up endpoint detection callbacks
-        this.endpointDetection.setCallbacks({
-            onSilenceDetected: () => this.handleSilenceDetected(),
-            onResponseTimeout: () => {
-                this.audioStreamingStarted = false;
-            },
-            onResponseGeneration: (source) => {
-                this.audioStreamingStarted = false;
-            },
-            onStatus: (status, type, duration) => {
-                const callbacks = this.stateManager.getCallbacks();
-                if (callbacks.status) {
-                    callbacks.status(status, type, duration);
-                }
-            },
-            onEndpointDetectionStart: () => this.startEndpointDetection(),
-            onUtteranceEnded: () => this.onExplicitUtteranceEnd(),
-        });
+        // Endpoint detection removed; backend handles segmentation
     }
 
     async setupAudioCapture() {
@@ -140,28 +89,7 @@ export class AudioHandler {
         this.audioCapture.stopAudioProcessing();
     }
 
-    startLocalSpeechRecognition() {
-        this.resetInactivityTimer();
-        this.speechRecognition.setState({
-            isListening: this.stateManager.isListening(),
-            audioStreamingStarted: this.audioStreamingStarted,
-            videoStreamingStarted: false, // This will be managed by VideoHandler
-        });
-        this.speechRecognition.setSpeechBuffer(this.speechBuffer);
-        this.speechRecognition.startLocalSpeechRecognition();
-    }
-
-    restartSpeechRecognition() {
-        this.speechRecognition.restartSpeechRecognition();
-    }
-
-    startSpeechKeepAlive() {
-        this.speechRecognition.startSpeechKeepAlive();
-    }
-
-    clearSpeechKeepAlive() {
-        this.speechRecognition.clearSpeechKeepAlive();
-    }
+    // WebSpeech API methods removed (startLocalSpeechRecognition, restart, keep-alive)
 
     resetInactivityTimer() {
         this.stateManager.resetInactivityTimer(() => {
@@ -178,28 +106,23 @@ export class AudioHandler {
     }
 
     startEndpointDetection() {
-        this.endpointDetection.setState({
-            isListening: this.stateManager.isListening(),
-            audioStreamingStarted: this.audioStreamingStarted,
-        });
-        this.endpointDetection.setSpeechBuffer(this.speechBuffer);
-        this.endpointDetection.startEndpointDetection();
+        // No-op; backend handles endpoint detection
     }
 
     stopEndpointDetection() {
-        this.endpointDetection.stopEndpointDetection();
+        // No-op
     }
 
     resetSilenceTimer() {
-        this.endpointDetection.resetSilenceTimer();
+        // No-op
     }
 
     clearSilenceTimer() {
-        this.endpointDetection.clearSilenceTimer();
+        // No-op
     }
 
     onSpeechDetected() {
-        this.endpointDetection.onSpeechDetected();
+        // No-op; backend handles speech detection
         // Optional safety: ensure video sending resumes when speech starts
         try {
             if (this.videoHandler) {
@@ -210,11 +133,11 @@ export class AudioHandler {
     }
 
     onAudioLevelDetected(level) {
-        this.endpointDetection.onAudioLevelDetected(level);
+        // Level available for UI effects if needed; no gating
     }
 
     handleSilenceDetected() {
-        this.endpointDetection.handleSilenceDetected();
+        // No-op; backend handles silence
         // Stop sending video frames when speech ends
         try {
             if (this.videoHandler) {
@@ -224,7 +147,7 @@ export class AudioHandler {
     }
 
     handleWebSpeechFinalResult() {
-        this.endpointDetection.handleWebSpeechFinalResult();
+        // No-op
         // Stop sending video frames when speech finalizes
         try {
             if (this.videoHandler) {
@@ -241,15 +164,7 @@ export class AudioHandler {
                 this.videoHandler.setVideoStreamingStarted(false);
             }
         } catch (_) {}
-        // Reset speech-recognition start flags so the next utterance re-triggers start
-        try {
-            if (this.speechRecognition) {
-                this.speechRecognition.setState({
-                    audioStreamingStarted: false,
-                    videoStreamingStarted: false,
-                });
-            }
-        } catch (_) {}
+        // WebSpeech state sync removed
         try {
             if (this.aiHandler) {
                 this.aiHandler.endUtterance();
@@ -259,20 +174,20 @@ export class AudioHandler {
 
     triggerResponseGeneration(source) {
         this.audioStreamingStarted = false;
-        this.endpointDetection.triggerResponseGeneration(source);
+        // No-op; backend triggers response generation
     }
 
     setResponseTimeout() {
-        this.endpointDetection.setResponseTimeout();
+        // No-op
     }
 
     clearResponseTimeout() {
-        this.endpointDetection.clearResponseTimeout();
+        // No-op
     }
 
     handleResponseTimeout() {
         this.audioStreamingStarted = false;
-        this.endpointDetection.handleResponseTimeout();
+        // No-op
     }
 
     // Callback setters
@@ -311,19 +226,6 @@ export class AudioHandler {
     }
 
     checkForOrphanedSpeech() {
-        const now = Date.now();
-        const timeSinceLastUpdate = now - this.speechBuffer.lastWebSpeechUpdate;
-
-        if (
-            this.speechBuffer.interimText.trim() &&
-            !this.speechBuffer.isGeminiProcessing &&
-            timeSinceLastUpdate > 3000
-        ) {
-            const callbacks = this.stateManager.getCallbacks();
-            if (callbacks.transcription) {
-                callbacks.transcription(this.speechBuffer.interimText.trim());
-            }
-            this.speechBuffer.interimText = "";
-        }
+        // WebSpeech removed; no-op
     }
 }

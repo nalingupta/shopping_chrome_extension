@@ -29,7 +29,7 @@ export class VideoHandler {
         this._tabUrlCache = new Map();
         this.screenCaptureFailureCount = 0;
         this.isTabSwitching = false;
-        this.speechActive = false; // gate sending by speech activity
+        this.speechActive = false; // legacy flag; no gating in Phase 3
 
         // Substitution / white-frame support
         this._suppressionActive = false;
@@ -270,7 +270,7 @@ export class VideoHandler {
     startScreenshotStreaming() {
         if (
             !this.screenCapture.hasStream() ||
-            !this.aiHandler.isGeminiConnectionActive()
+            !this.aiHandler.isConnectionActive()
         ) {
             return;
         }
@@ -407,7 +407,7 @@ export class VideoHandler {
                 }
                 this.screenCaptureFailureCount = 0;
                 // Continuous streaming: send to backend first (priority)
-                if (this.aiHandler.isGeminiConnectionActive()) {
+                if (this.aiHandler.isConnectionActive()) {
                     const sessionStart =
                         this.aiHandler.getSessionStartMs?.() || null;
                     const tsMs = sessionStart
@@ -515,7 +515,7 @@ export class VideoHandler {
                     const whiteBase64 = await this._ensureWhiteFrameBase64();
                     if (whiteBase64) {
                         // Send to backend
-                        if (this.aiHandler.isGeminiConnectionActive()) {
+                        if (this.aiHandler.isConnectionActive()) {
                             const sessionStart =
                                 this.aiHandler.getSessionStartMs?.() || null;
                             const tsMs = sessionStart

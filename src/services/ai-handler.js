@@ -5,25 +5,25 @@ import { DEFAULT_CAPTURE_FPS } from "../config/features.js";
 export class AIHandler {
     constructor() {
         this.serverAPI = new ServerWsClient();
-        this.isGeminiConnected = false; // semantic name retained for minimal surface change
+        this._isConnected = false;
         this.currentPageInfo = null;
         this._lastUserMessage = null; // finalized user text or transcript
 
-        this.setupGeminiCallbacks();
-        this.initializeGemini();
+        this.setupCallbacks();
+        this.initialize();
     }
 
-    async initializeGemini() {
+    async initialize() {
         try {
             // No-op for server client
         } catch (error) {
-            console.error("Error initializing Gemini:", error);
+            console.error("Error initializing AI handler:", error);
         }
     }
 
-    setupGeminiCallbacks() {
+    setupCallbacks() {
         this.serverAPI.setBotResponseCallback((data) => {
-            this.handleGeminiResponse(data);
+            this.handleResponse(data);
         });
 
         this.serverAPI.setStatusCallback((update) => {
@@ -32,20 +32,20 @@ export class AIHandler {
 
         this.serverAPI.setConnectionStateCallback((state) => {
             if (state === "connected") {
-                this.isGeminiConnected = true;
+                this._isConnected = true;
             } else if (state === "disconnected") {
-                this.isGeminiConnected = false;
+                this._isConnected = false;
             }
         });
 
         this.serverAPI.setErrorCallback((error) => {
-            console.error("Gemini error:", error);
+            console.error("AI error:", error);
         });
     }
 
-    // Gemini Methods
-    async connectToGemini(opts = {}) {
-        if (this.isGeminiConnected) {
+    // Connection Methods
+    async connect(opts = {}) {
+        if (this._isConnected) {
             return { success: true };
         }
 
@@ -58,37 +58,39 @@ export class AIHandler {
                         : 16000,
             });
             if (!result.success) {
-                throw new Error(result.error || "Failed to connect to Gemini");
+                throw new Error(
+                    result.error || "Failed to connect to AI server"
+                );
             }
-            this.isGeminiConnected = true;
+            this._isConnected = true;
             return { success: true };
         } catch (error) {
-            console.error("Failed to connect to Gemini:", error);
+            console.error("Failed to connect to AI server:", error);
             return { success: false, error: error.message };
         }
     }
 
-    async disconnectFromGemini() {
+    async disconnect() {
         try {
             await this.serverAPI.disconnect();
-            this.isGeminiConnected = false;
+            this._isConnected = false;
             return { success: true };
         } catch (error) {
-            console.error("Failed to disconnect from Gemini:", error);
+            console.error("Failed to disconnect from AI server:", error);
             return { success: false, error: error.message };
         }
     }
 
-    isGeminiConnectionActive() {
+    isConnectionActive() {
         return (
-            this.isGeminiConnected &&
+            this._isConnected &&
             this.serverAPI.getConnectionStatus().isConnected
         );
     }
 
     // Phase 2: media streaming methods
     sendAudioPcm(base64Pcm, tsStartMs, numSamples, sampleRate = 16000) {
-        if (!this.isGeminiConnectionActive()) return;
+        if (!this.isConnectionActive()) return;
         this.serverAPI.sendAudioPcm(
             base64Pcm,
             tsStartMs,
@@ -98,7 +100,7 @@ export class AIHandler {
     }
 
     sendImageFrame(base64Jpeg, tsMs) {
-        if (!this.isGeminiConnectionActive()) return;
+        if (!this.isConnectionActive()) return;
         this.serverAPI.sendImageFrame(base64Jpeg, tsMs);
     }
 
@@ -156,15 +158,15 @@ export class AIHandler {
 
     // Common Methods
     isConnected() {
-        return this.isGeminiConnectionActive();
+        return this.isConnectionActive();
     }
 
     getSessionStartMs() {
         return this.serverAPI.sessionStartMs || null;
     }
 
-    // Internal methods for handling Gemini responses
-    handleGeminiResponse(data) {
+    // Internal methods for handling responses
+    handleResponse(data) {
         if (data.text) {
             // This will be handled by the callback system
             // The response will be passed to the appropriate handler

@@ -37,15 +37,15 @@ export class MultimediaOrchestrator {
             // Setup audio capture first to learn actual sample rate
             await this.audioHandler.setupAudioCapture();
 
-            // Connect to Gemini with real sample rate and default FPS
+            // Connect to server with real sample rate and default FPS
             const sr =
                 this.audioHandler?.audioCapture?.getSampleRate?.() ?? 16000;
-            const geminiResult = await this.aiHandler.connectToGemini({
+            const geminiResult = await this.aiHandler.connect({
                 sampleRate: sr,
             });
             if (!geminiResult.success) {
                 throw new Error(
-                    geminiResult.error || "Failed to connect to Gemini"
+                    geminiResult.error || "Failed to connect to AI server"
                 );
             }
 
@@ -102,7 +102,7 @@ export class MultimediaOrchestrator {
         try {
             // Handle any pending transcription
             if (this.speechBuffer.interimText.trim()) {
-                const callbacks = this.audioHandler.stateManager.getCallbacks();
+                const callbacks = this.audioHandler.getCallbacks?.() || {};
                 if (callbacks.transcription) {
                     callbacks.transcription(
                         this.speechBuffer.interimText.trim()
@@ -118,20 +118,15 @@ export class MultimediaOrchestrator {
             };
 
             // Stop audio processing
-            this.audioHandler.stopEndpointDetection();
-            if (this.audioHandler.speechRecognition) {
-                this.audioHandler.speechRecognition.stopSpeechRecognition();
-            }
             this.audioHandler.stopAudioProcessing();
             this.audioHandler.clearInactivityTimer();
-            this.audioHandler.clearSpeechKeepAlive();
 
             // Stop video processing
             this.videoHandler.stopScreenshotStreaming();
             await this.videoHandler.cleanup();
 
-            // Disconnect from Gemini
-            await this.aiHandler.disconnectFromGemini();
+            // Disconnect from server
+            await this.aiHandler.disconnect();
 
             // Reset states
             this.audioHandler.setListeningState(false);
@@ -155,13 +150,13 @@ export class MultimediaOrchestrator {
 
     async startMediaStreaming() {
         let waitCount = 0;
-        while (!this.aiHandler.isGeminiConnectionActive() && waitCount < 50) {
+        while (!this.aiHandler.isConnected() && waitCount < 50) {
             await new Promise((resolve) => setTimeout(resolve, 100));
             waitCount++;
         }
 
-        if (!this.aiHandler.isGeminiConnectionActive()) {
-            throw new Error("Gemini connection did not complete in time");
+        if (!this.aiHandler.isConnected()) {
+            throw new Error("AI connection did not complete in time");
         }
 
         this.videoHandler.setVideoStreamingStarted(false);
