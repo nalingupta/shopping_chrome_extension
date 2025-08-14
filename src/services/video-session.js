@@ -8,8 +8,8 @@ import { streamingLogger } from "../utils/streaming-logger.js";
 
 // Facade with the same public API as the old VideoHandler (to avoid import churn)
 export class VideoHandler {
-    constructor(aiHandler) {
-        this.aiHandler = aiHandler;
+    constructor(serverClient) {
+        this.aiHandler = serverClient;
         this.screenCapture = new ScreenCaptureService();
         this.preview = new PreviewAdapter();
         this.series = new SeriesLogger();

@@ -18,7 +18,7 @@ The extension performs continuous static screen capture during listening session
 -   **ScreenCaptureService**: Routes between static capture (default) and legacy debugger path via feature flag.
 -   **StaticScreenshotService**: Executes `chrome.tabs.captureVisibleTab` and applies fallback rules/backoff.
 -   **StaticWindowTracker**: Tracks the last‑focused normal window and active tab across rapid switches.
--   **AIHandler/ServerWsClient**: Streams frames/audio to the backend over WebSocket.
+-   **ServerClient**: Streams frames/audio to the backend over WebSocket.
 
 ### Key Features
 

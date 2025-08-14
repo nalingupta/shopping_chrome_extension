@@ -1,4 +1,10 @@
 import { MESSAGE_TYPES } from "../constants.js";
+import { sanitizeConversation } from "./sanitize.js";
+import {
+    broadcastConversationUpdate,
+    addConversationListener,
+} from "./broadcast.js";
+import { migrateFromLocalStorage } from "./migration.js";
 
 export class UnifiedConversationManager {
     static CONVERSATION_KEY = "shoppingAssistant_conversation";
@@ -57,7 +63,7 @@ export class UnifiedConversationManager {
             }
 
             // Sanitize stored conversation into final-only paired turns
-            conversation = await this.#sanitizeConversation(conversation);
+            conversation = await sanitizeConversation(conversation);
 
             return conversation;
         } catch (error) {
@@ -95,7 +101,7 @@ export class UnifiedConversationManager {
             });
 
             // Broadcast change to all windows
-            this.broadcastConversationUpdate();
+            broadcastConversationUpdate();
 
             return true;
         } catch (error) {
@@ -123,7 +129,7 @@ export class UnifiedConversationManager {
             });
 
             // Broadcast change to all windows
-            this.broadcastConversationUpdate();
+            broadcastConversationUpdate();
 
             return true;
         } catch (error) {
@@ -181,7 +187,7 @@ export class UnifiedConversationManager {
             });
 
             // Broadcast change to all windows
-            this.broadcastConversationUpdate();
+            broadcastConversationUpdate();
 
             return true;
         } catch (error) {
@@ -206,170 +212,22 @@ export class UnifiedConversationManager {
 
     // Normalize conversation: merge assistant continuations, remove duplicate chunk turns,
     // and rebuild messages from paired, final-only turns.
-    static async #sanitizeConversation(conversation) {
-        try {
-            const messages = Array.isArray(conversation?.messages)
-                ? conversation.messages
-                : [];
-            if (messages.length === 0) return conversation;
-
-            const norm = (s) => (s || "").replace(/[\s\u00A0]+/g, " ").trim();
-
-            const turns = [];
-            let pendingUser = null;
-            for (const m of messages) {
-                const role = m.role === "model" ? "assistant" : m.role;
-                const text = norm(m.content || "");
-                if (!text) continue;
-                if (role === "user") {
-                    if (pendingUser !== null) {
-                        turns.push({ user: pendingUser, assistant: null });
-                    }
-                    pendingUser = text;
-                } else if (role === "assistant") {
-                    if (pendingUser !== null) {
-                        turns.push({ user: pendingUser, assistant: text });
-                        pendingUser = null;
-                    } else if (turns.length > 0) {
-                        const last = turns[turns.length - 1];
-                        if (last.assistant == null) {
-                            last.assistant = text;
-                        } else {
-                            // merge assistant continuation into last turn
-                            const merged = `${last.assistant} ${text}`.trim();
-                            last.assistant = merged;
-                        }
-                    } else {
-                        // leading assistant with no user
-                        turns.push({ user: "", assistant: text });
-                    }
-                }
-            }
-            if (pendingUser !== null) {
-                turns.push({ user: pendingUser, assistant: null });
-            }
-
-            // Rebuild messages list from turns
-            const rebuilt = [];
-            for (const t of turns) {
-                const u = norm(t.user || "");
-                const a = norm(t.assistant || "");
-                if (u)
-                    rebuilt.push({
-                        role: "user",
-                        content: u,
-                        timestamp: Date.now(),
-                    });
-                if (a)
-                    rebuilt.push({
-                        role: "assistant",
-                        content: a,
-                        timestamp: Date.now(),
-                    });
-            }
-
-            // If no changes, return as-is
-            const sameLength = rebuilt.length === messages.length;
-            const sameAll =
-                sameLength &&
-                rebuilt.every(
-                    (r, i) =>
-                        r.role === messages[i].role &&
-                        norm(r.content) === norm(messages[i].content)
-                );
-            if (sameAll) return conversation;
-
-            const sanitized = {
-                messages: rebuilt,
-                lastUpdated: Date.now(),
-                isWelcomeVisible: conversation?.isWelcomeVisible ?? true,
-            };
-            await chrome.storage.local.set({
-                [this.CONVERSATION_KEY]: sanitized,
-            });
-            this.broadcastConversationUpdate();
-            return sanitized;
-        } catch (e) {
-            return (
-                conversation || {
-                    messages: [],
-                    lastUpdated: Date.now(),
-                    isWelcomeVisible: true,
-                }
-            );
-        }
-    }
+    // sanitization moved to sanitize.js
 
     static async addConversationListener(callback) {
-        try {
-            chrome.storage.onChanged.addListener((changes, namespace) => {
-                if (namespace === "local" && changes[this.CONVERSATION_KEY]) {
-                    callback(changes[this.CONVERSATION_KEY].newValue);
-                }
-            });
-        } catch (error) {
-            console.error("Error adding conversation listener:", error);
-        }
+        return addConversationListener(callback, this.CONVERSATION_KEY);
     }
 
     static broadcastConversationUpdate() {
-        try {
-            // Send message to all extension contexts
-            chrome.runtime
-                .sendMessage({
-                    type: MESSAGE_TYPES.CONVERSATION_UPDATED,
-                })
-                .catch(() => {
-                    // Ignore errors - not all contexts may be listening
-                });
-        } catch (error) {
-            console.error("Error broadcasting conversation update:", error);
-        }
+        return broadcastConversationUpdate();
     }
 
     // Migration helper - convert old localStorage data to new format
     static async migrateFromLocalStorage() {
-        try {
-            // Check if migration is needed
-            const conversation = await this.getConversation();
-            if (conversation.messages.length > 0) {
-                return; // Already migrated
-            }
-
-            // Try to migrate from old ChatStateManager
-            const oldChatState = localStorage.getItem(
-                "shoppingAssistant_chatState"
-            );
-            if (oldChatState) {
-                const parsed = JSON.parse(oldChatState);
-                if (parsed.messages && parsed.messages.length > 0) {
-                    await this.saveMessages(
-                        parsed.messages,
-                        parsed.isWelcomeVisible
-                    );
-                    localStorage.removeItem("shoppingAssistant_chatState");
-                }
-            }
-
-            // Try to migrate from old ConversationHistoryManager
-            const oldHistory = localStorage.getItem(
-                "shoppingAssistant_conversationHistory"
-            );
-            if (oldHistory) {
-                const parsed = JSON.parse(oldHistory);
-                if (parsed.length > 0) {
-                    const messages = parsed.map((msg) => ({
-                        content: msg.parts[0].text,
-                        type: msg.role === "user" ? "user" : "assistant",
-                    }));
-                    await this.saveMessages(messages, false);
-                    localStorage.removeItem(
-                        "shoppingAssistant_conversationHistory"
-                    );
-                }
-            }
-        } catch (error) {
-            console.error("Error during migration:", error);
-        }
+        return migrateFromLocalStorage(
+            () => this.getConversation(),
+            (messages, isWelcomeVisible) =>
+                this.saveMessages(messages, isWelcomeVisible)
+        );
     }
 }

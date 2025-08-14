@@ -140,7 +140,7 @@ export class EventManager {
         this.uiManager.elements.sendButton.disabled = true;
 
         try {
-            // Send text message directly to AIHandler
+            // Send text message directly to server client
             const result =
                 await this.multimediaOrchestrator.aiHandler.sendTextMessage(
                     message
@@ -164,7 +164,7 @@ export class EventManager {
         }
     }
 
-    // sendToBackground method removed - now using AIHandler directly for text messages
+    // sendToBackground method removed - now using server client directly for text messages
 
     async handleClearChat() {
         this.uiManager.elements.messages.innerHTML = "";
@@ -283,7 +283,7 @@ export class EventManager {
     handleTranscriptionReceived(transcription) {
         if (transcription) {
             try {
-                // Store the finalized transcript for AIHandler to send as the user message
+                // Store the finalized transcript for server client to send as the user message
                 this.multimediaOrchestrator?.aiHandler?.setLastUserMessage?.(
                     transcription
                 );

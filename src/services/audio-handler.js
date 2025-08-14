@@ -2,8 +2,8 @@ import { AudioCaptureService } from "./audio/audio-capture-service.js";
 // Local endpoint detection and audio state manager removed in Phase 3
 
 export class AudioHandler {
-    constructor(aiHandler, videoHandler) {
-        this.aiHandler = aiHandler;
+    constructor(serverClient, videoHandler) {
+        this.aiHandler = serverClient;
         this.videoHandler = videoHandler;
 
         // Audio services
@@ -79,10 +79,6 @@ export class AudioHandler {
 
     async startAudioWorkletProcessing() {
         return this.audioCapture.startAudioWorkletProcessing();
-    }
-
-    startScriptProcessorFallback() {
-        this.audioCapture.startScriptProcessorFallback();
     }
 
     stopAudioProcessing() {

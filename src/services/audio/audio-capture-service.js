@@ -1,9 +1,9 @@
 import { streamingLogger } from "../../utils/streaming-logger.js";
 
 export class AudioCaptureService {
-    constructor(geminiAPI) {
-        // geminiAPI is actually a neutral AI connection; rename for clarity
-        this.geminiAPI = geminiAPI;
+    constructor(serverClient) {
+        // serverClient is the neutral AI connection
+        this.geminiAPI = serverClient;
         this.audioStream = null;
         this.audioWorkletNode = null;
         this.audioSource = null;
@@ -181,79 +181,7 @@ export class AudioCaptureService {
         } catch (_) {}
     }
 
-    // LEGACY (not invoked in new pipeline): retained for historical compatibility only.
-    // The new architecture uses AudioWorklet exclusively.
-    startScriptProcessorFallback() {
-        if (!this.audioContext) {
-            try {
-                const AC = window.AudioContext || window.webkitAudioContext;
-                this.audioContext = new AC({ sampleRate: 16000 });
-            } catch (_) {
-                const AC = window.AudioContext || window.webkitAudioContext;
-                this.audioContext = new AC();
-            }
-        }
-        this.audioSource = this.audioContext.createMediaStreamSource(
-            this.audioStream
-        );
-        const audioProcessor = this.audioContext.createScriptProcessor(
-            4096,
-            1,
-            1
-        );
-
-        audioProcessor.onaudioprocess = (event) => {
-            if (!this.geminiAPI.isConnectionActive()) return;
-
-            const inputData = event.inputBuffer.getChannelData(0);
-            const outputData = event.outputBuffer.getChannelData(0);
-
-            for (let i = 0; i < inputData.length; i++) {
-                outputData[i] = inputData[i];
-            }
-
-            let maxAmplitude = 0;
-            for (let i = 0; i < inputData.length; i++) {
-                const amplitude = Math.abs(inputData[i]);
-                maxAmplitude = Math.max(maxAmplitude, amplitude);
-            }
-
-            this.onAudioLevelDetected(maxAmplitude);
-
-            const pcmData = new Int16Array(inputData.length);
-            for (let i = 0; i < inputData.length; i++) {
-                const sample = Math.max(-1, Math.min(1, inputData[i]));
-                pcmData[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
-            }
-
-            const numSamples = pcmData.length;
-            const sampleRate = 16000;
-            const durationMs = (numSamples / sampleRate) * 1000;
-            const sessionStartMs = this.geminiAPI.getSessionStartMs?.() || null;
-            if (this.audioSessionOffsetMs == null) {
-                const nowRel = sessionStartMs
-                    ? (performance?.now?.() || Date.now()) - sessionStartMs
-                    : 0;
-                this.audioSessionOffsetMs = Math.max(0, nowRel - durationMs);
-                this.totalSamplesSent = 0;
-            }
-            const tsStartMs =
-                this.audioSessionOffsetMs +
-                (this.totalSamplesSent / sampleRate) * 1000;
-
-            const uint8Array = new Uint8Array(pcmData.buffer);
-            const base64 = btoa(String.fromCharCode(...uint8Array));
-            this.geminiAPI.sendAudioPcm(
-                base64,
-                tsStartMs,
-                numSamples,
-                sampleRate
-            );
-            this.totalSamplesSent += numSamples;
-        };
-
-        this.audioSource.connect(audioProcessor);
-    }
+    // ScriptProcessor fallback removed; AudioWorklet is used exclusively in the current architecture.
 
     stopAudioProcessing() {
         this.stopAudioStreaming();

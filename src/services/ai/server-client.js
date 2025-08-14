@@ -1,41 +1,27 @@
-import { ServerWsClient } from "./server-ws-client.js";
-import { ContextAssembler } from "./prompt/context-assembler.js";
-import { DEFAULT_CAPTURE_FPS } from "../config/features.js";
+import { ServerWsClient } from "../server-ws-client.js";
+import { DEFAULT_CAPTURE_FPS } from "../../config/features.js";
 
-export class AIHandler {
+export class ServerClient {
     constructor() {
         this.serverAPI = new ServerWsClient();
         this._isConnected = false;
         this.currentPageInfo = null;
-        this._lastUserMessage = null; // finalized user text or transcript
+        this._lastUserMessage = null;
 
-        this.setupCallbacks();
-        this.initialize();
+        this._setupCallbacks();
     }
 
-    async initialize() {
-        try {
-            // No-op for server client
-        } catch (error) {
-            console.error("Error initializing AI handler:", error);
-        }
-    }
-
-    setupCallbacks() {
+    _setupCallbacks() {
         this.serverAPI.setBotResponseCallback((data) => {
-            this.handleResponse(data);
+            this._handleResponse(data);
         });
 
         this.serverAPI.setStatusCallback((update) => {
-            this.handleStreamingUpdate(update);
+            this._handleStreamingUpdate(update);
         });
 
         this.serverAPI.setConnectionStateCallback((state) => {
-            if (state === "connected") {
-                this._isConnected = true;
-            } else if (state === "disconnected") {
-                this._isConnected = false;
-            }
+            this._isConnected = state === "connected";
         });
 
         this.serverAPI.setErrorCallback((error) => {
@@ -43,12 +29,8 @@ export class AIHandler {
         });
     }
 
-    // Connection Methods
     async connect(opts = {}) {
-        if (this._isConnected) {
-            return { success: true };
-        }
-
+        if (this._isConnected) return { success: true };
         try {
             const result = await this.serverAPI.connect({
                 fps: DEFAULT_CAPTURE_FPS,
@@ -88,7 +70,6 @@ export class AIHandler {
         );
     }
 
-    // Phase 2: media streaming methods
     sendAudioPcm(base64Pcm, tsStartMs, numSamples, sampleRate = 16000) {
         if (!this.isConnectionActive()) return;
         this.serverAPI.sendAudioPcm(
@@ -104,30 +85,22 @@ export class AIHandler {
         this.serverAPI.sendImageFrame(base64Jpeg, tsMs);
     }
 
-    // Utterance boundary helpers
-    startUtterance() {
+    async sendTextMessage(message) {
         try {
-            this._utteranceStartTs = Date.now();
-            // No-op for server-mediated flow
-        } catch (_) {}
+            this.serverAPI.sendTextMessage(String(message || ""));
+            return { success: true };
+        } catch (error) {
+            console.error("Failed to send text over WS:", error);
+            return { success: false, error: error.message };
+        }
     }
 
-    endUtterance() {
-        (async () => {
-            try {
-                // No-op for server-mediated flow
-            } catch (_) {}
-            try {
-                // No-op for server-mediated flow
-                const elapsed = this._utteranceStartTs
-                    ? Date.now() - this._utteranceStartTs
-                    : 0;
-                void elapsed;
-            } catch (_) {}
-            try {
-                // No-op for server-mediated flow
-            } catch (_) {}
-        })();
+    isConnected() {
+        return this.isConnectionActive();
+    }
+
+    getSessionStartMs() {
+        return this.serverAPI.sessionStartMs || null;
     }
 
     setCurrentPageInfo(pageInfo) {
@@ -138,49 +111,6 @@ export class AIHandler {
         this._lastUserMessage = typeof text === "string" ? text : null;
     }
 
-    // REST API Methods (for text messages)
-    async sendTextMessage(message) {
-        // Phase 1: route text over WS to backend; backend may echo/ack only in this phase
-        try {
-            this.serverAPI.sendTextMessage(String(message || ""));
-            return { success: true };
-        } catch (error) {
-            console.error("Failed to send text over WS:", error);
-            return { success: false, error: error.message };
-        }
-    }
-
-    async getTextResponse() {
-        // This would be implemented to get text responses from REST API
-        // For now, this is handled through the Gemini callbacks
-        return { success: true };
-    }
-
-    // Common Methods
-    isConnected() {
-        return this.isConnectionActive();
-    }
-
-    getSessionStartMs() {
-        return this.serverAPI.sessionStartMs || null;
-    }
-
-    // Internal methods for handling responses
-    handleResponse(data) {
-        if (data.text) {
-            // This will be handled by the callback system
-            // The response will be passed to the appropriate handler
-        }
-    }
-
-    handleStreamingUpdate(update) {
-        if (update.text) {
-            // This will be handled by the callback system
-            // The streaming update will be passed to the appropriate handler
-        }
-    }
-
-    // Callback setters for coordination with other handlers
     setBotResponseCallback(callback) {
         this.serverAPI.setBotResponseCallback(callback);
     }
@@ -196,4 +126,7 @@ export class AIHandler {
     setErrorCallback(callback) {
         this.serverAPI.setErrorCallback(callback);
     }
+
+    _handleResponse(_data) {}
+    _handleStreamingUpdate(_update) {}
 }

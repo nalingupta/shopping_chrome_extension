@@ -16,12 +16,13 @@ export class ScreenCaptureService {
         this.staticWindowTracker = new StaticWindowTracker();
     }
 
-    markTabAccessed(tabId) {
-        this.tabManager.markTabAccessed(tabId);
+    markTabAccessed(_tabId) {
+        // No-op in static-only capture mode
     }
 
-    getTabsByUsage(ascending = false) {
-        return this.tabManager.getTabsByUsage(ascending);
+    getTabsByUsage(_ascending = false) {
+        // Not applicable in static-only capture mode
+        return [];
     }
 
     async isDebuggerAttached(_tabId) {

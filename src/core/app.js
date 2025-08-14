@@ -5,7 +5,7 @@ import { UIState } from "../ui/ui-state.js";
 import { MultimediaOrchestrator } from "../services/multimedia-orchestrator.js";
 import { AudioHandler } from "../services/audio-handler.js";
 import { VideoHandler } from "../services/video-handler.js";
-import { AIHandler } from "../services/ai-handler.js";
+import { ServerClient } from "../services/ai/server-client.js";
 import { UIManager } from "./ui-manager.js";
 import { EventManager } from "./event-manager.js";
 import { LifecycleManager } from "./lifecycle-manager.js";
@@ -15,13 +15,16 @@ export class ShoppingAssistant {
         this.uiManager = new UIManager();
 
         // Create new handlers
-        this.aiHandler = new AIHandler();
-        this.videoHandler = new VideoHandler(this.aiHandler);
-        this.audioHandler = new AudioHandler(this.aiHandler, this.videoHandler);
+        this.serverClient = new ServerClient();
+        this.videoHandler = new VideoHandler(this.serverClient);
+        this.audioHandler = new AudioHandler(
+            this.serverClient,
+            this.videoHandler
+        );
         this.multimediaOrchestrator = new MultimediaOrchestrator(
             this.audioHandler,
             this.videoHandler,
-            this.aiHandler
+            this.serverClient
         );
 
         this.eventManager = new EventManager(

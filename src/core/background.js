@@ -1,6 +1,6 @@
 import { MESSAGE_TYPES } from "../utils/constants.js";
 import { StorageManager, clearChatStorageOnReload } from "../utils/storage.js";
-// Legacy GeminiTextClient removed; text is routed via server WS through AIHandler in the side panel
+// Legacy GeminiTextClient removed; text is routed via server WS through the server client in the side panel
 import { MicrophoneService } from "../services/microphone-service.js";
 
 class BackgroundService {
@@ -116,7 +116,7 @@ class BackgroundService {
     }
 
     async handleProcessUserQuery(request, sender, sendResponse) {
-        // Route text to side panel UI; AIHandler will forward to server over WS
+        // Route text to side panel UI; server client will forward to server over WS
         try {
             chrome.runtime.sendMessage({
                 type: MESSAGE_TYPES.PROCESS_USER_QUERY,

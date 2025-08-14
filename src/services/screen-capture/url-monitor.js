@@ -109,10 +109,8 @@ export class URLMonitor {
             if (!this.isRestrictedUrl(tab.url)) {
                 this.stopUrlMonitoring(tabId);
 
-                const result = await this.tabManager.setup(tabId);
-                if (result.success) {
-                    this.resetFailureCount(tabId, "RESTRICTED_URL");
-                }
+                // In static-only mode, no tab-manager re-attach. Just clear failure count.
+                this.resetFailureCount(tabId, "RESTRICTED_URL");
             }
         } catch (error) {
             this.stopUrlMonitoring(tabId);

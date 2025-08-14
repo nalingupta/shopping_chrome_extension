@@ -1,8 +1,8 @@
 export class MultimediaOrchestrator {
-    constructor(audioHandler, videoHandler, aiHandler) {
+    constructor(audioHandler, videoHandler, serverClient) {
         this.audioHandler = audioHandler;
         this.videoHandler = videoHandler;
-        this.aiHandler = aiHandler;
+        this.aiHandler = serverClient;
 
         // Multimedia session state
         this.isMultimediaActive = false;
@@ -174,7 +174,7 @@ export class MultimediaOrchestrator {
 
     setBotResponseCallback(callback) {
         this.audioHandler.setBotResponseCallback(callback);
-        // Also set up AIHandler callbacks for text message responses
+        // Also set up server client callbacks for text message responses
         this.aiHandler.setBotResponseCallback(callback);
     }
 
