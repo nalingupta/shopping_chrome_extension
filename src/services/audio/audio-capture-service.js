@@ -48,7 +48,7 @@ export class AudioCaptureService {
     }
 
     async startAudioStreaming() {
-        if (!this.geminiAPI.isGeminiConnectionActive()) {
+        if (!this.geminiAPI.isConnectionActive()) {
             return;
         }
 
@@ -149,7 +149,7 @@ export class AudioCaptureService {
 
             // Removed one-time Phase 4 debug log
 
-            if (this.geminiAPI.isGeminiConnectionActive()) {
+            if (this.geminiAPI.isConnectionActive()) {
                 const uint8Array = new Uint8Array(pcmData.buffer);
                 const base64 = btoa(String.fromCharCode(...uint8Array));
                 this.geminiAPI.sendAudioPcm(
@@ -202,7 +202,7 @@ export class AudioCaptureService {
         );
 
         audioProcessor.onaudioprocess = (event) => {
-            if (!this.geminiAPI.isGeminiConnectionActive()) return;
+            if (!this.geminiAPI.isConnectionActive()) return;
 
             const inputData = event.inputBuffer.getChannelData(0);
             const outputData = event.outputBuffer.getChannelData(0);

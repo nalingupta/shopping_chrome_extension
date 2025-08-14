@@ -7,11 +7,11 @@ export class MultimediaOrchestrator {
         // Multimedia session state
         this.isMultimediaActive = false;
 
-        // Speech buffer for coordination between handlers
+        // Speech buffer for coordination between handlers (legacy fields retained; backend owns gating)
         this.speechBuffer = {
             interimText: "",
             lastWebSpeechUpdate: 0,
-            isGeminiProcessing: false,
+            isServerProcessing: false,
         };
     }
 
@@ -28,7 +28,7 @@ export class MultimediaOrchestrator {
             this.speechBuffer = {
                 interimText: "",
                 lastWebSpeechUpdate: 0,
-                isGeminiProcessing: false,
+                isServerProcessing: false,
             };
 
             // Set speech buffer for coordination
@@ -114,7 +114,7 @@ export class MultimediaOrchestrator {
             this.speechBuffer = {
                 interimText: "",
                 lastWebSpeechUpdate: 0,
-                isGeminiProcessing: false,
+                isServerProcessing: false,
             };
 
             // Stop audio processing

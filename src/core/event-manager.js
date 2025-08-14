@@ -307,10 +307,7 @@ export class EventManager {
 
             // Set processing state when user message is finalized
             this.uiManager.uiState.setSpeechState("processing");
-            this.uiManager.uiState.showStatus(
-                "Processing with Gemini...",
-                "info"
-            );
+            this.uiManager.uiState.showStatus("Processing...", "info");
         }
     }
 
