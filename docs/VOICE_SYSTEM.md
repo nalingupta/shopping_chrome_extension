@@ -52,9 +52,35 @@ const workletNode = new AudioWorkletNode(this.audioContext, "pcm-processor");
 **Audio Flow:**
 
 1. Microphone → MediaStream
-2. AudioContext → AudioWorkletNode/ScriptProcessorNode
+2. AudioContext → AudioWorkletNode
 3. Float32 → Int16 PCM conversion
 4. Base64 encoding → WebSocket to backend
+
+#### Frontend VAD (Event-Only)
+
+-   A lightweight VAD runs in the extension to emit speech activity events for orchestration/UI. It does not gate or alter audio streaming to the backend.
+-   Configuration: `src/config/features.js` → `FEATURES.FRONTEND_VAD`
+    -   `enabled`
+    -   `startThreshold`, `endThreshold` (EMA amplitude), `minSpeechMs`, `endSilenceMs`, `emaAlpha`
+-   How to use:
+
+```javascript
+multimediaOrchestrator.audioHandler.setSpeechActivityCallbacks({
+    onStart: () => {
+        // actions while user is speaking
+    },
+    onEnd: ({ segmentStartMs, segmentEndMs }) => {
+        // actions after speech ends
+    },
+});
+```
+
+#### Debugging
+
+-   `src/config/debug.js` flags:
+    -   `DEBUG_MEDIA` – per-frame audio logs
+    -   `DEBUG_MEDIA_GROUP` – group `DEBUG_MEDIA` logs (recommended)
+    -   `DEBUG_VAD` – concise `vad:start` / `vad:end` and `speech:active` logs
 
 ### 4. Video Processing Pipeline
 

@@ -186,6 +186,11 @@ export class MultimediaOrchestrator {
         this.audioHandler.setListeningStoppedCallback(callback);
     }
 
+    // Speech activity events (frontend VAD)
+    setSpeechActivityCallbacks(callbacks) {
+        this.audioHandler.setSpeechActivityCallbacks(callbacks);
+    }
+
     // State queries - use the boolean state directly
     // isMultimediaActive() method already exists above
 }

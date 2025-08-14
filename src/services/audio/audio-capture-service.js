@@ -1,4 +1,10 @@
 import { streamingLogger } from "../../utils/streaming-logger.js";
+import {
+    DEBUG_MEDIA,
+    DEBUG_MEDIA_GROUP,
+    DEBUG_MEDIA_GROUP_INTERVAL_MS,
+    DEBUG_MEDIA_GROUP_MAX,
+} from "../../config/debug.js";
 
 export class AudioCaptureService {
     constructor(serverClient) {
@@ -9,11 +15,15 @@ export class AudioCaptureService {
         this.audioSource = null;
         this.silentGain = null;
         this.onAudioLevelCallback = null;
+        this.onAudioFrameCallback = null;
         // Local audio processing state
         this.audioContext = null;
         this.audioSessionOffsetMs = null; // session-relative base time for the first audio sample
         this.totalSamplesSent = 0; // running count for sample-accurate tsStartMs
         this._firstAudioLogEmitted = false;
+        // Debug grouping buffers (Phase 2+): used only when DEBUG_MEDIA is enabled
+        this._debugFrameBuffer = [];
+        this._debugLastFlushAt = 0;
     }
 
     async setupAudioCapture() {
@@ -150,6 +160,71 @@ export class AudioCaptureService {
 
             // Removed one-time Phase 4 debug log
 
+            // Optional console logging for runtime verification
+            if (DEBUG_MEDIA) {
+                const entry = {
+                    level: typeof maxAmplitude === "number" ? maxAmplitude : 0,
+                    blockMs: durationMs,
+                    tsStartMs,
+                };
+                if (DEBUG_MEDIA_GROUP) {
+                    try {
+                        this._debugFrameBuffer.push(entry);
+                        const now = performance?.now?.() || Date.now();
+                        const elapsed = now - (this._debugLastFlushAt || 0);
+                        const shouldFlush =
+                            this._debugFrameBuffer.length >=
+                                DEBUG_MEDIA_GROUP_MAX ||
+                            elapsed >= DEBUG_MEDIA_GROUP_INTERVAL_MS;
+                        if (shouldFlush && this._debugFrameBuffer.length > 0) {
+                            const frames = this._debugFrameBuffer;
+                            this._debugFrameBuffer = [];
+                            this._debugLastFlushAt = now;
+                            // Summarize
+                            const n = frames.length;
+                            let sum = 0;
+                            let max = 0;
+                            const start = frames[0]?.tsStartMs ?? null;
+                            const end = frames[n - 1]?.tsStartMs ?? null;
+                            for (let i = 0; i < n; i++) {
+                                const f = frames[i];
+                                const lvl =
+                                    typeof f.level === "number" ? f.level : 0;
+                                sum += lvl;
+                                if (lvl > max) max = lvl;
+                            }
+                            const avg = n > 0 ? sum / n : 0;
+                            console.groupCollapsed("audio frames", {
+                                n,
+                                avgLevel: Number(avg.toFixed(6)),
+                                maxLevel: Number(max.toFixed(6)),
+                                startMs: start,
+                                endMs: end,
+                            });
+                            try {
+                                console.table(frames);
+                            } catch (_) {}
+                            console.groupEnd();
+                        }
+                    } catch (_) {}
+                } else {
+                    try {
+                        console.log("frame", entry);
+                    } catch (_) {}
+                }
+            }
+
+            // Emit per-frame callback for frontend VAD or UI logic
+            if (typeof this.onAudioFrameCallback === "function") {
+                try {
+                    this.onAudioFrameCallback(
+                        typeof maxAmplitude === "number" ? maxAmplitude : 0,
+                        durationMs,
+                        tsStartMs
+                    );
+                } catch (_) {}
+            }
+
             if (this.geminiAPI.isConnectionActive()) {
                 const uint8Array = new Uint8Array(pcmData.buffer);
                 const base64 = btoa(String.fromCharCode(...uint8Array));
@@ -203,6 +278,10 @@ export class AudioCaptureService {
 
     setAudioLevelCallback(callback) {
         this.onAudioLevelCallback = callback;
+    }
+
+    setAudioFrameCallback(callback) {
+        this.onAudioFrameCallback = callback;
     }
 
     hasAudioStream() {

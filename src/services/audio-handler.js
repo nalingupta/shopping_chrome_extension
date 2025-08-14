@@ -1,4 +1,7 @@
 import { AudioCaptureService } from "./audio/audio-capture-service.js";
+import { SimpleVad } from "./audio/simple-vad.js";
+import { FEATURES } from "../config/features.js";
+import { DEBUG_VAD } from "../config/debug.js";
 // Local endpoint detection and audio state manager removed in Phase 3
 
 export class AudioHandler {
@@ -9,6 +12,9 @@ export class AudioHandler {
         // Audio services
         this.audioCapture = new AudioCaptureService(this.serverClient);
         this.endpointDetection = null;
+        // Frontend VAD (UI/orchestration only)
+        this.simpleVad = null;
+        this.speechActivityCallbacks = { onStart: null, onEnd: null };
         this.stateManager = {
             callbacks: {
                 transcription: null,
@@ -50,6 +56,50 @@ export class AudioHandler {
         // WebSpeech API has been removed; audio streaming begins directly when session starts.
 
         // Endpoint detection removed; backend handles segmentation
+
+        // Initialize SimpleVad if enabled
+        try {
+            if (FEATURES?.FRONTEND_VAD?.enabled) {
+                this.simpleVad = new SimpleVad({ ...FEATURES.FRONTEND_VAD });
+                this.simpleVad.setCallbacks({
+                    onStart: () => {
+                        // Internal effect
+                        this.onSpeechDetected();
+                        // External callback if provided
+                        try {
+                            this.speechActivityCallbacks?.onStart?.();
+                        } catch (_) {}
+                        if (DEBUG_VAD) {
+                            try {
+                                console.log("speech:active", true);
+                            } catch (_) {}
+                        }
+                    },
+                    onEnd: (info) => {
+                        // Internal effect
+                        this.handleSilenceDetected();
+                        // External callback if provided
+                        try {
+                            this.speechActivityCallbacks?.onEnd?.(info);
+                        } catch (_) {}
+                        if (DEBUG_VAD) {
+                            try {
+                                console.log("speech:active", false);
+                            } catch (_) {}
+                        }
+                    },
+                });
+
+                // Wire audio frame updates into VAD
+                this.audioCapture.setAudioFrameCallback(
+                    (level, blockMs, tsStartMs) => {
+                        try {
+                            this.simpleVad?.update(level, blockMs, tsStartMs);
+                        } catch (_) {}
+                    }
+                );
+            }
+        } catch (_) {}
     }
 
     async setupAudioCapture() {
@@ -160,6 +210,16 @@ export class AudioHandler {
     }
 
     // Callback setters
+    setSpeechActivityCallbacks(callbacks) {
+        if (callbacks && typeof callbacks === "object") {
+            this.speechActivityCallbacks.onStart =
+                typeof callbacks.onStart === "function"
+                    ? callbacks.onStart
+                    : null;
+            this.speechActivityCallbacks.onEnd =
+                typeof callbacks.onEnd === "function" ? callbacks.onEnd : null;
+        }
+    }
     setTranscriptionCallback(callback) {
         this.stateManager.setTranscriptionCallback(callback);
     }
