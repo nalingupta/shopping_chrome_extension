@@ -213,13 +213,15 @@ async def websocket_endpoint(websocket: WebSocket):
             elif mtype == "transcript":
                 state.transcripts_received += 1
                 try:
-                    if message.get("isFinal"):
-                        ts = float(message.get("tsMs") or 0)
-                        text = message.get("text") or ""
+                    ts = float(message.get("tsMs") or 0)
+                    text = message.get("text") or ""
+                    is_final = bool(message.get("isFinal"))
+                    if is_final:
                         state.transcripts.append((ts, text))
-                        # cap transcripts
                         if len(state.transcripts) > 500:
                             state.transcripts = state.transcripts[-500:]
+                        # Echo final transcript to client for UI display
+                        await _send_json_safe(websocket, {"type": "transcript", "text": text, "isFinal": True, "tsMs": ts})
                 except Exception:
                     pass
                 await _send_json_safe(websocket, {"type": "ack", "seq": seq, "ackType": "transcript"})
@@ -347,6 +349,9 @@ async def _finalize_segment(
                     "chosenPath": "image+text" if last_frame_bytes else "text",
                 }
                 logger.info("GEMINI chosen_path=%s preview=%.120s", payload["chosenPath"], (gemini_text or ""))
+                # Emit final transcript for UI consumption (if any)
+                if text:
+                    await _send_json_safe(state.websocket, {"type": "transcript", "text": text, "isFinal": True, "tsMs": seg_end_ms})
                 await _send_json_safe(state.websocket, payload)
                 if gemini_text:
                     await _send_json_safe(state.websocket, {"type": "response", "text": gemini_text})
@@ -388,6 +393,9 @@ async def _finalize_segment(
                 "chosenPath": chosen_path,
             }
             logger.info("GEMINI chosen_path=%s preview=%.120s", chosen_path, (gemini_text or ""))
+            # Emit final transcript for UI consumption (if any)
+            if text:
+                await _send_json_safe(state.websocket, {"type": "transcript", "text": text, "isFinal": True, "tsMs": seg_end_ms})
             await _send_json_safe(state.websocket, payload)
             # Also emit a response message for UI rendering without client changes
             if gemini_text:

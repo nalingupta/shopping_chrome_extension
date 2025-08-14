@@ -6,6 +6,20 @@ export class EventManager {
         this.uiManager = uiManager;
         this.multimediaOrchestrator = multimediaOrchestrator;
         this.currentPageInfo = null;
+
+        // Wire transcript callback (Phase 5): interim/final from server
+        try {
+            const aiHandler = this.multimediaOrchestrator?.aiHandler;
+            aiHandler?.serverAPI?.setTranscriptCallback?.((t) => {
+                if (t && typeof t.text === "string") {
+                    if (t.isFinal) {
+                        this.handleTranscriptionReceived(t.text);
+                    } else {
+                        this.handleInterimTranscription(t.text);
+                    }
+                }
+            });
+        } catch (_) {}
     }
 
     initializeEventListeners() {
@@ -30,6 +44,10 @@ export class EventManager {
             this.adjustTextareaHeight();
         });
 
+        chrome.runtime.onMessage.addEventListener?.call?.(
+            chrome.runtime,
+            () => {}
+        );
         chrome.runtime.onMessage.addListener(
             (request, sender, sendResponse) => {
                 if (request.type === MESSAGE_TYPES.PAGE_INFO_BROADCAST) {
