@@ -4,10 +4,11 @@
     "scripts": {
         "build": "echo 'No build process needed for this extension'",
         "lint": "echo 'Linting completed - no linter configured'",
-        "server": "zsh scripts/server.sh --reload --log-level debug --restart",
-        "server:noreload": "zsh scripts/server.sh --no-reload --log-level info --restart",
-        "serve": "npm run server",
-        "test:server:health": "curl -sSf http://127.0.0.1:8787/healthz | cat",
+        "server": "cd server && python server.py",
+        "server:dev": "cd server && uvicorn app.main:app --reload --host 0.0.0.0 --port 8767",
+        "server:prod": "cd server && python server.py",
+        "serve": "npm run server:dev",
+        "test:server:health": "curl -sSf http://127.0.0.1:8767/api/v1/health | cat",
         "test:ws:smoke": "node chrome-extension/scripts/tests/ws_smoke.mjs",
         "test:extension:logs": "node chrome-extension/scripts/tests/console_assertions.mjs"
     },
