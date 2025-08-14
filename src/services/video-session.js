@@ -15,7 +15,7 @@ export class VideoHandler {
         this.series = new SeriesLogger();
         this.scheduler = null;
         this.pipeline = new FramePipeline({
-            aiHandler,
+            aiHandler: this.aiHandler,
             screenCapture: this.screenCapture,
             seriesLogger: this.series,
             preview: this.preview,
@@ -36,6 +36,11 @@ export class VideoHandler {
         if (!setupResult.success)
             throw new Error(
                 setupResult.error || "Failed to setup screen capture"
+            );
+        const rec = await this.screenCapture.startRecording();
+        if (!rec?.success)
+            throw new Error(
+                rec?.error || "Failed to start static screen capture"
             );
         this.startScreenshotStreaming();
         return { success: true };

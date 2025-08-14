@@ -75,15 +75,15 @@ export class ShoppingAssistant {
         });
 
         // Set up AIHandler callbacks for text message responses
-        this.aiHandler.setBotResponseCallback((response) => {
+        this.serverClient.setBotResponseCallback((response) => {
             this.handleBotResponse(response);
         });
 
-        this.aiHandler.setStreamingUpdateCallback((update) => {
+        this.serverClient.setStreamingUpdateCallback((update) => {
             this.handleBotResponse(update);
         });
 
-        this.aiHandler.setConnectionStateCallback((state) => {
+        this.serverClient.setConnectionStateCallback((state) => {
             if (state === "connected") {
                 this.uiManager.uiState.showStatus(
                     "Connected to AI",
@@ -99,7 +99,7 @@ export class ShoppingAssistant {
             }
         });
 
-        this.aiHandler.setErrorCallback((error) => {
+        this.serverClient.setErrorCallback((error) => {
             console.error("AI Handler error:", error);
             this.uiManager.uiState.showStatus(
                 "AI connection error",
