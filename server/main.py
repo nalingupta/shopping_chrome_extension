@@ -46,6 +46,7 @@ class ConnectionState:
     def __init__(self, websocket: WebSocket):
         self.websocket = websocket
         self.session_id: str | None = None
+        self.session_epoch_ms: float | None = None
         self.frames_received: int = 0
         self.audio_chunks_received: int = 0
         self.transcripts_received: int = 0
@@ -140,6 +141,14 @@ async def websocket_endpoint(websocket: WebSocket):
 
             if mtype == "init":
                 state.session_id = message.get("sessionId")
+                # Optional session epoch (ms since Unix epoch) to allow stable client timestamps across reconnects
+                try:
+                    se = message.get("sessionEpochMs")
+                    if se is not None:
+                        state.session_epoch_ms = float(se)
+                except Exception:
+                    state.session_epoch_ms = None
+
                 fps = message.get("fps")
                 sr = message.get("sampleRate") or 16000
                 if isinstance(sr, int) and sr > 0:
@@ -147,11 +156,39 @@ async def websocket_endpoint(websocket: WebSocket):
                     state.vad = ServerRmsVadSegmenter(sample_rate_hz=state.sample_rate, cfg=ServerVadConfig())
                 logger.debug("INIT session=%s fps=%s sr=%s", state.session_id, fps, state.sample_rate)
                 await _send_json_safe(websocket, {"type": "ack", "seq": seq, "ackType": "init"})
-                # Send capture configuration to client (only capture FPS is exposed to client)
+                # Send capture configuration to client
+                # Backward compatibility: include legacy captureFps along with new idle/active values
                 try:
-                    capture_fps_env = os.getenv("CAPTURE_FPS", "1")
-                    capture_fps = int(capture_fps_env) if str(capture_fps_env).isdigit() else 10
-                    await _send_json_safe(websocket, {"type": "config", "captureFps": capture_fps})
+                    idle_fps_env = os.getenv("IDLE_CAPTURE_FPS", "0.2")
+                    active_fps_env = os.getenv("ACTIVE_CAPTURE_FPS", "1")
+                    def _to_float(v: str, default: float) -> float:
+                        try:
+                            return float(v)
+                        except Exception:
+                            return default
+
+                    idle_fps = _to_float(str(idle_fps_env), 0.2)
+                    active_fps = _to_float(str(active_fps_env), 1.0)
+                    # Legacy single value keeps prior behavior (use active as default captureFps)
+                    legacy_capture_fps_env = os.getenv("CAPTURE_FPS")
+                    if legacy_capture_fps_env is not None:
+                        try:
+                            legacy_capture_fps = float(legacy_capture_fps_env)
+                        except Exception:
+                            legacy_capture_fps = active_fps
+                    else:
+                        legacy_capture_fps = active_fps
+
+                    await _send_json_safe(
+                        websocket,
+                        {
+                            "type": "config",
+                            "idleCaptureFps": idle_fps,
+                            "activeCaptureFps": active_fps,
+                            # legacy field for older clients
+                            "captureFps": legacy_capture_fps,
+                        },
+                    )
                 except Exception:
                     pass
             elif mtype == "imageFrame":
