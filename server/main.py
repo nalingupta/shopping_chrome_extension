@@ -10,7 +10,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
-from .vad import RmsVadSegmenter, VadConfig
+from .server_vad import ServerRmsVadSegmenter, ServerVadConfig
 from .media_encoder import encode_segment
 from .gemini_client import (
     generate_video_response,
@@ -54,9 +54,9 @@ class ConnectionState:
         self.frames: List[Tuple[float, bytes]] = []  # (tsMs, jpegBytes)
         self.audio_chunks: List[Tuple[float, bytes, int, int]] = []  # (tsStartMs, pcm_bytes, num_samples, sample_rate)
         self.transcripts: List[Tuple[float, str]] = []  # (tsMs, text)
-        # VAD
+        # Server VAD
         self.sample_rate = int(os.getenv("VAD_SAMPLE_RATE", "16000"))
-        self.vad = RmsVadSegmenter(sample_rate_hz=self.sample_rate, cfg=_make_vad_cfg_from_env())
+        self.vad = ServerRmsVadSegmenter(sample_rate_hz=self.sample_rate, cfg=_make_vad_cfg_from_env())
         self.pending_finalizations: List[Dict[str, Any]] = []  # queued segments awaiting transcript
         # Backpressure thresholds
         self.max_frames_buffer = int(os.getenv("MAX_FRAMES_BUFFER", "5000"))
@@ -144,7 +144,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 sr = message.get("sampleRate") or 16000
                 if isinstance(sr, int) and sr > 0:
                     state.sample_rate = sr
-                    state.vad = RmsVadSegmenter(sample_rate_hz=state.sample_rate, cfg=VadConfig())
+                    state.vad = ServerRmsVadSegmenter(sample_rate_hz=state.sample_rate, cfg=ServerVadConfig())
                 logger.debug("INIT session=%s fps=%s sr=%s", state.session_id, fps, state.sample_rate)
                 await _send_json_safe(websocket, {"type": "ack", "seq": seq, "ackType": "init"})
                 # Send capture configuration to client (only capture FPS is exposed to client)
@@ -190,7 +190,7 @@ async def websocket_endpoint(websocket: WebSocket):
                             drop = len(state.audio_chunks) - state.max_audio_chunks
                             state.audio_chunks = state.audio_chunks[drop:]
                             await _send_json_safe(websocket, {"type": "status", "state": "busy", "droppedAudioChunks": drop})
-                        # slice into VAD frames of cfg.frame_ms
+                        # slice into Server VAD frames of cfg.frame_ms
                         frame_ms = state.vad.cfg.frame_ms
                         samples_per_frame = int(sr * (frame_ms / 1000))
                         bytes_per_frame = samples_per_frame * 2
@@ -430,9 +430,9 @@ def _latest_ts(state: ConnectionState) -> float:
     return max(last_audio_ts, last_frame_ts)
 
 
-def _make_vad_cfg_from_env() -> VadConfig:
+def _make_vad_cfg_from_env() -> ServerVadConfig:
     try:
-        return VadConfig(
+        return ServerVadConfig(
             frame_ms=int(os.getenv("VAD_FRAME_MS", "30")),
             min_speech_ms=int(os.getenv("VAD_MIN_SPEECH_MS", "300")),
             end_silence_ms=int(os.getenv("VAD_END_SILENCE_MS", "800")),
@@ -441,6 +441,6 @@ def _make_vad_cfg_from_env() -> VadConfig:
             amplitude_threshold=float(os.getenv("VAD_AMPLITUDE_THRESHOLD", "0.02")),
         )
     except Exception:
-        return VadConfig()
+        return ServerVadConfig()
 
 

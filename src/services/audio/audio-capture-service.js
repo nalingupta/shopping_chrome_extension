@@ -1,4 +1,5 @@
 import { streamingLogger } from "../../utils/streaming-logger.js";
+// Debug logging removed after verification
 
 export class AudioCaptureService {
     constructor(serverClient) {
@@ -9,11 +10,13 @@ export class AudioCaptureService {
         this.audioSource = null;
         this.silentGain = null;
         this.onAudioLevelCallback = null;
+        this.onAudioFrameCallback = null;
         // Local audio processing state
         this.audioContext = null;
         this.audioSessionOffsetMs = null; // session-relative base time for the first audio sample
         this.totalSamplesSent = 0; // running count for sample-accurate tsStartMs
         this._firstAudioLogEmitted = false;
+        // Debug grouping buffers removed
     }
 
     async setupAudioCapture() {
@@ -150,6 +153,19 @@ export class AudioCaptureService {
 
             // Removed one-time Phase 4 debug log
 
+            // Debug logging removed
+
+            // Emit per-frame callback for frontend VAD or UI logic
+            if (typeof this.onAudioFrameCallback === "function") {
+                try {
+                    this.onAudioFrameCallback(
+                        typeof maxAmplitude === "number" ? maxAmplitude : 0,
+                        durationMs,
+                        tsStartMs
+                    );
+                } catch (_) {}
+            }
+
             if (this.geminiAPI.isConnectionActive()) {
                 const uint8Array = new Uint8Array(pcmData.buffer);
                 const base64 = btoa(String.fromCharCode(...uint8Array));
@@ -203,6 +219,10 @@ export class AudioCaptureService {
 
     setAudioLevelCallback(callback) {
         this.onAudioLevelCallback = callback;
+    }
+
+    setAudioFrameCallback(callback) {
+        this.onAudioFrameCallback = callback;
     }
 
     hasAudioStream() {

@@ -63,9 +63,9 @@ The extension uses a unified conversation management system:
 ### Architecture (server-mediated)
 
 -   **Backend (FastAPI)**: WebSocket `/ws` for realtime media; health endpoint `/healthz`.
-    -   VAD-based segmentation with 2s transcript wait; server-side FPS downsampling and ffmpeg mux.
+    -   Server VAD-based segmentation with 2s transcript wait; server-side FPS downsampling and ffmpeg mux.
     -   Fallback hierarchy: Video→Audio→Text; backend invokes the configured model via its SDK.
-    -   Env-driven knobs: `CAPTURE_FPS`, `ENCODE_FPS`, VAD params.
+    -   Env-driven knobs: `CAPTURE_FPS`, `ENCODE_FPS`, Server VAD params.
 -   **Background Script**: Handles messaging and state management; no direct model calls from the extension.
 -   **Side Panel**: Main UI; streams image frames and PCM audio to backend via WebSocket.
 -   **Content Script**: Captures page info.
@@ -84,7 +84,7 @@ The extension uses a unified conversation management system:
 -   ffmpeg required (installed via conda-forge).
 -   Backend env in `server/.env`:
     -   If using Gemini: `GEMINI_API_KEY=...`
-    -   Optional: `CAPTURE_FPS=1` (default), `ENCODE_FPS=1.0`, VAD env vars
+    -   Optional: `CAPTURE_FPS=1` (default), `ENCODE_FPS=1.0`, Server VAD env vars
 -   Start server (recommended for WS stability):
     -   `lsof -nP -iTCP:8787 -sTCP:LISTEN -t | xargs -r kill`
     -   `conda run -n shopping-chrome-ext env SERVER_LOG_LEVEL=INFO PYTHONUNBUFFERED=1 python -m uvicorn server.main:app --host 127.0.0.1 --port 8787 --log-level info`
@@ -97,5 +97,5 @@ The extension uses a unified conversation management system:
 
 ### Notes
 
--   Web Speech API is retained in the codebase for legacy reference but is not used in the current pipeline; the backend owns VAD/segmentation.
+-   Web Speech API is retained in the codebase for legacy reference but is not used in the current pipeline; the backend owns Server VAD/segmentation.
 -   Client is ready to consume `{type:"transcript"}` messages from the server; interim transcripts will be provided after Deepgram integration.
