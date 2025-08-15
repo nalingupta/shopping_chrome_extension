@@ -21,4 +21,8 @@ export class PreviewAdapter {
     stopPreview() {
         this.manager.stopPreview?.();
     }
+
+    setNonOwnerBannerVisible(visible) {
+        this.manager.setNonOwnerBannerVisible?.(visible);
+    }
 }

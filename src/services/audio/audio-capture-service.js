@@ -3,7 +3,7 @@ import { streamingLogger } from "../../utils/streaming-logger.js";
 
 export class AudioCaptureService {
     constructor(serverClient) {
-        // serverClient is the neutral AI connection
+        // serverClient is the neutral AI connection (or shared proxy when provided by caller)
         this.geminiAPI = serverClient;
         this.audioStream = null;
         this.audioWorkletNode = null;
@@ -52,7 +52,9 @@ export class AudioCaptureService {
     }
 
     async startAudioStreaming() {
-        if (!this.geminiAPI.isConnectionActive()) {
+        // Prefer shared proxy active check if available
+        const active = this.geminiAPI?.isConnectionActive?.() || false;
+        if (!active) {
             return;
         }
 
@@ -138,11 +140,10 @@ export class AudioCaptureService {
             const numSamples = pcmData?.length || 0;
             const sampleRate = this.audioContext?.sampleRate || 16000;
             const durationMs = (numSamples / sampleRate) * 1000;
-            const sessionStartMs = this.geminiAPI.getSessionStartMs?.() || null;
+            // Prefer epoch from shared proxy if available
+            const epoch = this.geminiAPI?.getSessionEpochMs?.() ?? null;
             if (this.audioSessionOffsetMs == null) {
-                const nowRel = sessionStartMs
-                    ? (performance?.now?.() || Date.now()) - sessionStartMs
-                    : 0;
+                const nowRel = epoch != null ? Date.now() - epoch : 0;
                 // Anchor base to the start of the first chunk
                 this.audioSessionOffsetMs = Math.max(0, nowRel - durationMs);
                 this.totalSamplesSent = 0;
@@ -150,10 +151,6 @@ export class AudioCaptureService {
             const tsStartMs =
                 this.audioSessionOffsetMs +
                 (this.totalSamplesSent / sampleRate) * 1000;
-
-            // Removed one-time Phase 4 debug log
-
-            // Debug logging removed
 
             // Emit per-frame callback for frontend VAD or UI logic
             if (typeof this.onAudioFrameCallback === "function") {
@@ -166,15 +163,18 @@ export class AudioCaptureService {
                 } catch (_) {}
             }
 
-            if (this.geminiAPI.isConnectionActive()) {
+            if (this.geminiAPI?.isConnectionActive?.()) {
                 const uint8Array = new Uint8Array(pcmData.buffer);
                 const base64 = btoa(String.fromCharCode(...uint8Array));
-                this.geminiAPI.sendAudioPcm(
-                    base64,
-                    tsStartMs,
-                    numSamples,
-                    sampleRate
-                );
+                // Prefer shared proxy's PCM sender if available on geminiAPI
+                if (this.geminiAPI?.sendAudioPcm?.length >= 4) {
+                    this.geminiAPI.sendAudioPcm(
+                        base64,
+                        tsStartMs,
+                        numSamples,
+                        sampleRate
+                    );
+                }
                 this.totalSamplesSent += numSamples;
             }
 

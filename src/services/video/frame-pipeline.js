@@ -29,14 +29,8 @@ export class FramePipeline {
                 this.series.noteSegment("miss");
                 return { advanced: 1 };
             }
-            const sessionStart =
-                this.serverClient.getSessionStartMs?.() || null;
-            const tsMs = sessionStart
-                ? (performance?.now?.() || Date.now()) - sessionStart
-                : performance?.now?.() || Date.now();
-            if (this.serverClient.isConnectionActive()) {
-                this.serverClient.sendImageFrame(frameData, tsMs);
-            }
+            // Phase 5: sending to server is handled by VideoHandler when owner via sharedProxy.
+            // FramePipeline only updates preview and series here to avoid double-sends.
             this.preview.updatePreview(frameData);
             // Capture first frame dimensions asynchronously for future white-frame substitution
             this._maybeCaptureFirstDimsAsync(frameData);
@@ -54,16 +48,8 @@ export class FramePipeline {
             if (isStaticSkip) {
                 // Try to substitute with a white frame if we know frame dimensions
                 if (this._firstFrameDims) {
-                    const sessionStart =
-                        this.serverClient.getSessionStartMs?.() || null;
-                    const tsMs = sessionStart
-                        ? (performance?.now?.() || Date.now()) - sessionStart
-                        : performance?.now?.() || Date.now();
                     const whiteBase64 = await this._ensureWhiteFrameBase64();
                     if (whiteBase64) {
-                        if (this.serverClient.isConnectionActive()) {
-                            this.serverClient.sendImageFrame(whiteBase64, tsMs);
-                        }
                         this.preview.updatePreview(whiteBase64);
                         this.series.note("substitute");
                         this.series.noteSegment("substitute");

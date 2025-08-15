@@ -9,6 +9,7 @@ export class LivePreviewManager {
         this.lastFrameTime = 0;
         this.fps = 10; // default; will be overridden by VideoHandler
         this.frameInterval = 1000 / this.fps;
+        this.bannerEl = null;
 
         this.initialize();
     }
@@ -22,6 +23,27 @@ export class LivePreviewManager {
             this.ctx = this.canvas.getContext("2d");
             this.setupCanvas();
         }
+        // Create banner element
+        try {
+            if (this.panel && !this.bannerEl) {
+                const el = document.createElement("div");
+                el.style.position = "absolute";
+                el.style.top = "8px";
+                el.style.right = "8px";
+                el.style.padding = "4px 8px";
+                el.style.background = "rgba(55, 65, 81, 0.9)"; // gray-700
+                el.style.color = "#fff";
+                el.style.fontSize = "12px";
+                el.style.borderRadius = "6px";
+                el.style.zIndex = "10";
+                el.style.display = "none";
+                el.textContent = "Active in another panel";
+                this.panel.style.position =
+                    this.panel.style.position || "relative";
+                this.panel.appendChild(el);
+                this.bannerEl = el;
+            }
+        } catch (_) {}
     }
 
     setupCanvas() {
@@ -181,5 +203,12 @@ export class LivePreviewManager {
             frameCount: this.frameCount,
             fps: this.fps,
         };
+    }
+
+    setNonOwnerBannerVisible(visible) {
+        try {
+            if (!this.bannerEl) return;
+            this.bannerEl.style.display = visible ? "block" : "none";
+        } catch (_) {}
     }
 }

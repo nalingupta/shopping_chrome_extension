@@ -6,6 +6,7 @@ import { MultimediaOrchestrator } from "../services/multimedia-orchestrator.js";
 import { AudioHandler } from "../services/audio-handler.js";
 import { VideoHandler } from "../services/video-handler.js";
 import { ServerClient } from "../services/ai/server-client.js";
+import { SharedServerClientProxy } from "../services/ai/shared-server-client-proxy.js";
 import { UIManager } from "./ui-manager.js";
 import { EventManager } from "./event-manager.js";
 import { LifecycleManager } from "./lifecycle-manager.js";
@@ -16,10 +17,75 @@ export class ShoppingAssistant {
         this.uiManager = new UIManager();
 
         // Create new handlers
+        // Phase 3: establish a Port to background and fetch session info (no media forwarding yet)
+        try {
+            this.sharedProxy = new SharedServerClientProxy();
+            this.sharedProxy.connect();
+            // Listen to initial session_info for logging/diagnostics
+            this.sharedProxy.on("session_info", (info) => {
+                try {
+                    console.info(
+                        `[Panel] Session info: connected=${info.isConnected} epoch=${info.sessionEpochMs} idleFps=${info.idleCaptureFps} activeFps=${info.activeCaptureFps}`
+                    );
+                    // Phase 5: initialize owner state on first info
+                    if (info.ownerPanelId) {
+                        const amOwner =
+                            info.ownerPanelId === this.sharedProxy.panelId;
+                        this._applyOwnerState(amOwner);
+                    }
+                    // Apply initial mode to UI
+                    this._applyModeState(!!info.globalActive);
+                } catch (_) {}
+            });
+            // Phase 4/5/7: focus pings, heartbeat, owner change logging, mode sync
+            try {
+                const isActive = () =>
+                    document.visibilityState === "visible" &&
+                    document.hasFocus();
+                const sendPing = () => {
+                    try {
+                        this.sharedProxy.sendFocusPing(isActive());
+                    } catch (_) {}
+                };
+                // Initial ping after connect
+                setTimeout(sendPing, 0);
+                window.addEventListener("focus", sendPing);
+                document.addEventListener("visibilitychange", sendPing);
+                // Heartbeat: send only when active or when active state flips
+                let lastActive = null;
+                setInterval(() => {
+                    const nowActive = isActive();
+                    if (nowActive || nowActive !== lastActive) {
+                        sendPing();
+                    }
+                    lastActive = nowActive;
+                }, 1000);
+                this.sharedProxy.on("owner_changed", ({ ownerPanelId }) => {
+                    try {
+                        console.info(
+                            `[Panel] owner_changed owner=${ownerPanelId} thisPanel=${this.sharedProxy.panelId}`
+                        );
+                        const amOwner =
+                            ownerPanelId === this.sharedProxy.panelId;
+                        this._applyOwnerState(amOwner);
+                    } catch (_) {}
+                });
+                this.sharedProxy.on("mode_changed", ({ active }) => {
+                    try {
+                        console.info(`[Panel] mode_changed active=${!!active}`);
+                        this._applyModeState(!!active);
+                    } catch (_) {}
+                });
+            } catch (_) {}
+        } catch (_) {}
+
         this.serverClient = new ServerClient();
-        this.videoHandler = new VideoHandler(this.serverClient);
-        this.audioHandler = new AudioHandler(
+        this.videoHandler = new VideoHandler(
             this.serverClient,
+            this.sharedProxy
+        );
+        this.audioHandler = new AudioHandler(
+            this.sharedProxy ?? this.serverClient,
             this.videoHandler
         );
         this.multimediaOrchestrator = new MultimediaOrchestrator(
@@ -41,11 +107,64 @@ export class ShoppingAssistant {
 
         this.uiManager.initializeElements();
         this.eventManager.initializeEventListeners();
+        // Wire mic button to toggle Active/Idle
+        try {
+            this.uiManager.elements.voiceButton.addEventListener(
+                "click",
+                () => {
+                    try {
+                        this.sharedProxy.requestActiveToggle();
+                    } catch (_) {}
+                }
+            );
+        } catch (_) {}
         this.initializeCallbacks();
         this.lifecycleManager.trackSidePanelLifecycle();
         this.lifecycleManager.checkAndClearChatHistoryOnReload();
         this.eventManager.initializeCrossWindowSync();
         this.lifecycleManager.restoreState();
+    }
+
+    _applyOwnerState(amOwner) {
+        try {
+            if (amOwner) {
+                this.videoHandler.setOwner(true);
+                // Respect current mode; VideoHandler.startScreenshotStreaming will pick FPS
+                this.videoHandler.setMode(
+                    this._currentActive ? "active" : "idle"
+                );
+                // Audio: owner-only capture and streaming
+                this.audioHandler
+                    .setupAudioCapture()
+                    .then(() => {
+                        this.audioHandler.startAudioStreaming();
+                    })
+                    .catch(() => {});
+            } else {
+                // Stop audio entirely when not owner
+                this.audioHandler.stopAudioProcessing();
+                this.videoHandler.setOwner(false);
+            }
+        } catch (_) {}
+    }
+
+    _applyModeState(active) {
+        this._currentActive = !!active;
+        try {
+            this.videoHandler.setMode(this._currentActive ? "active" : "idle");
+            // UI: reflect mode on mic button
+            const btn = this.uiManager?.elements?.voiceButton;
+            if (btn) {
+                if (this._currentActive) btn.classList.add("listening");
+                else btn.classList.remove("listening");
+            }
+            // Status text
+            if (this._currentActive) {
+                this.uiManager.uiState.showStatus("Active", "info");
+            } else {
+                this.uiManager.uiState.showStatus("Idle", "info");
+            }
+        } catch (_) {}
     }
 
     initializeCallbacks() {
