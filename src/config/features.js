@@ -16,3 +16,14 @@ export const FEATURES = {
     },
 };
 export const DEFAULT_CAPTURE_FPS = 1;
+
+// Mouse/hover capture configuration (centralized knobs)
+export const MOUSE_CONFIG = {
+    SAMPLE_INTERVAL_MS: 100, // mouse-event.js sampling tick
+    BUCKET_FLUSH_MS: 500,   // activity-consumer.js bucket flush interval
+};
+
+// Tab info forwarding (ACTIVE mode only)
+export const TAB_INFO_CONFIG = {
+    RATE_MS: 1000,
+};

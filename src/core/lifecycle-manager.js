@@ -1,4 +1,6 @@
 import { MESSAGE_TYPES } from "../utils/constants.js";
+import { SESSION_MODE } from "../utils/constants.js";
+import { broadcastSessionMode } from "../utils/storage/broadcast.js";
 import { UnifiedConversationManager } from "../utils/storage.js";
 // MessageRenderer removed; using ConversationRenderer via UIManager
 
@@ -8,6 +10,8 @@ export class LifecycleManager {
         this.eventManager = eventManager;
         this.multimediaOrchestrator = multimediaOrchestrator;
         this.messageRenderer = null;
+        // Access the server client via orchestrator
+        this.serverClient = this.multimediaOrchestrator?.serverClient || null;
     }
 
     trackSidePanelLifecycle() {
@@ -18,6 +22,16 @@ export class LifecycleManager {
             .sendMessage({ type: MESSAGE_TYPES.SIDE_PANEL_OPENED })
             .catch(() => {});
         chrome.storage.local.set({ sidePanelOpen: true }).catch(() => {});
+
+        // Establish WebSocket connection immediately on side panel open
+        try {
+            this.serverClient?.connect?.();
+        } catch (_) {}
+
+        // Broadcast IDLE when side panel opens
+        try {
+            broadcastSessionMode(SESSION_MODE.IDLE);
+        } catch (_) {}
 
         let sidepanelCloseTimeout = null;
         const CLOSE_DELAY = 10000; // 10 seconds delay - increased to prevent premature closure
@@ -39,6 +53,16 @@ export class LifecycleManager {
                 .sendMessage({ type: MESSAGE_TYPES.SIDE_PANEL_CLOSED })
                 .catch(() => {});
             chrome.storage.local.set({ sidePanelOpen: false }).catch(() => {});
+
+            // Close the WebSocket connection when side panel closes
+            try {
+                await this.serverClient?.disconnect?.();
+            } catch (_) {}
+
+            // Broadcast IDLE on side panel close
+            try {
+                broadcastSessionMode(SESSION_MODE.IDLE);
+            } catch (_) {}
         };
 
         const handleSidePanelHidden = () => {

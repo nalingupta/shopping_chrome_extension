@@ -255,7 +255,31 @@ async def websocket_endpoint(websocket: WebSocket):
                     pass
             elif mtype == "control":
                 action = (message.get("action") or "").lower()
-                if action == "forcesegmentclose":
+                if action == "activesessionclosed":
+                    # Client ended ACTIVE speaking session (WebSocket remains open)
+                    try:
+                        # Emit an idle status so the UI can reflect IDLE mode
+                        await _send_json_safe(
+                            websocket,
+                            {"type": "status", "state": "idle"},
+                        )
+                        # Optionally finalize a short trailing window to capture any residual content
+                        now_ms = _latest_ts(state)
+                        seg_end = now_ms
+                        seg_start = max(0.0, seg_end - 2000.0)
+                        asyncio.create_task(
+                            _finalize_segment(
+                                state,
+                                seg_start,
+                                seg_end,
+                                skip_transcript_wait=False,
+                                prefer_inline_image=False,
+                            )
+                        )
+                    except Exception:
+                        pass
+                    await _send_json_safe(websocket, {"type": "ack", "seq": seq, "ackType": "control"})
+                elif action == "forcesegmentclose":
                     # derive a window from last 2s of audio if available; else last 2s of frames; else ignore
                     now_ms = _latest_ts(state)
                     seg_end = now_ms

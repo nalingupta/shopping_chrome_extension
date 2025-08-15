@@ -1,7 +1,7 @@
 import { MESSAGE_TYPES } from "../utils/constants.js";
-import { StorageManager, clearChatStorageOnReload } from "../utils/storage.js";
-// Legacy GeminiTextClient removed; text is routed via server WS through the server client in the side panel
+import { StorageManager } from "../utils/storage.js";
 import { MicrophoneService } from "../services/microphone-service.js";
+import { DEBUG_BACKGROUND_LOGS, DEBUG_HOVER_LOGS } from "../config/debug.js";
 
 class BackgroundService {
     constructor() {
@@ -47,15 +47,13 @@ class BackgroundService {
     }
 
     setupEventListeners() {
-        chrome.runtime.onMessage.addListener(
-            (request, sender, sendResponse) => {
-                const handler = this.getMessageHandler(request.type);
-                if (handler) {
-                    handler(request, sender, sendResponse);
-                    return true;
-                }
+        chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+            const handler = this.getMessageHandler(request.type);
+            if (handler) {
+                handler(request, sender, sendResponse);
+                return true;
             }
-        );
+        });
     }
 
     getMessageHandler(type) {
@@ -72,6 +70,12 @@ class BackgroundService {
                 this.handleListeningStopped.bind(this),
             [MESSAGE_TYPES.CONVERSATION_UPDATED]:
                 this.handleConversationUpdated.bind(this),
+            [MESSAGE_TYPES.MOUSE_BUCKET]:
+                this.handleMouseBucket.bind(this),
+            [MESSAGE_TYPES.MOUSE_BUCKET_LINKS]:
+                this.handleMouseBucketLinks.bind(this),
+            [MESSAGE_TYPES.SESSION_STARTED]:
+                this.handleSessionStarted.bind(this),
         };
 
         return handlers[type] || null;
@@ -148,6 +152,71 @@ class BackgroundService {
             sendResponse({ success: false });
         }
     }
+
+    async handleMouseBucket(request, sender, sendResponse) {
+        try {
+            const payload = request?.data || {};
+            if (DEBUG_HOVER_LOGS) console.debug("[HoverBucket]", payload);
+
+            // Transform: extract unique hrefs from payload.summary.links
+            try {
+                const links = Array.isArray(payload?.summary?.links)
+                    ? payload.summary.links
+                          .map((l) => (l && typeof l.href === "string" ? l.href.trim() : null))
+                          .filter((href) => !!href && !/^javascript:/i.test(href))
+                    : [];
+                if (links.length > 0) {
+                    // Determine capture timestamp for the bucket (last item tsAbsMs preferred)
+                    let captureTsAbsMs = null;
+                    try {
+                        const items = Array.isArray(payload?.items) ? payload.items : [];
+                        if (items.length && typeof items[items.length - 1]?.tsAbsMs === "number") {
+                            captureTsAbsMs = items[items.length - 1].tsAbsMs;
+                        } else if (
+                            typeof payload?.startedAtMs === "number" &&
+                            payload?.rangeRelMs && typeof payload.rangeRelMs.end === "number"
+                        ) {
+                            captureTsAbsMs = payload.startedAtMs + payload.rangeRelMs.end;
+                        }
+                    } catch (_) {}
+
+                    // Re-broadcast additive event for consumers interested only in links
+                    chrome.runtime
+                        .sendMessage({
+                            type: MESSAGE_TYPES.MOUSE_BUCKET_LINKS,
+                            links,
+                            captureTsAbsMs: captureTsAbsMs || Date.now(),
+                            ts: Date.now(),
+                        })
+                        .catch(() => {});
+                    if (DEBUG_HOVER_LOGS) console.log("[HoverLinks]", links);
+                }
+            } catch (_) {}
+        } catch (_) {}
+        // No response needed; fire-and-forget
+    }
+
+    async handleMouseBucketLinks(request, sender, sendResponse) {
+        try {
+            const links = Array.isArray(request?.links) ? request.links : [];
+            if (DEBUG_HOVER_LOGS) console.log("[HoverLinks:received]", links);
+        } catch (_) {}
+        // No response needed; fire-and-forget
+    }
+
+    async handleSessionStarted(request, sender, sendResponse) {
+        try {
+            const wall = Number(request?.sessionStartWallMs) || null;
+            if (wall) {
+                if (DEBUG_BACKGROUND_LOGS) console.log("[SessionStarted] wall=", wall);
+                chrome.storage.local
+                    .set({ sessionClock: { sessionStartWallMs: wall, updatedAt: Date.now() } })
+                    .catch(() => {});
+            }
+        } catch (_) {}
+        // No response needed; fire-and-forget
+    }
+
 
     async injectContentScript(tabId, files) {
         try {

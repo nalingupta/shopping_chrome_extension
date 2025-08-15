@@ -31,13 +31,7 @@ export class ServerClient {
     async connect(opts = {}) {
         if (this._isConnected) return { success: true };
         try {
-            const result = await this.serverAPI.connect({
-                fps: DEFAULT_CAPTURE_FPS,
-                sampleRate:
-                    typeof opts.sampleRate === "number" && opts.sampleRate > 0
-                        ? opts.sampleRate
-                        : 16000,
-            });
+            const result = await this.serverAPI.connect();
             if (!result.success) {
                 throw new Error(
                     result.error || "Failed to connect to AI server"
@@ -67,6 +61,55 @@ export class ServerClient {
             this._isConnected &&
             this.serverAPI.getConnectionStatus().isConnected
         );
+    }
+
+    async sendLinks(links, tsMs) {
+        try {
+            if (!this.isConnectionActive()) return { success: false, error: "not_connected" };
+            if (!Array.isArray(links) || links.length === 0) return { success: true };
+            this.serverAPI.sendLinks({ links, tsMs: typeof tsMs === "number" ? tsMs : undefined });
+            return { success: true };
+        } catch (error) {
+            console.error("Failed to send links over WS:", error);
+            return { success: false, error: error.message };
+        }
+    }
+
+    async sendTabInfo(info, tsMs) {
+        try {
+            if (!this.isConnectionActive()) return { success: false, error: "not_connected" };
+            this.serverAPI.sendTabInfo({ info: info || {}, tsMs: typeof tsMs === "number" ? tsMs : undefined });
+            return { success: true };
+        } catch (error) {
+            console.error("Failed to send tab info over WS:", error);
+            return { success: false, error: error.message };
+        }
+    }
+
+    async beginActiveSession({ sampleRate = 16000, fps = DEFAULT_CAPTURE_FPS } = {}) {
+        try {
+            const result = await this.serverAPI.beginActiveSession({ sampleRate, fps });
+            if (!result?.success) {
+                return { success: false, error: result?.error || "begin_active_failed" };
+            }
+            return { success: true };
+        } catch (error) {
+            console.error("Failed to begin active session:", error);
+            return { success: false, error: error.message };
+        }
+    }
+
+    async endActiveSession() {
+        try {
+            const result = await this.serverAPI.endActiveSession();
+            if (!result?.success) {
+                return { success: false, error: result?.error || "end_active_failed" };
+            }
+            return { success: true };
+        } catch (error) {
+            console.error("Failed to end active session:", error);
+            return { success: false, error: error.message };
+        }
     }
 
     sendAudioPcm(base64Pcm, tsStartMs, numSamples, sampleRate = 16000) {
@@ -100,6 +143,10 @@ export class ServerClient {
 
     getSessionStartMs() {
         return this.serverAPI.sessionStartMs || null;
+    }
+
+    isActiveSession() {
+        return !!this.serverAPI.isActiveSession?.();
     }
 
     // Page info handling removed

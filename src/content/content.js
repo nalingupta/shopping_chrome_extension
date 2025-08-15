@@ -1,4 +1,13 @@
-import { MESSAGE_TYPES } from "../utils/constants.js";
+// Local minimal constants to avoid importing extension files at runtime
+// (dynamic imports of extension resources from content scripts require
+// web_accessible_resources, so we keep it self-contained)
+let MESSAGE_TYPES = {
+    REQUEST_MIC_PERMISSION: "REQUEST_MIC_PERMISSION",
+    MIC_PERMISSION_RESULT: "MIC_PERMISSION_RESULT",
+    AUDIO_RECORDED: "AUDIO_RECORDED",
+    SESSION_MODE_CHANGED: "SESSION_MODE_CHANGED",
+    REQUEST_TAB_INFO: "REQUEST_TAB_INFO",
+};
 
 class MicPermissionHandler {
     constructor() {
@@ -18,8 +27,26 @@ class MicPermissionHandler {
                     sendResponse({ granted: this.permissionGranted });
                     return false;
                 }
+
+                if (request.type === MESSAGE_TYPES.SESSION_MODE_CHANGED) {
+                    try {
+                        this.handleSessionModeChanged?.(request.mode);
+                    } catch (_) {}
+                    return false;
+                }
             }
         );
+
+        // Storage-based listener for session mode changes
+        try {
+            chrome.storage.onChanged.addListener((changes, namespace) => {
+                if (namespace === "local" && changes.sessionMode) {
+                    try {
+                        this.handleSessionModeChanged?.(changes.sessionMode.newValue);
+                    } catch (_) {}
+                }
+            });
+        } catch (_) {}
     }
 
     async requestMicPermission() {
@@ -73,6 +100,10 @@ class MicPermissionHandler {
     cleanupPermissionRequest(messageHandler) {
         window.removeEventListener("message", messageHandler);
     }
+
+    // Optional hook: pages can observe mode changes by monkey-patching
+    // contentScript.micPermissionHandler.handleSessionModeChanged = (mode) => { ... }
+    handleSessionModeChanged(_mode) {}
 }
 
 class ContentScript {
@@ -95,8 +126,39 @@ class ContentScript {
                     this.handleMicrophoneRequest(sendResponse);
                     return true;
                 }
+
+                if (request.type === MESSAGE_TYPES.REQUEST_TAB_INFO) {
+                    try {
+                        const info = this.collectTabInfo();
+                        sendResponse({ success: true, info, captureTsAbsMs: Date.now() });
+                    } catch (error) {
+                        sendResponse({ success: false, error: String(error?.message || error) });
+                    }
+                    return true;
+                }
             }
         );
+    }
+
+    collectTabInfo() {
+        try {
+            const title = String(document?.title || "");
+            const url = String(location?.href || "");
+            const meta = (name) => {
+                try {
+                    const el = document.querySelector(`meta[name="${name}"]`);
+                    return el ? String(el.getAttribute("content") || "") : "";
+                } catch (_) { return ""; }
+            };
+            return {
+                title,
+                url,
+                description: meta("description"),
+                keywords: meta("keywords"),
+            };
+        } catch (_) {
+            return { title: "", url: "", description: "", keywords: "" };
+        }
     }
 
     async handleMicrophoneRequest(sendResponse) {

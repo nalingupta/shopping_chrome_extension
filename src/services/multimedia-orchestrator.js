@@ -13,6 +13,40 @@ export class MultimediaOrchestrator {
             lastWebSpeechUpdate: 0,
             isServerProcessing: false,
         };
+
+        // Hover links forwarding state
+        this._linksIntervalId = null;
+        this._latestLinks = [];
+        this._latestCaptureTsAbsMs = null;
+        this._sessionStartWallMs = null;
+        this._tabInfoIntervalId = null;
+
+        try {
+            chrome.storage.local.get(["sessionClock"], (res) => {
+                try {
+                    const wall = res?.sessionClock?.sessionStartWallMs;
+                    if (typeof wall === "number") this._sessionStartWallMs = wall;
+                } catch (_) {}
+            });
+            chrome.storage.onChanged.addListener((changes, ns) => {
+                if (ns === "local" && changes.sessionClock) {
+                    try {
+                        const wall = changes.sessionClock.newValue?.sessionStartWallMs;
+                        if (typeof wall === "number") this._sessionStartWallMs = wall;
+                    } catch (_) {}
+                }
+            });
+            chrome.runtime.onMessage.addListener((msg) => {
+                try {
+                    if (msg?.type === "SESSION_STARTED" && typeof msg.sessionStartWallMs === "number") {
+                        this._sessionStartWallMs = msg.sessionStartWallMs;
+                    } else if (msg?.type === "HOVER_CAPTURE_BUCKET_LINKS") {
+                        if (Array.isArray(msg.links)) this._latestLinks = msg.links;
+                        if (typeof msg.captureTsAbsMs === "number") this._latestCaptureTsAbsMs = msg.captureTsAbsMs;
+                    }
+                } catch (_) {}
+            });
+        } catch (_) {}
     }
 
     async startMultimedia() {
@@ -37,16 +71,12 @@ export class MultimediaOrchestrator {
             // Setup audio capture first to learn actual sample rate
             await this.audioHandler.setupAudioCapture();
 
-            // Connect to server with real sample rate and default FPS
-            const sr =
-                this.audioHandler?.audioCapture?.getSampleRate?.() ?? 16000;
-            const geminiResult = await this.serverClient.connect({
-                sampleRate: sr,
-            });
-            if (!geminiResult.success) {
-                throw new Error(
-                    geminiResult.error || "Failed to connect to AI server"
-                );
+            // Begin ACTIVE session (send init) using the real sample rate.
+            // WebSocket is expected to be already connected by lifecycle manager.
+            const sr = this.audioHandler?.audioCapture?.getSampleRate?.() ?? 16000;
+            const activeStart = await this.serverClient.beginActiveSession({ sampleRate: sr });
+            if (!activeStart.success) {
+                throw new Error(activeStart.error || "Failed to start active session");
             }
 
             // Wire server status updates to video handler (apply server FPS override once if needed)
@@ -85,6 +115,16 @@ export class MultimediaOrchestrator {
             this.videoHandler.speechActive = false;
 
             this.isMultimediaActive = true;
+
+            // Start 500ms links forwarding loop
+            try {
+                this._startLinksForwarding();
+            } catch (_) {}
+
+            // Start tab info forwarding loop
+            try {
+                this._startTabInfoForwarding();
+            } catch (_) {}
 
             return { success: true };
         } catch (error) {
@@ -125,8 +165,8 @@ export class MultimediaOrchestrator {
             this.videoHandler.stopScreenshotStreaming();
             await this.videoHandler.cleanup();
 
-            // Disconnect from server
-            await this.serverClient.disconnect();
+            // End ACTIVE session without closing the WebSocket
+            await this.serverClient.endActiveSession();
 
             // Reset states
             this.audioHandler.setListeningState(false);
@@ -135,6 +175,16 @@ export class MultimediaOrchestrator {
             this.audioHandler.audioStreamingStarted = false;
 
             this.isMultimediaActive = false;
+
+            // Stop links forwarding loop
+            try {
+                this._stopLinksForwarding();
+            } catch (_) {}
+
+            // Stop tab info forwarding loop
+            try {
+                this._stopTabInfoForwarding();
+            } catch (_) {}
 
             return { success: true };
         } catch (error) {
@@ -194,3 +244,66 @@ export class MultimediaOrchestrator {
     // State queries - use the boolean state directly
     // isMultimediaActive() method already exists above
 }
+
+MultimediaOrchestrator.prototype._startLinksForwarding = function () {
+    if (this._linksIntervalId) return;
+    const tick = async () => {
+        try {
+            if (!this.isMultimediaActive) return;
+            if (!this.serverClient?.isConnectionActive?.()) return;
+            if (!Array.isArray(this._latestLinks) || this._latestLinks.length === 0) return;
+            const wall = typeof this._sessionStartWallMs === "number" ? this._sessionStartWallMs : null;
+            const capAbs = typeof this._latestCaptureTsAbsMs === "number" ? this._latestCaptureTsAbsMs : Date.now();
+            const tsMs = wall ? Math.max(0, capAbs - wall) : capAbs;
+            await this.serverClient.sendLinks(this._latestLinks, tsMs);
+            this._latestLinks = [];
+        } catch (_) {}
+    };
+    this._linksIntervalId = setInterval(tick, 500);
+};
+
+MultimediaOrchestrator.prototype._stopLinksForwarding = function () {
+    if (this._linksIntervalId) {
+        try { clearInterval(this._linksIntervalId); } catch (_) {}
+        this._linksIntervalId = null;
+    }
+    this._latestLinks = [];
+    this._latestCaptureTsAbsMs = null;
+};
+
+MultimediaOrchestrator.prototype._startTabInfoForwarding = function () {
+    if (this._tabInfoIntervalId) return;
+    const RATE_MS = 1000;
+    const tick = async () => {
+        try {
+            if (!this.isMultimediaActive) return;
+            if (!this.serverClient?.isConnectionActive?.()) return;
+            const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+            if (!tabs || !tabs.length) return;
+            const tabId = tabs[0].id;
+            await new Promise((resolve) => {
+                try {
+                    chrome.tabs.sendMessage(tabId, { type: "REQUEST_TAB_INFO" }, async (resp) => {
+                        try {
+                            if (!resp || resp.success !== true) return resolve();
+                            const info = resp.info || {};
+                            const capAbs = typeof resp.captureTsAbsMs === "number" ? resp.captureTsAbsMs : Date.now();
+                            const wall = typeof this._sessionStartWallMs === "number" ? this._sessionStartWallMs : null;
+                            const tsMs = wall ? Math.max(0, capAbs - wall) : capAbs;
+                            await this.serverClient.sendTabInfo(info, tsMs);
+                            resolve();
+                        } catch (_) { resolve(); }
+                    });
+                } catch (_) { resolve(); }
+            });
+        } catch (_) {}
+    };
+    this._tabInfoIntervalId = setInterval(tick, RATE_MS);
+};
+
+MultimediaOrchestrator.prototype._stopTabInfoForwarding = function () {
+    if (this._tabInfoIntervalId) {
+        try { clearInterval(this._tabInfoIntervalId); } catch (_) {}
+        this._tabInfoIntervalId = null;
+    }
+};

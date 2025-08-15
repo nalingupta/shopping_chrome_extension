@@ -1,0 +1,71 @@
+graph LR
+  %% Layout
+  classDef comp fill:#fff,stroke:#333,stroke-width:1px;
+
+  subgraph "Side Panel (UI)"
+    UI["UIManager<br/>ConversationRenderer<br/>UIState"]:::comp
+    EM["EventManager"]:::comp
+    LM["LifecycleManager"]:::comp
+  end
+
+  subgraph "Orchestration"
+    MO["MultimediaOrchestrator"]:::comp
+    AH["AudioHandler<br/>AudioCaptureService (AudioWorkletNode)"]:::comp
+    VH["VideoHandler (Facade)<br/>ScreenCaptureService<br/>StaticScreenshotService<br/>StaticWindowTracker"]:::comp
+  end
+
+  subgraph "Networking"
+    SC["ServerClient<br/>(wraps ServerWsClient)"]:::comp
+  end
+
+  subgraph "Background"
+    BG["background.js"]:::comp
+  end
+
+  subgraph "Content Scripts"
+    CS["content scripts<br/>mouse-event / activity-consumer<br/>node-selector"]:::comp
+  end
+
+  subgraph "Backend"
+    WS["FastAPI WebSocket /ws<br/>ConnectionState + status_task"]:::comp
+    SVAD["ServerRmsVadSegmenter"]:::comp
+    ENC["media_encoder.encode_segment"]:::comp
+    GC["gemini_client (video/audio/image)"]:::comp
+  end
+
+  %% UI and lifecycle
+  UI <--> EM
+  LM --> SC
+  LM -- "connect on open / disconnect on close" --> SC
+
+  %% Start/stop voice
+  EM --> MO
+  MO <--> AH
+  MO <--> VH
+
+  %% Streaming paths
+  AH -- "audioChunk { base64, tsStartMs, numSamples, sampleRate }" --> SC
+  VH -- "imageFrame { base64, tsMs }" --> SC
+
+  %% Links & tab info
+  CS -- "MOUSE_BUCKET → unique hrefs" --> BG
+  BG -- "broadcast links" --> MO
+  MO -- "sendLinks { links, tsMs }" --> SC
+
+  MO -- "REQUEST_TAB_INFO" --> CS
+  CS -- "{ info, captureTsAbsMs }" --> MO
+  MO -- "sendTabInfo { info, tsMs }" --> SC
+
+  %% WebSocket
+  SC <--> WS
+  WS -- "ack / status / config / transcript / segment / response" --> SC
+
+  %% Backend processing
+  WS --> SVAD
+  SVAD -- "speaking / segment_closed" --> WS
+  WS -- "finalize_segment" --> ENC
+  ENC --> GC
+  GC -- "responseText" --> WS
+
+  %% UI consumption
+  SC -- "responses / transcripts / status" --> UI
