@@ -13,6 +13,7 @@ export class ServerWsClient {
             onTranscript: null,
         };
         this.sessionStartMs = null;
+        this._isActiveSession = false;
         // Default to 1 FPS to avoid initial high-rate capture before server config arrives
         this.captureFps = 1;
     }
@@ -37,7 +38,7 @@ export class ServerWsClient {
         return { isConnected: this.isConnected };
     }
 
-    async connect({ fps = 1, sampleRate = 16000 } = {}) {
+    async connect() {
         if (this.isConnected) return { success: true };
         return new Promise((resolve) => {
             try {
@@ -47,19 +48,13 @@ export class ServerWsClient {
                     this.isConnected = true;
                     this.sessionStartMs = performance.now();
                     this.#emitConnectionState("connected");
-                    this.#send({
-                        type: "init",
-                        sessionId: this.#uuid(),
-                        fps,
-                        sampleRate,
-                        seq: this.#nextSeq(),
-                    });
                     resolve({ success: true });
                 };
                 this.ws.onmessage = (evt) => this.#handleMessage(evt);
                 this.ws.onerror = (err) => this.#emitError(err);
                 this.ws.onclose = () => {
                     this.isConnected = false;
+                    this._isActiveSession = false;
                     this.#emitConnectionState("disconnected");
                 };
             } catch (error) {
@@ -76,7 +71,46 @@ export class ServerWsClient {
         try {
             if (this.ws) this.ws.close();
             this.isConnected = false;
+            this._isActiveSession = false;
             this.#emitConnectionState("disconnected");
+            return { success: true };
+        } catch (error) {
+            this.#emitError(error);
+            return { success: false, error: String(error?.message || error) };
+        }
+    }
+
+    async beginActiveSession({ fps = 1, sampleRate = 16000 } = {}) {
+        if (!this.isConnected) {
+            return { success: false, error: "not_connected" };
+        }
+        if (this._isActiveSession) return { success: true };
+        try {
+            this.#send({
+                type: "init",
+                sessionId: this.#uuid(),
+                fps,
+                sampleRate,
+                seq: this.#nextSeq(),
+            });
+            this._isActiveSession = true;
+            return { success: true };
+        } catch (error) {
+            this.#emitError(error);
+            return { success: false, error: String(error?.message || error) };
+        }
+    }
+
+    async endActiveSession() {
+        if (!this.isConnected) return { success: true };
+        if (!this._isActiveSession) return { success: true };
+        try {
+            this.#send({
+                type: "control",
+                action: "activeSessionClosed",
+                seq: this.#nextSeq(),
+            });
+            this._isActiveSession = false;
             return { success: true };
         } catch (error) {
             this.#emitError(error);
@@ -186,5 +220,9 @@ export class ServerWsClient {
 
     getCaptureFps() {
         return this.captureFps;
+    }
+
+    isActiveSession() {
+        return this._isActiveSession;
     }
 }

@@ -8,6 +8,8 @@ export class LifecycleManager {
         this.eventManager = eventManager;
         this.multimediaOrchestrator = multimediaOrchestrator;
         this.messageRenderer = null;
+        // Access the server client via orchestrator
+        this.serverClient = this.multimediaOrchestrator?.serverClient || null;
     }
 
     trackSidePanelLifecycle() {
@@ -18,6 +20,11 @@ export class LifecycleManager {
             .sendMessage({ type: MESSAGE_TYPES.SIDE_PANEL_OPENED })
             .catch(() => {});
         chrome.storage.local.set({ sidePanelOpen: true }).catch(() => {});
+
+        // Establish WebSocket connection immediately on side panel open
+        try {
+            this.serverClient?.connect?.();
+        } catch (_) {}
 
         let sidepanelCloseTimeout = null;
         const CLOSE_DELAY = 10000; // 10 seconds delay - increased to prevent premature closure
@@ -39,6 +46,11 @@ export class LifecycleManager {
                 .sendMessage({ type: MESSAGE_TYPES.SIDE_PANEL_CLOSED })
                 .catch(() => {});
             chrome.storage.local.set({ sidePanelOpen: false }).catch(() => {});
+
+            // Close the WebSocket connection when side panel closes
+            try {
+                await this.serverClient?.disconnect?.();
+            } catch (_) {}
         };
 
         const handleSidePanelHidden = () => {

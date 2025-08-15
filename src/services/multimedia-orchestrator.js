@@ -37,16 +37,12 @@ export class MultimediaOrchestrator {
             // Setup audio capture first to learn actual sample rate
             await this.audioHandler.setupAudioCapture();
 
-            // Connect to server with real sample rate and default FPS
-            const sr =
-                this.audioHandler?.audioCapture?.getSampleRate?.() ?? 16000;
-            const geminiResult = await this.serverClient.connect({
-                sampleRate: sr,
-            });
-            if (!geminiResult.success) {
-                throw new Error(
-                    geminiResult.error || "Failed to connect to AI server"
-                );
+            // Begin ACTIVE session (send init) using the real sample rate.
+            // WebSocket is expected to be already connected by lifecycle manager.
+            const sr = this.audioHandler?.audioCapture?.getSampleRate?.() ?? 16000;
+            const activeStart = await this.serverClient.beginActiveSession({ sampleRate: sr });
+            if (!activeStart.success) {
+                throw new Error(activeStart.error || "Failed to start active session");
             }
 
             // Wire server status updates to video handler (apply server FPS override once if needed)
@@ -125,8 +121,8 @@ export class MultimediaOrchestrator {
             this.videoHandler.stopScreenshotStreaming();
             await this.videoHandler.cleanup();
 
-            // Disconnect from server
-            await this.serverClient.disconnect();
+            // End ACTIVE session without closing the WebSocket
+            await this.serverClient.endActiveSession();
 
             // Reset states
             this.audioHandler.setListeningState(false);
