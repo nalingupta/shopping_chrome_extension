@@ -12,9 +12,17 @@
     "content_scripts": [
         {
             "matches": ["<all_urls>"],
+            "js": [
+                "src/services/dom/mouse-event.js",
+                "src/services/dom/node-selector.js",
+                "src/services/dom/activity-consumer.js"
+            ],
+            "run_at": "document_idle"
+        },
+        {
+            "matches": ["<all_urls>"],
             "js": ["src/content/content.js"],
-            "run_at": "document_idle",
-            "type": "module"
+            "run_at": "document_idle"
         }
     ],
     "web_accessible_resources": [

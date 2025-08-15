@@ -1,4 +1,11 @@
-import { MESSAGE_TYPES } from "../utils/constants.js";
+// Local minimal constants to avoid importing extension files at runtime
+// (dynamic imports of extension resources from content scripts require
+// web_accessible_resources, so we keep it self-contained)
+let MESSAGE_TYPES = {
+    REQUEST_MIC_PERMISSION: "REQUEST_MIC_PERMISSION",
+    MIC_PERMISSION_RESULT: "MIC_PERMISSION_RESULT",
+    AUDIO_RECORDED: "AUDIO_RECORDED",
+};
 
 class MicPermissionHandler {
     constructor() {
