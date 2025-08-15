@@ -19,6 +19,7 @@ export class MultimediaOrchestrator {
         this._latestLinks = [];
         this._latestCaptureTsAbsMs = null;
         this._sessionStartWallMs = null;
+        this._tabInfoIntervalId = null;
 
         try {
             chrome.storage.local.get(["sessionClock"], (res) => {
@@ -120,6 +121,11 @@ export class MultimediaOrchestrator {
                 this._startLinksForwarding();
             } catch (_) {}
 
+            // Start tab info forwarding loop
+            try {
+                this._startTabInfoForwarding();
+            } catch (_) {}
+
             return { success: true };
         } catch (error) {
             console.error("Failed to start multimedia session:", error);
@@ -173,6 +179,11 @@ export class MultimediaOrchestrator {
             // Stop links forwarding loop
             try {
                 this._stopLinksForwarding();
+            } catch (_) {}
+
+            // Stop tab info forwarding loop
+            try {
+                this._stopTabInfoForwarding();
             } catch (_) {}
 
             return { success: true };
@@ -258,4 +269,41 @@ MultimediaOrchestrator.prototype._stopLinksForwarding = function () {
     }
     this._latestLinks = [];
     this._latestCaptureTsAbsMs = null;
+};
+
+MultimediaOrchestrator.prototype._startTabInfoForwarding = function () {
+    if (this._tabInfoIntervalId) return;
+    const RATE_MS = 1000;
+    const tick = async () => {
+        try {
+            if (!this.isMultimediaActive) return;
+            if (!this.serverClient?.isConnectionActive?.()) return;
+            const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+            if (!tabs || !tabs.length) return;
+            const tabId = tabs[0].id;
+            await new Promise((resolve) => {
+                try {
+                    chrome.tabs.sendMessage(tabId, { type: "REQUEST_TAB_INFO" }, async (resp) => {
+                        try {
+                            if (!resp || resp.success !== true) return resolve();
+                            const info = resp.info || {};
+                            const capAbs = typeof resp.captureTsAbsMs === "number" ? resp.captureTsAbsMs : Date.now();
+                            const wall = typeof this._sessionStartWallMs === "number" ? this._sessionStartWallMs : null;
+                            const tsMs = wall ? Math.max(0, capAbs - wall) : capAbs;
+                            await this.serverClient.sendTabInfo(info, tsMs);
+                            resolve();
+                        } catch (_) { resolve(); }
+                    });
+                } catch (_) { resolve(); }
+            });
+        } catch (_) {}
+    };
+    this._tabInfoIntervalId = setInterval(tick, RATE_MS);
+};
+
+MultimediaOrchestrator.prototype._stopTabInfoForwarding = function () {
+    if (this._tabInfoIntervalId) {
+        try { clearInterval(this._tabInfoIntervalId); } catch (_) {}
+        this._tabInfoIntervalId = null;
+    }
 };

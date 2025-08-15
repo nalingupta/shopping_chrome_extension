@@ -6,6 +6,7 @@ let MESSAGE_TYPES = {
     MIC_PERMISSION_RESULT: "MIC_PERMISSION_RESULT",
     AUDIO_RECORDED: "AUDIO_RECORDED",
     SESSION_MODE_CHANGED: "SESSION_MODE_CHANGED",
+    REQUEST_TAB_INFO: "REQUEST_TAB_INFO",
 };
 
 class MicPermissionHandler {
@@ -125,8 +126,39 @@ class ContentScript {
                     this.handleMicrophoneRequest(sendResponse);
                     return true;
                 }
+
+                if (request.type === MESSAGE_TYPES.REQUEST_TAB_INFO) {
+                    try {
+                        const info = this.collectTabInfo();
+                        sendResponse({ success: true, info, captureTsAbsMs: Date.now() });
+                    } catch (error) {
+                        sendResponse({ success: false, error: String(error?.message || error) });
+                    }
+                    return true;
+                }
             }
         );
+    }
+
+    collectTabInfo() {
+        try {
+            const title = String(document?.title || "");
+            const url = String(location?.href || "");
+            const meta = (name) => {
+                try {
+                    const el = document.querySelector(`meta[name="${name}"]`);
+                    return el ? String(el.getAttribute("content") || "") : "";
+                } catch (_) { return ""; }
+            };
+            return {
+                title,
+                url,
+                description: meta("description"),
+                keywords: meta("keywords"),
+            };
+        } catch (_) {
+            return { title: "", url: "", description: "", keywords: "" };
+        }
     }
 
     async handleMicrophoneRequest(sendResponse) {

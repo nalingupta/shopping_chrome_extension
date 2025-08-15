@@ -75,6 +75,17 @@ export class ServerClient {
         }
     }
 
+    async sendTabInfo(info, tsMs) {
+        try {
+            if (!this.isConnectionActive()) return { success: false, error: "not_connected" };
+            this.serverAPI.sendTabInfo({ info: info || {}, tsMs: typeof tsMs === "number" ? tsMs : undefined });
+            return { success: true };
+        } catch (error) {
+            console.error("Failed to send tab info over WS:", error);
+            return { success: false, error: error.message };
+        }
+    }
+
     async beginActiveSession({ sampleRate = 16000, fps = DEFAULT_CAPTURE_FPS } = {}) {
         try {
             const result = await this.serverAPI.beginActiveSession({ sampleRate, fps });

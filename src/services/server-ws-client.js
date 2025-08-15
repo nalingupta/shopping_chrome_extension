@@ -190,6 +190,21 @@ export class ServerWsClient {
         }
     }
 
+    sendTabInfo({ info, tsMs }) {
+        if (!this.isConnected) return;
+        try {
+            const payload = {
+                type: "tabInfo",
+                seq: this.#nextSeq(),
+                tsMs: typeof tsMs === "number" ? tsMs : Date.now(),
+                info: info || {},
+            };
+            this.#send(payload);
+        } catch (error) {
+            this.#emitError(error);
+        }
+    }
+
     // Internal
     #handleMessage(evt) {
         try {
