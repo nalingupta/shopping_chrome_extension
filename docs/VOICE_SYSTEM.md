@@ -1,8 +1,10 @@
-# Voice Input System – Backend‑Mediated Architecture (Current)
+# Voice Input System – Backend‑Mediated Architecture [DEPRECATED]
 
 ## Overview
 
-The Chrome extension streams microphone PCM and static screenshots to a local backend over WebSocket. The backend performs VAD/segmentation, encodes segments, and calls the configured model (e.g., Gemini) to generate responses. The extension displays server‑provided transcripts (if emitted) and assistant responses.
+This document is superseded by `VOICE_SYSTEM.v2.md`.
+
+Please refer to the updated version for accurate implementation details aligned with the current codebase.
 Note on naming: Earlier references to an "AI handler" have been standardized to `ServerClient` to avoid confusion. Page analysis features and messages (e.g., page info broadcast/queries) have been removed from the current architecture.
 
 -   **Primary**: Local backend WebSocket `/ws`

@@ -1,6 +1,8 @@
-# Screen Recording (Static Capture)
+# Screen Recording (Static Capture) [DEPRECATED]
 
-The extension performs continuous static screen capture during listening sessions and streams JPEG frames to the local backend, which aligns them with audio to produce segments for the Gemini model.
+This document is superseded by `SCREEN_RECORDING.v2.md`.
+
+Please refer to the updated version for accurate implementation details.
 
 ## How It Works
 
