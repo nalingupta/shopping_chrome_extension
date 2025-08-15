@@ -28,10 +28,13 @@ Client → Server
 -   `text`: `{ type:"text", seq, tsMs, text }`
 -   `control`: `{ type:"control", action:"forceSegmentClose" }` (testing only)
 -   `links`: `{ type:"links", seq, tsMs, links }`
+-   `tabInfo`: `{ type:"tabInfo", seq, tsMs, info }`
 
 Notes:
 - `links.links` is an array of unique href strings derived from current hover context.
 - `links.tsMs` is the session‑relative capture timestamp (derived from the last sample in the corresponding hover bucket; see "Timestamps and Alignment").
+- `tabInfo.info` contains `{ title, url, description, keywords }` captured from the active tab.
+- `tabInfo.tsMs` is the session‑relative capture timestamp for when the info was read.
 
 Server → Client
 
@@ -47,6 +50,7 @@ Server → Client
 -   `audioChunk.tsStartMs` + `numSamples` + `sampleRate` define exact coverage per chunk
 -   `imageFrame.tsMs` marks frame capture time
 -   `links.tsMs` marks the capture time of the last hover sample in each bucket, converted to the session‑relative clock so it aligns with frames and audio.
+-   `tabInfo.tsMs` marks the capture time for the page info read, converted to the same session‑relative clock.
 -   Backend slices audio for `[segmentStart, segmentEnd]` and selects frames near uniform sampling instants for ENCODE_FPS (e.g., 2 FPS), adjusting last frame duration to match audio length
 
 ## Server VAD and Transcript Wait
@@ -78,3 +82,11 @@ The backend always returns a `response` message for the UI.
 -   ffmpeg required (installed via conda-forge)
 -   Start: `CAPTURE_FPS=10 uvicorn server.main:app --port 8787 --reload`
 -   Extension CSP must allow `ws://127.0.0.1:*`
+
+### Extension timing knobs (client)
+
+- Mouse hover aggregation:
+  - Sample tick: configurable; see `MOUSE_CONFIG.SAMPLE_INTERVAL_MS` (default 100 ms)
+  - Bucket flush: configurable; see `MOUSE_CONFIG.BUCKET_FLUSH_MS` (current 500 ms)
+- Tab info forwarding cadence (ACTIVE only):
+  - `TAB_INFO_CONFIG.RATE_MS` (default 1000 ms)
