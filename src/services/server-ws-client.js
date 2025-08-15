@@ -47,6 +47,27 @@ export class ServerWsClient {
                 this.ws.onopen = () => {
                     this.isConnected = true;
                     this.sessionStartMs = performance.now();
+                    try {
+                        const sessionStartWallMs = Date.now();
+                        // Broadcast session start so other contexts can align
+                        chrome.runtime
+                            .sendMessage({
+                                type: "SESSION_STARTED",
+                                sessionStartWallMs,
+                                ts: Date.now(),
+                            })
+                            .catch(() => {});
+                        try {
+                            chrome.storage.local
+                                .set({
+                                    sessionClock: {
+                                        sessionStartWallMs,
+                                        updatedAt: Date.now(),
+                                    },
+                                })
+                                .catch(() => {});
+                        } catch (_) {}
+                    } catch (_) {}
                     this.#emitConnectionState("connected");
                     resolve({ success: true });
                 };
@@ -152,6 +173,21 @@ export class ServerWsClient {
             tsMs: Date.now(),
             text,
         });
+    }
+
+    sendLinks({ links, tsMs }) {
+        if (!this.isConnected) return;
+        try {
+            const payload = {
+                type: "links",
+                seq: this.#nextSeq(),
+                tsMs: typeof tsMs === "number" ? tsMs : Date.now(),
+                links: Array.isArray(links) ? links : [],
+            };
+            this.#send(payload);
+        } catch (error) {
+            this.#emitError(error);
+        }
     }
 
     // Internal

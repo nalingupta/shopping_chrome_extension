@@ -7,7 +7,7 @@
 
 
   var DEFAULTS = {
-      sampleIntervalMs: 100,
+      sampleIntervalMs: (function(){ try { return (window && window.__MOUSE_SAMPLE_INTERVAL_MS__) || 100; } catch(e) { return 100; } })(),
       movementThresholdPx: 300, // >= this => Moving
       hoverThresholdPx: 200,    // >0 and <= this => Hovering
       debug: false

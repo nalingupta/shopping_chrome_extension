@@ -5,6 +5,7 @@ let MESSAGE_TYPES = {
     REQUEST_MIC_PERMISSION: "REQUEST_MIC_PERMISSION",
     MIC_PERMISSION_RESULT: "MIC_PERMISSION_RESULT",
     AUDIO_RECORDED: "AUDIO_RECORDED",
+    SESSION_MODE_CHANGED: "SESSION_MODE_CHANGED",
 };
 
 class MicPermissionHandler {
@@ -25,8 +26,26 @@ class MicPermissionHandler {
                     sendResponse({ granted: this.permissionGranted });
                     return false;
                 }
+
+                if (request.type === MESSAGE_TYPES.SESSION_MODE_CHANGED) {
+                    try {
+                        this.handleSessionModeChanged?.(request.mode);
+                    } catch (_) {}
+                    return false;
+                }
             }
         );
+
+        // Storage-based listener for session mode changes
+        try {
+            chrome.storage.onChanged.addListener((changes, namespace) => {
+                if (namespace === "local" && changes.sessionMode) {
+                    try {
+                        this.handleSessionModeChanged?.(changes.sessionMode.newValue);
+                    } catch (_) {}
+                }
+            });
+        } catch (_) {}
     }
 
     async requestMicPermission() {
@@ -80,6 +99,10 @@ class MicPermissionHandler {
     cleanupPermissionRequest(messageHandler) {
         window.removeEventListener("message", messageHandler);
     }
+
+    // Optional hook: pages can observe mode changes by monkey-patching
+    // contentScript.micPermissionHandler.handleSessionModeChanged = (mode) => { ... }
+    handleSessionModeChanged(_mode) {}
 }
 
 class ContentScript {

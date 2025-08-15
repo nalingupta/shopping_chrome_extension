@@ -6,7 +6,7 @@
   var _lastEl = null;
   var _bucket = [];
   var _bucketTimerId = null;
-  var _bucketWindowMs = 1000; // groups ~5 samples at 100ms
+  var _bucketWindowMs = (function(){ try { return (window && window.__MOUSE_BUCKET_FLUSH_MS__) || 1000; } catch(e) { return 1000; } })(); // groups ~5 samples at 100ms
   var _bucketIndex = 0;
   var _startedAtMs = 0;
   var _nodeSelect = null;
@@ -170,27 +170,7 @@
           // Accumulate every sample into current bucket
           
           if (ev.state === 'Idle') {
-            // Visual ping on Idle (throttled)
-            try {
-              var nowIdle = Date.now();
-              if (nowIdle - _lastVisualTs >= _visualMinGapMs) {
-                try {
-                  var now = Date.now();
-                  var entry = {
-                    tsAbsMs: now,
-                    tsRelMs: Math.max(0, now - _startedAtMs),
-                    state: ev.state,
-                    distancePx: ev.distancePx,
-                    intervalMs: ev.intervalMs,
-                    changed: !!ev.changed,
-                    node: processWithNodeSelect(_lastEl)
-                  };
-                  
-                } catch (e) {}
-                _bucket.push(entry);
-                _lastVisualTs = nowIdle;
-              }
-            } catch (e) {}
+            // Don't handle these event
           } else if (ev.state === 'Hovering') {
             // Visual ping on Hovering (throttled)
             try {
@@ -266,6 +246,16 @@
     try { tracker.updateConfig(cfg || {}); return { ok: true }; } catch (e) { return { ok: false, error: 'update-failed' }; }
   }
 
+  function onSessionModeChanged(mode) {
+    try {
+      if (mode === 'ACTIVE') {
+        start();
+      } else if (mode === 'IDLE') {
+        stop();
+      }
+    } catch (e) {}
+  }
+
   chrome.runtime.onMessage.addListener(function(message, sender, sendResponse) {
     switch (message && message.action) {
       case 'mouse:start':
@@ -282,4 +272,33 @@
         break;
     }
   });
+
+  try {
+    chrome.runtime.onMessage.addListener(function(msg) {
+      try {
+        if (msg && msg.type === 'SESSION_MODE_CHANGED') {
+          onSessionModeChanged(msg.mode);
+        }
+      } catch (e) {}
+    });
+  } catch (e) {}
+
+  try {
+    chrome.storage.onChanged.addListener(function(changes, namespace) {
+      try {
+        if (namespace === 'local' && changes && changes.sessionMode) {
+          onSessionModeChanged(changes.sessionMode.newValue);
+        }
+      } catch (e) {}
+    });
+  } catch (e) {}
+
+  try {
+    chrome.storage.local.get(['sessionMode'], function(res) {
+      try {
+        var m = res && res.sessionMode;
+        if (m) onSessionModeChanged(m);
+      } catch (e) {}
+    });
+  } catch (e) {}
 

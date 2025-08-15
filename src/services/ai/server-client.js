@@ -63,6 +63,18 @@ export class ServerClient {
         );
     }
 
+    async sendLinks(links, tsMs) {
+        try {
+            if (!this.isConnectionActive()) return { success: false, error: "not_connected" };
+            if (!Array.isArray(links) || links.length === 0) return { success: true };
+            this.serverAPI.sendLinks({ links, tsMs: typeof tsMs === "number" ? tsMs : undefined });
+            return { success: true };
+        } catch (error) {
+            console.error("Failed to send links over WS:", error);
+            return { success: false, error: error.message };
+        }
+    }
+
     async beginActiveSession({ sampleRate = 16000, fps = DEFAULT_CAPTURE_FPS } = {}) {
         try {
             const result = await this.serverAPI.beginActiveSession({ sampleRate, fps });

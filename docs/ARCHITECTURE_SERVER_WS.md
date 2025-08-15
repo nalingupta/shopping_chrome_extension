@@ -27,6 +27,11 @@ Client → Server
 -   `transcript`: `{ type:"transcript", seq, tsMs, isFinal:true, text }`
 -   `text`: `{ type:"text", seq, tsMs, text }`
 -   `control`: `{ type:"control", action:"forceSegmentClose" }` (testing only)
+-   `links`: `{ type:"links", seq, tsMs, links }`
+
+Notes:
+- `links.links` is an array of unique href strings derived from current hover context.
+- `links.tsMs` is the session‑relative capture timestamp (derived from the last sample in the corresponding hover bucket; see "Timestamps and Alignment").
 
 Server → Client
 
@@ -41,6 +46,7 @@ Server → Client
 -   Single session clock from the client (relative ms)
 -   `audioChunk.tsStartMs` + `numSamples` + `sampleRate` define exact coverage per chunk
 -   `imageFrame.tsMs` marks frame capture time
+-   `links.tsMs` marks the capture time of the last hover sample in each bucket, converted to the session‑relative clock so it aligns with frames and audio.
 -   Backend slices audio for `[segmentStart, segmentEnd]` and selects frames near uniform sampling instants for ENCODE_FPS (e.g., 2 FPS), adjusting last frame duration to match audio length
 
 ## Server VAD and Transcript Wait

@@ -1,4 +1,5 @@
-import { MESSAGE_TYPES } from "../utils/constants.js";
+import { MESSAGE_TYPES, SESSION_MODE } from "../utils/constants.js";
+import { broadcastSessionMode } from "../utils/storage/broadcast.js";
 import { UnifiedConversationManager } from "../utils/storage.js";
 
 export class EventManager {
@@ -53,6 +54,10 @@ export class EventManager {
                 if (request.type === MESSAGE_TYPES.CONVERSATION_UPDATED) {
                     // Handle cross-window conversation updates
                     this.handleConversationUpdate();
+                } else if (request.type === MESSAGE_TYPES.MOUSE_BUCKET_LINKS) {
+                    try {
+                        this._onHoverLinks?.(request);
+                    } catch (_) {}
                 }
             }
         );
@@ -200,6 +205,7 @@ export class EventManager {
                 this.uiManager.elements.voiceButton.title = "";
                 this.uiManager.uiState.setSpeechState("listening");
                 this.uiManager.uiState.showStatus("Listening...", "info");
+                try { broadcastSessionMode(SESSION_MODE.ACTIVE); } catch (_) {}
             } else {
                 this.handleVoiceError(result);
             }
@@ -222,6 +228,7 @@ export class EventManager {
 
         this.uiManager.uiState.setSpeechState("idle");
         this.uiManager.uiState.showStatus("Start a chat", "info");
+        try { broadcastSessionMode(SESSION_MODE.IDLE); } catch (_) {}
     }
 
     handleListeningStopped(reason) {

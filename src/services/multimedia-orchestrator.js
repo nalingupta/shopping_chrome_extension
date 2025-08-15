@@ -13,6 +13,39 @@ export class MultimediaOrchestrator {
             lastWebSpeechUpdate: 0,
             isServerProcessing: false,
         };
+
+        // Hover links forwarding state
+        this._linksIntervalId = null;
+        this._latestLinks = [];
+        this._latestCaptureTsAbsMs = null;
+        this._sessionStartWallMs = null;
+
+        try {
+            chrome.storage.local.get(["sessionClock"], (res) => {
+                try {
+                    const wall = res?.sessionClock?.sessionStartWallMs;
+                    if (typeof wall === "number") this._sessionStartWallMs = wall;
+                } catch (_) {}
+            });
+            chrome.storage.onChanged.addListener((changes, ns) => {
+                if (ns === "local" && changes.sessionClock) {
+                    try {
+                        const wall = changes.sessionClock.newValue?.sessionStartWallMs;
+                        if (typeof wall === "number") this._sessionStartWallMs = wall;
+                    } catch (_) {}
+                }
+            });
+            chrome.runtime.onMessage.addListener((msg) => {
+                try {
+                    if (msg?.type === "SESSION_STARTED" && typeof msg.sessionStartWallMs === "number") {
+                        this._sessionStartWallMs = msg.sessionStartWallMs;
+                    } else if (msg?.type === "HOVER_CAPTURE_BUCKET_LINKS") {
+                        if (Array.isArray(msg.links)) this._latestLinks = msg.links;
+                        if (typeof msg.captureTsAbsMs === "number") this._latestCaptureTsAbsMs = msg.captureTsAbsMs;
+                    }
+                } catch (_) {}
+            });
+        } catch (_) {}
     }
 
     async startMultimedia() {
@@ -82,6 +115,11 @@ export class MultimediaOrchestrator {
 
             this.isMultimediaActive = true;
 
+            // Start 500ms links forwarding loop
+            try {
+                this._startLinksForwarding();
+            } catch (_) {}
+
             return { success: true };
         } catch (error) {
             console.error("Failed to start multimedia session:", error);
@@ -131,6 +169,11 @@ export class MultimediaOrchestrator {
             this.audioHandler.audioStreamingStarted = false;
 
             this.isMultimediaActive = false;
+
+            // Stop links forwarding loop
+            try {
+                this._stopLinksForwarding();
+            } catch (_) {}
 
             return { success: true };
         } catch (error) {
@@ -190,3 +233,29 @@ export class MultimediaOrchestrator {
     // State queries - use the boolean state directly
     // isMultimediaActive() method already exists above
 }
+
+MultimediaOrchestrator.prototype._startLinksForwarding = function () {
+    if (this._linksIntervalId) return;
+    const tick = async () => {
+        try {
+            if (!this.isMultimediaActive) return;
+            if (!this.serverClient?.isConnectionActive?.()) return;
+            if (!Array.isArray(this._latestLinks) || this._latestLinks.length === 0) return;
+            const wall = typeof this._sessionStartWallMs === "number" ? this._sessionStartWallMs : null;
+            const capAbs = typeof this._latestCaptureTsAbsMs === "number" ? this._latestCaptureTsAbsMs : Date.now();
+            const tsMs = wall ? Math.max(0, capAbs - wall) : capAbs;
+            await this.serverClient.sendLinks(this._latestLinks, tsMs);
+            this._latestLinks = [];
+        } catch (_) {}
+    };
+    this._linksIntervalId = setInterval(tick, 500);
+};
+
+MultimediaOrchestrator.prototype._stopLinksForwarding = function () {
+    if (this._linksIntervalId) {
+        try { clearInterval(this._linksIntervalId); } catch (_) {}
+        this._linksIntervalId = null;
+    }
+    this._latestLinks = [];
+    this._latestCaptureTsAbsMs = null;
+};
