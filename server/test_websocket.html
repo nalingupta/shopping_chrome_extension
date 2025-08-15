@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSocket Test Client</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .status {
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+            font-weight: bold;
+        }
+        .connected { background-color: #d4edda; color: #155724; }
+        .disconnected { background-color: #f8d7da; color: #721c24; }
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        button {
+            padding: 10px 15px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        .primary { background-color: #007bff; color: white; }
+        .success { background-color: #28a745; color: white; }
+        .danger { background-color: #dc3545; color: white; }
+        .secondary { background-color: #6c757d; color: white; }
+        input[type="text"] {
+            flex: 1;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            margin-right: 10px;
+        }
+        .message-input {
+            display: flex;
+            margin-bottom: 20px;
+        }
+        .log {
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 15px;
+            height: 400px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+            white-space: pre-wrap;
+        }
+        .log-entry {
+            margin-bottom: 5px;
+            padding: 2px 0;
+        }
+        .sent { color: #007bff; }
+        .received { color: #28a745; }
+        .error { color: #dc3545; }
+        .info { color: #6c757d; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔌 WebSocket Test Client</h1>
+        
+        <div id="status" class="status disconnected">
+            ❌ Disconnected
+        </div>
+        
+        <div class="controls">
+            <input type="text" id="urlInput" value="ws://shoppingchromeextension-production.up.railway.app/api/v1/ws" placeholder="WebSocket URL">
+            <button id="connectBtn" class="primary">Connect</button>
+            <button id="disconnectBtn" class="danger" disabled>Disconnect</button>
+        </div>
+        
+        <div class="message-input">
+            <input type="text" id="messageInput" placeholder="Enter text message..." disabled>
+            <button id="sendTextBtn" class="success" disabled>Send Text</button>
+        </div>
+        
+        <div class="controls">
+            <button id="sessionStartBtn" class="secondary" disabled>Start Session</button>
+            <button id="transcriptBtn" class="secondary" disabled>Send Transcript</button>
+            <button id="frameBtn" class="secondary" disabled>Send Frame</button>
+            <button id="audioBtn" class="secondary" disabled>Send Audio</button>
+            <button id="clearLogBtn" class="secondary">Clear Log</button>
+        </div>
+        
+        <div id="log" class="log"></div>
+    </div>
+
+    <script>
+        class WebSocketTester {
+            constructor() {
+                this.ws = null;
+                this.sessionId = this.generateUUID();
+                this.setupEventListeners();
+                this.log('🚀 WebSocket Test Client initialized', 'info');
+            }
+            
+            generateUUID() {
+                return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                    const r = Math.random() * 16 | 0;
+                    const v = c == 'x' ? r : (r & 0x3 | 0x8);
+                    return v.toString(16);
+                });
+            }
+            
+            setupEventListeners() {
+                document.getElementById('connectBtn').addEventListener('click', () => this.connect());
+                document.getElementById('disconnectBtn').addEventListener('click', () => this.disconnect());
+                document.getElementById('sendTextBtn').addEventListener('click', () => this.sendTextMessage());
+                document.getElementById('sessionStartBtn').addEventListener('click', () => this.sendSessionStart());
+                document.getElementById('transcriptBtn').addEventListener('click', () => this.sendTranscript());
+                document.getElementById('frameBtn').addEventListener('click', () => this.sendFrame());
+                document.getElementById('audioBtn').addEventListener('click', () => this.sendAudio());
+                document.getElementById('clearLogBtn').addEventListener('click', () => this.clearLog());
+                
+                // Enter key to send text message
+                document.getElementById('messageInput').addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') {
+                        this.sendTextMessage();
+                    }
+                });
+            }
+            
+            connect() {
+                const url = document.getElementById('urlInput').value;
+                this.log(`🔌 Connecting to ${url}...`, 'info');
+                
+                try {
+                    this.ws = new WebSocket(url);
+                    
+                    this.ws.onopen = () => {
+                        this.log('✅ Connected successfully!', 'info');
+                        this.updateStatus(true);
+                        this.updateButtons(true);
+                    };
+                    
+                    this.ws.onmessage = (event) => {
+                        try {
+                            const data = JSON.parse(event.data);
+                            this.log(`📥 Received [${data.type}]: ${JSON.stringify(data, null, 2)}`, 'received');
+                        } catch (e) {
+                            this.log(`📥 Received: ${event.data}`, 'received');
+                        }
+                    };
+                    
+                    this.ws.onclose = () => {
+                        this.log('🔌 Connection closed', 'info');
+                        this.updateStatus(false);
+                        this.updateButtons(false);
+                    };
+                    
+                    this.ws.onerror = (error) => {
+                        this.log(`❌ WebSocket error: ${error}`, 'error');
+                        this.updateStatus(false);
+                        this.updateButtons(false);
+                    };
+                    
+                } catch (error) {
+                    this.log(`❌ Connection failed: ${error}`, 'error');
+                }
+            }
+            
+            disconnect() {
+                if (this.ws) {
+                    this.ws.close();
+                    this.ws = null;
+                }
+            }
+            
+            sendMessage(message) {
+                if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+                    this.log('❌ Not connected', 'error');
+                    return;
+                }
+                
+                try {
+                    const jsonMessage = JSON.stringify(message);
+                    this.ws.send(jsonMessage);
+                    this.log(`📤 Sent [${message.type}]: ${JSON.stringify(message, null, 2)}`, 'sent');
+                } catch (error) {
+                    this.log(`❌ Send error: ${error}`, 'error');
+                }
+            }
+            
+            sendSessionStart() {
+                this.sendMessage({
+                    type: 'session_start',
+                    session_id: this.sessionId
+                });
+            }
+            
+            sendTextMessage() {
+                const text = document.getElementById('messageInput').value.trim();
+                if (!text) return;
+                
+                this.sendMessage({
+                    type: 'text',
+                    text: text
+                });
+                
+                document.getElementById('messageInput').value = '';
+            }
+            
+            sendTranscript() {
+                this.sendMessage({
+                    type: 'transcript',
+                    ts_ms: Date.now(),
+                    text: 'I want to buy a new laptop for programming',
+                    is_final: true
+                });
+            }
+            
+            sendFrame() {
+                // Create a small dummy image (1x1 red pixel PNG)
+                const canvas = document.createElement('canvas');
+                canvas.width = 1;
+                canvas.height = 1;
+                const ctx = canvas.getContext('2d');
+                ctx.fillStyle = 'red';
+                ctx.fillRect(0, 0, 1, 1);
+                
+                canvas.toBlob((blob) => {
+                    const reader = new FileReader();
+                    reader.onload = () => {
+                        const base64 = reader.result.split(',')[1];
+                        this.sendMessage({
+                            type: 'frame',
+                            ts_ms: Date.now(),
+                            data: base64
+                        });
+                    };
+                    reader.readAsDataURL(blob);
+                }, 'image/jpeg', 0.8);
+            }
+            
+            sendAudio() {
+                this.log('🎤 Sending audio sequence (speech simulation)...', 'info');
+                this.sendAudioSequence();
+            }
+            
+            async sendAudioSequence() {
+                // Send a sequence of audio frames to simulate speech
+                // VAD needs: 300ms+ speech + 800ms+ silence to trigger response
+                
+                const sampleRate = 16000;
+                const frameSamples = 480; // 30ms at 16kHz
+                const startTime = Date.now();
+                
+                // Phase 1: Send 500ms of "speech" (above threshold)
+                this.log('📢 Phase 1: Sending speech frames (500ms)...', 'info');
+                for (let frame = 0; frame < 17; frame++) { // 17 frames = ~510ms
+                    const buffer = new ArrayBuffer(frameSamples * 2);
+                    const view = new Int16Array(buffer);
+                    
+                    // Generate louder sine wave (above VAD threshold)
+                    for (let i = 0; i < frameSamples; i++) {
+                        const sample = Math.sin(2 * Math.PI * 440 * (frame * frameSamples + i) / sampleRate);
+                        view[i] = sample * 16000; // Louder amplitude
+                    }
+                    
+                    const base64 = btoa(String.fromCharCode(...new Uint8Array(buffer)));
+                    
+                    this.sendMessage({
+                        type: 'audio',
+                        ts_ms: startTime + (frame * 30),
+                        data: base64,
+                        num_samples: frameSamples,
+                        sample_rate: sampleRate
+                    });
+                    
+                    // Small delay between frames
+                    await new Promise(resolve => setTimeout(resolve, 10));
+                }
+                
+                // Phase 2: Send 1000ms of silence (below threshold)
+                this.log('🤫 Phase 2: Sending silence frames (1000ms)...', 'info');
+                for (let frame = 0; frame < 34; frame++) { // 34 frames = ~1020ms
+                    const buffer = new ArrayBuffer(frameSamples * 2);
+                    const view = new Int16Array(buffer);
+                    
+                    // Generate silence (very low amplitude)
+                    for (let i = 0; i < frameSamples; i++) {
+                        view[i] = Math.random() * 100 - 50; // Very quiet noise
+                    }
+                    
+                    const base64 = btoa(String.fromCharCode(...new Uint8Array(buffer)));
+                    
+                    this.sendMessage({
+                        type: 'audio',
+                        ts_ms: startTime + 510 + (frame * 30), // After speech phase
+                        data: base64,
+                        num_samples: frameSamples,
+                        sample_rate: sampleRate
+                    });
+                    
+                    await new Promise(resolve => setTimeout(resolve, 10));
+                }
+                
+                this.log('✅ Audio sequence complete! VAD should trigger segment processing...', 'info');
+            }
+            
+            updateStatus(connected) {
+                const status = document.getElementById('status');
+                if (connected) {
+                    status.textContent = '✅ Connected';
+                    status.className = 'status connected';
+                } else {
+                    status.textContent = '❌ Disconnected';
+                    status.className = 'status disconnected';
+                }
+            }
+            
+            updateButtons(connected) {
+                document.getElementById('connectBtn').disabled = connected;
+                document.getElementById('disconnectBtn').disabled = !connected;
+                document.getElementById('messageInput').disabled = !connected;
+                document.getElementById('sendTextBtn').disabled = !connected;
+                document.getElementById('sessionStartBtn').disabled = !connected;
+                document.getElementById('transcriptBtn').disabled = !connected;
+                document.getElementById('frameBtn').disabled = !connected;
+                document.getElementById('audioBtn').disabled = !connected;
+            }
+            
+            log(message, type = 'info') {
+                const logDiv = document.getElementById('log');
+                const timestamp = new Date().toLocaleTimeString();
+                const entry = document.createElement('div');
+                entry.className = `log-entry ${type}`;
+                entry.textContent = `[${timestamp}] ${message}`;
+                logDiv.appendChild(entry);
+                logDiv.scrollTop = logDiv.scrollHeight;
+            }
+            
+            clearLog() {
+                document.getElementById('log').innerHTML = '';
+            }
+        }
+        
+        // Initialize the tester when page loads
+        window.addEventListener('DOMContentLoaded', () => {
+            new WebSocketTester();
+        });
+    </script>
+</body>
+</html>
