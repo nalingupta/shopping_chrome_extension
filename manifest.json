@@ -13,9 +13,9 @@
         {
             "matches": ["<all_urls>"],
             "js": [
-                "src/services/dom/mouse-event.js",
-                "src/services/dom/node-selector.js",
-                "src/services/dom/activity-consumer.js"
+                "src/content/mouse-event.js",
+                "src/content/node-selector.js",
+                "src/content/activity-consumer.js"
             ],
             "run_at": "document_idle"
         },
