@@ -16,6 +16,31 @@ export class ServerWsClient {
         this._isActiveSession = false;
         // Default to 1 FPS to avoid initial high-rate capture before server config arrives
         this.captureFps = 1;
+
+        // Reconnection / liveness state
+        this.manualClose = false;
+        this.reconnectAttempts = 0;
+        this.reconnectTimerId = null;
+        this.connectPromise = null;
+        this.connectTimeoutId = null;
+        this.livenessIntervalId = null;
+        this.lastMessageAt = 0;
+
+        // Pending queue for control/text (non-media) while disconnected
+        this.pendingQueue = [];
+        this.maxPendingQueue = API_CONFIG.PENDING_QUEUE_MAX || 50;
+
+        // Online/offline awareness
+        try {
+            window.addEventListener("online", () => {
+                if (!this.isConnected && !this.manualClose && !this.connectPromise) {
+                    this.#scheduleReconnect(true);
+                }
+            });
+            window.addEventListener("offline", () => {
+                // No-op; retries will be paused because navigator.onLine is false
+            });
+        } catch (_) {}
     }
 
     setBotResponseCallback(cb) {
@@ -40,13 +65,38 @@ export class ServerWsClient {
 
     async connect() {
         if (this.isConnected) return { success: true };
-        return new Promise((resolve) => {
+        if (this.connectPromise) return this.connectPromise;
+        this.manualClose = false;
+        this.connectPromise = new Promise((resolve) => {
             try {
                 const url = API_CONFIG.SERVER_WS_URL;
                 this.ws = new WebSocket(url);
+
+                // Guard: connection timeout
+                const timeoutMs = API_CONFIG.CONNECTION_TIMEOUT || 30000;
+                this.connectTimeoutId = setTimeout(() => {
+                    try {
+                        if (this.ws && this.ws.readyState !== WebSocket.OPEN) {
+                            try { this.ws.close(); } catch (_) {}
+                        }
+                    } finally {
+                        this.connectTimeoutId = null;
+                        if (!this.isConnected) {
+                            this.#emitError(new Error("connect_timeout"));
+                            this.#scheduleReconnect();
+                            resolve({ success: false, error: "connect_timeout" });
+                            this.connectPromise = null;
+                        }
+                    }
+                }, timeoutMs);
+
                 this.ws.onopen = () => {
+                    if (this.connectTimeoutId) { clearTimeout(this.connectTimeoutId); this.connectTimeoutId = null; }
                     this.isConnected = true;
+                    this.reconnectAttempts = 0;
                     this.sessionStartMs = performance.now();
+                    this.lastMessageAt = Date.now();
+                    this.#startLivenessMonitor();
                     try {
                         const sessionStartWallMs = Date.now();
                         // Broadcast session start so other contexts can align
@@ -69,14 +119,24 @@ export class ServerWsClient {
                         } catch (_) {}
                     } catch (_) {}
                     this.#emitConnectionState("connected");
+                    this.#flushPendingQueue();
                     resolve({ success: true });
+                    this.connectPromise = null;
                 };
                 this.ws.onmessage = (evt) => this.#handleMessage(evt);
-                this.ws.onerror = (err) => this.#emitError(err);
+                this.ws.onerror = (err) => {
+                    this.#emitError(err);
+                };
                 this.ws.onclose = () => {
                     this.isConnected = false;
                     this._isActiveSession = false;
                     this.#emitConnectionState("disconnected");
+                    this.#clearTimers();
+                    this.ws = null;
+                    this.connectPromise = null;
+                    if (!this.manualClose) {
+                        this.#scheduleReconnect();
+                    }
                 };
             } catch (error) {
                 this.#emitError(error);
@@ -84,13 +144,20 @@ export class ServerWsClient {
                     success: false,
                     error: String(error?.message || error),
                 });
+                this.connectPromise = null;
             }
         });
+        return this.connectPromise;
     }
 
     async disconnect() {
         try {
-            if (this.ws) this.ws.close();
+            this.manualClose = true;
+            this.#clearTimers();
+            if (this.ws) {
+                try { this.ws.close(); } catch (_) {}
+            }
+            this.ws = null;
             this.isConnected = false;
             this._isActiveSession = false;
             this.#emitConnectionState("disconnected");
@@ -210,6 +277,7 @@ export class ServerWsClient {
         try {
             const data = JSON.parse(evt.data);
             const t = data?.type;
+            this.lastMessageAt = Date.now();
             if (t === "status") {
                 this.callbacks.onStatus?.(data);
             } else if (t === "response") {
@@ -245,10 +313,86 @@ export class ServerWsClient {
         try {
             if (this.ws && this.ws.readyState === WebSocket.OPEN) {
                 this.ws.send(JSON.stringify(obj));
+                return;
+            }
+            // Queue only non-media messages when not connected
+            const t = obj?.type;
+            if (t === "text" || t === "links" || t === "tabInfo" || t === "control" || t === "init") {
+                if (this.pendingQueue.length >= this.maxPendingQueue) {
+                    this.pendingQueue.shift();
+                }
+                this.pendingQueue.push(obj);
             }
         } catch (error) {
             this.#emitError(error);
         }
+    }
+
+    #flushPendingQueue() {
+        if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+        try {
+            while (this.pendingQueue.length > 0) {
+                const obj = this.pendingQueue.shift();
+                this.ws.send(JSON.stringify(obj));
+            }
+        } catch (error) {
+            this.#emitError(error);
+        }
+    }
+
+    #startLivenessMonitor() {
+        if (this.livenessIntervalId) { clearInterval(this.livenessIntervalId); }
+        const intervalMs = API_CONFIG.LIVENESS_CHECK_INTERVAL_MS || 5000;
+        const timeoutMs = API_CONFIG.LIVENESS_TIMEOUT_MS || 15000;
+        this.livenessIntervalId = setInterval(() => {
+            try {
+                if (!this.isConnected || !this.ws) return;
+                const now = Date.now();
+                if (this.lastMessageAt && now - this.lastMessageAt > timeoutMs) {
+                    // Force a reconnect by closing the socket
+                    try { this.ws.close(); } catch (_) {}
+                }
+            } catch (_) {}
+        }, intervalMs);
+    }
+
+    #scheduleReconnect(immediate = false) {
+        // Stop if limited attempts reached
+        const maxAttempts = API_CONFIG.RETRY_ATTEMPTS ?? 0;
+        if (maxAttempts > 0 && this.reconnectAttempts >= maxAttempts) {
+            return;
+        }
+        if (this.reconnectTimerId) {
+            clearTimeout(this.reconnectTimerId);
+            this.reconnectTimerId = null;
+        }
+        const initial = API_CONFIG.BACKOFF_INITIAL_MS || 500;
+        const max = API_CONFIG.BACKOFF_MAX_MS || 15000;
+        const mult = API_CONFIG.BACKOFF_MULTIPLIER || 2;
+        const jitter = API_CONFIG.BACKOFF_JITTER_MS || 250;
+        const baseDelay = Math.min(max, initial * Math.pow(mult, this.reconnectAttempts));
+        const delay = immediate ? 0 : baseDelay + Math.floor(Math.random() * jitter);
+        const doRetry = () => {
+            if (this.manualClose) return;
+            if (typeof navigator !== "undefined" && navigator.onLine === false) {
+                // Wait until online
+                const onOnline = () => {
+                    window.removeEventListener("online", onOnline);
+                    this.connect();
+                };
+                window.addEventListener("online", onOnline, { once: true });
+                return;
+            }
+            this.connect();
+        };
+        this.reconnectTimerId = setTimeout(doRetry, delay);
+        this.reconnectAttempts += 1;
+    }
+
+    #clearTimers() {
+        if (this.reconnectTimerId) { clearTimeout(this.reconnectTimerId); this.reconnectTimerId = null; }
+        if (this.connectTimeoutId) { clearTimeout(this.connectTimeoutId); this.connectTimeoutId = null; }
+        if (this.livenessIntervalId) { clearInterval(this.livenessIntervalId); this.livenessIntervalId = null; }
     }
 
     #emitError(err) {
