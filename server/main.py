@@ -1,5 +1,6 @@
+"""Refactored main server with modular message handlers."""
+
 import asyncio
-import base64
 import os
 import json
 import logging
@@ -17,7 +18,17 @@ from .gemini_client import (
     generate_audio_response,
     generate_image_response,
 )
-
+from .handlers import (
+    handle_init,
+    handle_image_frame,
+    handle_audio_chunk,
+    handle_transcript,
+    handle_text,
+    handle_control,
+    handle_links,
+)
+from .handlers.base import send_json_safe
+from .connection_manager import connection_manager
 
 logger = logging.getLogger("server")
 # Reduce server terminal verbosity by default; keep extension console logs unchanged
@@ -42,9 +53,26 @@ async def healthz():
     return JSONResponse(content={"status": "ok"}, status_code=200)
 
 
+@app.get("/connections")
+async def get_connections():
+    """Get information about active WebSocket connections."""
+    stats = connection_manager.get_stats()
+    connections_info = {}
+    
+    for connection_id in connection_manager.get_connection_ids():
+        info = connection_manager.get_connection_info(connection_id)
+        connections_info[connection_id] = info
+    
+    return JSONResponse(content={
+        "stats": stats,
+        "connections": connections_info
+    }, status_code=200)
+
+
 class ConnectionState:
-    def __init__(self, websocket: WebSocket):
+    def __init__(self, websocket: WebSocket, connection_id: str):
         self.websocket = websocket
+        self.connection_id = connection_id
         self.session_id: str | None = None
         self.frames_received: int = 0
         self.audio_chunks_received: int = 0
@@ -61,20 +89,19 @@ class ConnectionState:
         # Backpressure thresholds
         self.max_frames_buffer = int(os.getenv("MAX_FRAMES_BUFFER", "5000"))
         self.max_audio_chunks = int(os.getenv("MAX_AUDIO_CHUNKS", "5000"))
-
-
-async def _send_json_safe(ws: WebSocket, payload: Dict[str, Any]) -> None:
-    try:
-        await ws.send_text(json.dumps(payload))
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Failed to send WS message: %s", exc)
+        # Product links storage
+        # Product links storage
+        self.detected_links: List[Tuple[float, str]] = []  # (tsMs, link)
 
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
-    state = ConnectionState(websocket)
-    logger.debug("WS connected: %s", websocket.client)
+    
+    # Register connection and get unique ID
+    connection_id = connection_manager.connect(websocket)
+    state = ConnectionState(websocket, connection_id)
+    logger.debug("WS connected: connection_id=%s client=%s", connection_id, websocket.client)
 
     # Periodic status pings
     async def status_task():
@@ -84,7 +111,7 @@ async def websocket_endpoint(websocket: WebSocket):
             transcripts_prev = 0
             while True:
                 await asyncio.sleep(5)
-                await _send_json_safe(
+                await send_json_safe(
                     websocket,
                     {
                         "type": "status",
@@ -126,176 +153,55 @@ async def websocket_endpoint(websocket: WebSocket):
 
     status_bg = asyncio.create_task(status_task())
 
+    # Message type handlers mapping
+    handlers = {
+        "init": lambda msg: handle_init(websocket, msg, state),
+        "imageFrame": lambda msg: handle_image_frame(websocket, msg, state),
+        "audioChunk": lambda msg: handle_audio_chunk(websocket, msg, state, _finalize_segment),
+        "transcript": lambda msg: handle_transcript(websocket, msg, state),
+        "text": lambda msg: handle_text(websocket, msg, state, _finalize_segment, _latest_ts),
+        "control": lambda msg: handle_control(websocket, msg, state, _finalize_segment, _latest_ts),
+        "links": lambda msg: handle_links(websocket, msg, state),
+    }
+
     try:
         while True:
             raw = await websocket.receive_text()
             try:
                 message = json.loads(raw)
             except json.JSONDecodeError:
-                await _send_json_safe(websocket, {"type": "error", "message": "invalid_json"})
+                logger.warning("WS received invalid JSON: %s", raw[:200])
+                await send_json_safe(websocket, {"type": "error", "message": "invalid_json"})
                 continue
 
             mtype = message.get("type")
             seq = message.get("seq")
-
+            
+            # Debug logging for init messages
             if mtype == "init":
-                state.session_id = message.get("sessionId")
-                fps = message.get("fps")
-                sr = message.get("sampleRate") or 16000
-                if isinstance(sr, int) and sr > 0:
-                    state.sample_rate = sr
-                    state.vad = ServerRmsVadSegmenter(sample_rate_hz=state.sample_rate, cfg=ServerVadConfig())
-                logger.debug("INIT session=%s fps=%s sr=%s", state.session_id, fps, state.sample_rate)
-                await _send_json_safe(websocket, {"type": "ack", "seq": seq, "ackType": "init"})
-                # Send capture configuration to client (only capture FPS is exposed to client)
-                try:
-                    capture_fps_env = os.getenv("CAPTURE_FPS", "1")
-                    capture_fps = int(capture_fps_env) if str(capture_fps_env).isdigit() else 10
-                    await _send_json_safe(websocket, {"type": "config", "captureFps": capture_fps})
-                except Exception:
-                    pass
-            elif mtype == "imageFrame":
-                state.frames_received += 1
-                if state.frames_received % 100 == 0:
-                    logger.debug("Frames received: %d", state.frames_received)
-                try:
-                    b64 = message.get("base64")
-                    ts = float(message.get("tsMs") or 0)
-                    if isinstance(b64, str):
-                        jpeg_bytes = base64.b64decode(b64)
-                        state.frames.append((ts, jpeg_bytes))
-                        # keep last N minutes of frames; simple cap
-                        if len(state.frames) > state.max_frames_buffer:
-                            # drop oldest and notify busy
-                            drop = len(state.frames) - state.max_frames_buffer
-                            state.frames = state.frames[drop:]
-                            await _send_json_safe(websocket, {"type": "status", "state": "busy", "droppedFrames": drop})
-                except Exception as exc:
-                    logger.warning("Failed to buffer frame: %s", exc)
-                await _send_json_safe(websocket, {"type": "ack", "seq": seq, "ackType": "imageFrame"})
-            elif mtype == "audioChunk":
-                state.audio_chunks_received += 1
-                if state.audio_chunks_received % 100 == 0:
-                    logger.debug("Audio chunks received: %d", state.audio_chunks_received)
-                try:
-                    b64 = message.get("base64")
-                    ts_start = float(message.get("tsStartMs") or 0)
-                    num_samples = int(message.get("numSamples") or 0)
-                    sr = int(message.get("sampleRate") or state.sample_rate)
-                    if isinstance(b64, str) and num_samples > 0 and sr > 0:
-                        pcm_bytes = base64.b64decode(b64)
-                        # buffer full chunk for later encoding
-                        state.audio_chunks.append((ts_start, pcm_bytes, num_samples, sr))
-                        if len(state.audio_chunks) > state.max_audio_chunks:
-                            drop = len(state.audio_chunks) - state.max_audio_chunks
-                            state.audio_chunks = state.audio_chunks[drop:]
-                            await _send_json_safe(websocket, {"type": "status", "state": "busy", "droppedAudioChunks": drop})
-                        # slice into Server VAD frames of cfg.frame_ms
-                        frame_ms = state.vad.cfg.frame_ms
-                        samples_per_frame = int(sr * (frame_ms / 1000))
-                        bytes_per_frame = samples_per_frame * 2
-                        total_frames = max(1, len(pcm_bytes) // bytes_per_frame)
-                        for i in range(total_frames):
-                            start = i * bytes_per_frame
-                            end = start + bytes_per_frame
-                            frame = pcm_bytes[start:end]
-                            frame_ts = ts_start + (i * frame_ms)
-                            event, payload = state.vad.process_frame(frame, frame_ts)
-                            if event == "segment_start":
-                                await _send_json_safe(websocket, {"type": "status", "state": "speaking", **payload})
-                            elif event == "segment_end":
-                                await _send_json_safe(websocket, {"type": "status", "state": "segment_closed", **payload})
-                                # schedule transcript wait/finalize + encode
-                                asyncio.create_task(_finalize_segment(state, payload["segment_start_ms"], payload["segment_end_ms"]))
-                except Exception as exc:
-                    logger.warning("Failed to process audio chunk: %s", exc)
-                await _send_json_safe(websocket, {"type": "ack", "seq": seq, "ackType": "audioChunk"})
-            elif mtype == "transcript":
-                state.transcripts_received += 1
-                try:
-                    ts = float(message.get("tsMs") or 0)
-                    text = message.get("text") or ""
-                    is_final = bool(message.get("isFinal"))
-                    if is_final:
-                        state.transcripts.append((ts, text))
-                        if len(state.transcripts) > 500:
-                            state.transcripts = state.transcripts[-500:]
-                        # Echo final transcript to client for UI display
-                        await _send_json_safe(websocket, {"type": "transcript", "text": text, "isFinal": True, "tsMs": ts})
-                except Exception:
-                    pass
-                await _send_json_safe(websocket, {"type": "ack", "seq": seq, "ackType": "transcript"})
-            elif mtype == "text":
-                state.text_msgs_received += 1
-                # Acknowledge first
-                await _send_json_safe(websocket, {"type": "ack", "seq": seq, "ackType": "text"})
-                try:
-                    text = message.get("text") or ""
-                    ts = float(message.get("tsMs") or 0)
-                    logger.info("TEXT received tsMs=%.1f len=%d", ts, len(text))
-                    # Store as transcript candidate as well
-                    state.transcripts.append((ts, text))
-                    if len(state.transcripts) > 500:
-                        state.transcripts = state.transcripts[-500:]
-                    # Immediate typed-only finalize: short window and inline image (last frame) if present
-                    now_ms = _latest_ts(state)
-                    seg_end = now_ms
-                    seg_start = max(0.0, seg_end - 2000.0)
-                    asyncio.create_task(
-                        _finalize_segment(
-                            state,
-                            seg_start,
-                            seg_end,
-                            provided_text=text,
-                            skip_transcript_wait=True,
-                            prefer_inline_image=True,
-                        )
-                    )
-                except Exception:
-                    pass
-            elif mtype == "control":
-                action = (message.get("action") or "").lower()
-                if action == "activesessionclosed":
-                    # Client ended ACTIVE speaking session (WebSocket remains open)
-                    try:
-                        # Emit an idle status so the UI can reflect IDLE mode
-                        await _send_json_safe(
-                            websocket,
-                            {"type": "status", "state": "idle"},
-                        )
-                        # Optionally finalize a short trailing window to capture any residual content
-                        now_ms = _latest_ts(state)
-                        seg_end = now_ms
-                        seg_start = max(0.0, seg_end - 2000.0)
-                        asyncio.create_task(
-                            _finalize_segment(
-                                state,
-                                seg_start,
-                                seg_end,
-                                skip_transcript_wait=False,
-                                prefer_inline_image=False,
-                            )
-                        )
-                    except Exception:
-                        pass
-                    await _send_json_safe(websocket, {"type": "ack", "seq": seq, "ackType": "control"})
-                elif action == "forcesegmentclose":
-                    # derive a window from last 2s of audio if available; else last 2s of frames; else ignore
-                    now_ms = _latest_ts(state)
-                    seg_end = now_ms
-                    seg_start = max(0.0, seg_end - 2000.0)
-                    await _send_json_safe(websocket, {"type": "status", "state": "segment_forced", "segment_start_ms": seg_start, "segment_end_ms": seg_end})
-                    asyncio.create_task(_finalize_segment(state, seg_start, seg_end))
-                await _send_json_safe(websocket, {"type": "ack", "seq": seq, "ackType": "control"})
-            else:
-                await _send_json_safe(websocket, {"type": "error", "message": f"unknown_type:{mtype}"})
+                logger.info("Received init message: %s", json.dumps(message, indent=2))
+            
+            # Log only unknown/unexpected WebSocket events
+            if mtype not in handlers:
+                logger.info("WS EVENT (UNKNOWN): %s seq=%s data=%s", mtype, seq, str(message)[:200])
+                await send_json_safe(websocket, {"type": "error", "message": f"unknown_type:{mtype}"})
+                continue
+
+            # Route to appropriate handler
+            try:
+                await handlers[mtype](message)
+            except Exception as exc:
+                logger.exception("Handler error for %s: %s", mtype, exc)
+                await send_json_safe(websocket, {"type": "error", "message": f"handler_error:{mtype}"})
 
     except WebSocketDisconnect:
-        logger.debug("WS disconnected: %s", websocket.client)
+        logger.debug("WS disconnected: connection_id=%s client=%s", connection_id, websocket.client)
     except Exception as exc:  # noqa: BLE001
-        logger.exception("WS error: %s", exc)
+        logger.exception("WS error: connection_id=%s error=%s", connection_id, exc)
     finally:
         status_bg.cancel()
+        # Clean up connection
+        connection_manager.disconnect(connection_id)
 
 
 async def _await_transcript(state: ConnectionState, seg_start_ms: float, seg_end_ms: float) -> Optional[str]:
@@ -323,11 +229,13 @@ async def _finalize_segment(
     skip_transcript_wait: bool = False,
     prefer_inline_image: bool = False,
 ) -> None:
+    """Finalize a segment by encoding and sending to Gemini."""
     # 1) transcript handling
     if skip_transcript_wait:
         text = provided_text
     else:
         text = await _await_transcript(state, seg_start_ms, seg_end_ms)
+    
     # 2) encode segment (downsampled frames to 2 FPS) using timestamp-synchronized buffers
     try:
         # select frames within window
@@ -336,6 +244,7 @@ async def _finalize_segment(
         for (ts, pcm, num, sr) in state.audio_chunks:
             if ts + (num / sr) * 1000.0 >= seg_start_ms and ts <= seg_end_ms:
                 audio_window.append((ts, pcm, num, sr))
+        
         logger.info(
             "SEG window [%.1f, %.1f] frames_in=%d audio_chunks_in=%d",
             seg_start_ms,
@@ -343,6 +252,7 @@ async def _finalize_segment(
             len(frames_window),
             len(audio_window),
         )
+        
         with tempfile.TemporaryDirectory(prefix="seg_") as tmpdir:
             encode_fps = float(os.getenv("ENCODE_FPS", "1.0"))
             result = encode_segment(tmpdir, frames_window, audio_window, seg_start_ms, seg_end_ms, encode_fps=encode_fps)
@@ -375,10 +285,10 @@ async def _finalize_segment(
                 logger.info("GEMINI chosen_path=%s preview=%.120s", payload["chosenPath"], (gemini_text or ""))
                 # Emit final transcript for UI consumption (if any)
                 if text:
-                    await _send_json_safe(state.websocket, {"type": "transcript", "text": text, "isFinal": True, "tsMs": seg_end_ms})
-                await _send_json_safe(state.websocket, payload)
+                    await send_json_safe(state.websocket, {"type": "transcript", "text": text, "isFinal": True, "tsMs": seg_end_ms})
+                await send_json_safe(state.websocket, payload)
                 if gemini_text:
-                    await _send_json_safe(state.websocket, {"type": "response", "text": gemini_text})
+                    await send_json_safe(state.websocket, {"type": "response", "text": gemini_text})
                 return
 
             # Decide content to send to Gemini per fallback rules:
@@ -419,11 +329,11 @@ async def _finalize_segment(
             logger.info("GEMINI chosen_path=%s preview=%.120s", chosen_path, (gemini_text or ""))
             # Emit final transcript for UI consumption (if any)
             if text:
-                await _send_json_safe(state.websocket, {"type": "transcript", "text": text, "isFinal": True, "tsMs": seg_end_ms})
-            await _send_json_safe(state.websocket, payload)
+                await send_json_safe(state.websocket, {"type": "transcript", "text": text, "isFinal": True, "tsMs": seg_end_ms})
+            await send_json_safe(state.websocket, payload)
             # Also emit a response message for UI rendering without client changes
             if gemini_text:
-                await _send_json_safe(state.websocket, {"type": "response", "text": gemini_text})
+                await send_json_safe(state.websocket, {"type": "response", "text": gemini_text})
     except Exception as exc:
         # log the concrete ffmpeg/encode failure for diagnosis
         logger.exception("ENCODE failed in segment [%.1f, %.1f]", seg_start_ms, seg_end_ms)
@@ -432,7 +342,7 @@ async def _finalize_segment(
             gemini_text = generate_video_response(None, text)
         except Exception:
             gemini_text = ""
-        await _send_json_safe(state.websocket, {
+        await send_json_safe(state.websocket, {
             "type": "segment",
             "segmentStartMs": seg_start_ms,
             "segmentEndMs": seg_end_ms,
@@ -442,10 +352,11 @@ async def _finalize_segment(
             "responseText": gemini_text,
         })
         if gemini_text:
-            await _send_json_safe(state.websocket, {"type": "response", "text": gemini_text})
+            await send_json_safe(state.websocket, {"type": "response", "text": gemini_text})
 
 
 def _latest_ts(state: ConnectionState) -> float:
+    """Get the latest timestamp from audio or frame buffers."""
     last_audio_ts = 0.0
     if state.audio_chunks:
         ts, _, num, sr = state.audio_chunks[-1]
@@ -455,6 +366,7 @@ def _latest_ts(state: ConnectionState) -> float:
 
 
 def _make_vad_cfg_from_env() -> ServerVadConfig:
+    """Create VAD configuration from environment variables."""
     try:
         return ServerVadConfig(
             frame_ms=int(os.getenv("VAD_FRAME_MS", "30")),
@@ -466,5 +378,3 @@ def _make_vad_cfg_from_env() -> ServerVadConfig:
         )
     except Exception:
         return ServerVadConfig()
-
-

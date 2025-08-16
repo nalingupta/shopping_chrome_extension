@@ -174,9 +174,11 @@ export class ServerWsClient {
         }
         if (this._isActiveSession) return { success: true };
         try {
+            const sessionId = this.#uuid();
+            console.log("Sending init with sessionId:", sessionId);
             this.#send({
                 type: "init",
-                sessionId: this.#uuid(),
+                sessionId: sessionId,
                 fps,
                 sampleRate,
                 seq: this.#nextSeq(),
@@ -312,7 +314,11 @@ export class ServerWsClient {
     #send(obj) {
         try {
             if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-                this.ws.send(JSON.stringify(obj));
+                const jsonStr = JSON.stringify(obj);
+                if (obj.type === "init") {
+                    console.log("Actually sending init message:", jsonStr);
+                }
+                this.ws.send(jsonStr);
                 return;
             }
             // Queue only non-media messages when not connected

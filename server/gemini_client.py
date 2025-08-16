@@ -8,6 +8,8 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
+from .prompts import build_prompt, GENERIC_ASSISTANT_PROMPT
+
 
 _CLIENT: genai.Client | None = None
 
@@ -32,11 +34,8 @@ def _client() -> genai.Client:
     return _CLIENT
 
 
-DEFAULT_SYSTEM_PROMPT = (
-    "You are a shopping assistant. You receive a short video segment captured from the user's browsing "
-    "session along with an optional user transcription. Understand the user's shopping intent and provide "
-    "a helpful, concise text response. Respond in plain text only."
-)
+# Legacy compatibility - use the new XML-based prompt system
+DEFAULT_SYSTEM_PROMPT = GENERIC_ASSISTANT_PROMPT
 
 
 def generate_video_response(
@@ -48,9 +47,9 @@ def generate_video_response(
 
     If the video cannot be attached or the call fails, it falls back to text-only using the transcript.
     """
-    prompt = system_prompt
-    if transcript_text:
-        prompt = f"{system_prompt}\n\nUser transcription (if any): {transcript_text}"
+    # Build structured XML prompt
+    user_input = f"User query/transcript: {transcript_text}" if transcript_text else None
+    prompt = build_prompt(user_input=user_input, system_prompt=system_prompt)
 
     client = _client()
 
@@ -96,9 +95,9 @@ def generate_image_response(
 
     If the image cannot be attached or the call fails, it falls back to text-only using the transcript.
     """
-    prompt = system_prompt
-    if transcript_text:
-        prompt = f"{system_prompt}\n\nUser transcription (if any): {transcript_text}"
+    # Build structured XML prompt
+    user_input = f"User query/transcript: {transcript_text}" if transcript_text else None
+    prompt = build_prompt(user_input=user_input, system_prompt=system_prompt)
 
     client = _client()
 
@@ -134,9 +133,9 @@ def generate_audio_response(
     system_prompt: str = DEFAULT_SYSTEM_PROMPT,
 ) -> str:
     """Calls Gemini 2.5 Flash with audio (WAV) + optional transcript, falling back to text-only if needed."""
-    prompt = system_prompt
-    if transcript_text:
-        prompt = f"{system_prompt}\n\nUser transcription (if any): {transcript_text}"
+    # Build structured XML prompt
+    user_input = f"User query/transcript: {transcript_text}" if transcript_text else None
+    prompt = build_prompt(user_input=user_input, system_prompt=system_prompt)
 
     client = _client()
 
