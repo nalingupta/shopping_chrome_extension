@@ -6,16 +6,20 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple
 import tempfile
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from .server_vad import ServerRmsVadSegmenter, ServerVadConfig
 from .media_encoder import encode_segment
-from .gemini_client import (
-    generate_video_response,
-    generate_audio_response,
-    generate_image_response,
+from .gemini_client_enhanced import (
+    generate_live_audio_response,
+    generate_live_multimodal_response,
+    generate_video_response,  # Keep for fallback compatibility
+    generate_audio_response,  # Keep for fallback compatibility
+    generate_image_response,  # Keep for fallback compatibility
+    AudioTextResponse,
+    save_audio_response,
 )
 
 
@@ -42,6 +46,33 @@ async def healthz():
     return JSONResponse(content={"status": "ok"}, status_code=200)
 
 
+@app.get("/audio/{filename}")
+async def get_audio_response(filename: str):
+    """Serve audio response files."""
+    audio_responses_dir = os.getenv("AUDIO_RESPONSES_DIR", "./audio_responses")
+    file_path = os.path.join(audio_responses_dir, filename)
+    
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Audio file not found")
+    
+    return FileResponse(
+        file_path,
+        media_type="audio/wav",
+        filename=filename
+    )
+
+
+@app.get("/audio-config")
+async def get_audio_config():
+    """Get current audio response configuration."""
+    return JSONResponse(content={
+        "audioResponsesEnabled": os.getenv("ENABLE_AUDIO_RESPONSES", "true").lower() == "true",
+        "audioResponsesDir": os.getenv("AUDIO_RESPONSES_DIR", "./audio_responses"),
+        "geminiLiveModel": "gemini-2.5-flash-preview-native-audio-dialog",
+        "supportedModalities": ["TEXT", "AUDIO"]
+    })
+
+
 class ConnectionState:
     def __init__(self, websocket: WebSocket):
         self.websocket = websocket
@@ -61,6 +92,12 @@ class ConnectionState:
         # Backpressure thresholds
         self.max_frames_buffer = int(os.getenv("MAX_FRAMES_BUFFER", "5000"))
         self.max_audio_chunks = int(os.getenv("MAX_AUDIO_CHUNKS", "5000"))
+        # Gemini Live settings (always enabled)
+        self.audio_responses_enabled = bool(os.getenv("ENABLE_AUDIO_RESPONSES", "true").lower() == "true")
+        self.response_modalities = ["TEXT", "AUDIO"] if self.audio_responses_enabled else ["TEXT"]
+        # Audio response storage
+        self.audio_responses_dir = os.getenv("AUDIO_RESPONSES_DIR", "./audio_responses")
+        os.makedirs(self.audio_responses_dir, exist_ok=True)
 
 
 async def _send_json_safe(ws: WebSocket, payload: Dict[str, Any]) -> None:
@@ -328,6 +365,7 @@ async def _finalize_segment(
         text = provided_text
     else:
         text = await _await_transcript(state, seg_start_ms, seg_end_ms)
+    
     # 2) encode segment (downsampled frames to 2 FPS) using timestamp-synchronized buffers
     try:
         # select frames within window
@@ -336,6 +374,7 @@ async def _finalize_segment(
         for (ts, pcm, num, sr) in state.audio_chunks:
             if ts + (num / sr) * 1000.0 >= seg_start_ms and ts <= seg_end_ms:
                 audio_window.append((ts, pcm, num, sr))
+        
         logger.info(
             "SEG window [%.1f, %.1f] frames_in=%d audio_chunks_in=%d",
             seg_start_ms,
@@ -343,6 +382,7 @@ async def _finalize_segment(
             len(frames_window),
             len(audio_window),
         )
+        
         with tempfile.TemporaryDirectory(prefix="seg_") as tmpdir:
             encode_fps = float(os.getenv("ENCODE_FPS", "1.0"))
             result = encode_segment(tmpdir, frames_window, audio_window, seg_start_ms, seg_end_ms, encode_fps=encode_fps)
@@ -353,96 +393,141 @@ async def _finalize_segment(
                 result.fps,
             )
 
-            # Typed-only and prefer_inline_image path: send last frame as image + text
-            if prefer_inline_image:
-                last_frame_bytes = None
-                if frames_window:
-                    # Use the latest frame in the window
+            # Generate unique audio response filename
+            import time
+            audio_filename = f"response_{int(time.time() * 1000)}_{seg_start_ms:.0f}_{seg_end_ms:.0f}.wav"
+            audio_output_path = os.path.join(state.audio_responses_dir, audio_filename)
+
+            # Use Gemini Live for all responses
+            gemini_response: AudioTextResponse
+            chosen_path = ""
+            
+            try:
+                # Determine the best input method for Gemini Live
+                video_path = None
+                if result.frame_count > 0:
+                    vp = os.path.join(tmpdir, "out.webm")
+                    if os.path.exists(vp):
+                        video_path = vp
+
+                if prefer_inline_image and frames_window:
+                    # Quick image + text response for typed queries
                     last_frame_bytes = frames_window[-1][1]
-                gemini_text = generate_image_response(last_frame_bytes, text)
-                payload = {
-                    "type": "segment",
-                    "segmentStartMs": seg_start_ms,
-                    "segmentEndMs": seg_end_ms,
-                    "transcript": text,
-                    "encoded": False,
-                    "frameCount": result.frame_count,
-                    "audioMs": result.audio_ms,
-                    "fps": result.fps,
-                    "responseText": gemini_text,
-                    "chosenPath": "image+text" if last_frame_bytes else "text",
-                }
-                logger.info("GEMINI chosen_path=%s preview=%.120s", payload["chosenPath"], (gemini_text or ""))
-                # Emit final transcript for UI consumption (if any)
-                if text:
-                    await _send_json_safe(state.websocket, {"type": "transcript", "text": text, "isFinal": True, "tsMs": seg_end_ms})
-                await _send_json_safe(state.websocket, payload)
-                if gemini_text:
-                    await _send_json_safe(state.websocket, {"type": "response", "text": gemini_text})
-                return
+                    # Use live audio response with image context (simulate by using transcript)
+                    gemini_response = await generate_live_audio_response(
+                        transcript_text=f"[Image context] {text or 'Analyze this shopping context'}",
+                        response_modalities=state.response_modalities,
+                        output_audio_path=audio_output_path if state.audio_responses_enabled else None
+                    )
+                    chosen_path = "live_image+text"
+                    
+                elif video_path:
+                    # Multimodal: video analysis + live audio response
+                    gemini_response = await generate_live_multimodal_response(
+                        video_path=video_path,
+                        transcript_text=text,
+                        response_modalities=state.response_modalities,
+                        output_audio_path=audio_output_path if state.audio_responses_enabled else None
+                    )
+                    chosen_path = "live_multimodal"
+                    
+                elif result.audio_ms > 0 and result.audio_wav_path:
+                    # Audio file input with live response
+                    gemini_response = await generate_live_audio_response(
+                        audio_file_path=result.audio_wav_path,
+                        transcript_text=text,
+                        response_modalities=state.response_modalities,
+                        output_audio_path=audio_output_path if state.audio_responses_enabled else None
+                    )
+                    chosen_path = "live_audio"
+                    
+                else:
+                    # Text-only with live audio response
+                    gemini_response = await generate_live_audio_response(
+                        transcript_text=text or "Please provide shopping assistance",
+                        response_modalities=state.response_modalities,
+                        output_audio_path=audio_output_path if state.audio_responses_enabled else None
+                    )
+                    chosen_path = "live_text"
 
-            # Decide content to send to Gemini per fallback rules:
-            # 1) If frames selected > 0 and video muxed, try video + transcript
-            # 2) Else if audio present, send audio WAV + transcript
-            # 3) Else send transcript only
-            video_path = None
-            if result.frame_count > 0:
-                vp = os.path.join(tmpdir, "out.webm")
-                if os.path.exists(vp):
-                    video_path = vp
+            except Exception as live_error:
+                logger.warning("Gemini Live failed, using fallback: %s", live_error)
+                # Fallback to basic text response
+                fallback_text = generate_video_response(video_path if 'video_path' in locals() else None, text)
+                gemini_response = AudioTextResponse(text=fallback_text)
+                chosen_path = "fallback_text"
 
-            if video_path:
-                gemini_text = generate_video_response(video_path, text)
-                encoded = True
-                chosen_path = "video+text" if text else "video"
-            elif result.audio_ms > 0:
-                gemini_text = generate_audio_response(result.audio_wav_path, text)
-                encoded = False
-                chosen_path = "audio+text" if text else "audio"
-            else:
-                gemini_text = generate_video_response(None, text)
-                encoded = False
-                chosen_path = "text"
-
+            # Prepare response payload
             payload = {
                 "type": "segment",
                 "segmentStartMs": seg_start_ms,
                 "segmentEndMs": seg_end_ms,
                 "transcript": text,
-                "encoded": encoded,
+                "encoded": result.frame_count > 0,
                 "frameCount": result.frame_count,
                 "audioMs": result.audio_ms,
                 "fps": result.fps,
-                "responseText": gemini_text,
+                "responseText": gemini_response.text,
                 "chosenPath": chosen_path,
+                "hasAudioResponse": len(gemini_response.audio_data) > 0,
+                "audioResponsePath": audio_filename if len(gemini_response.audio_data) > 0 else None,
             }
-            logger.info("GEMINI chosen_path=%s preview=%.120s", chosen_path, (gemini_text or ""))
+
+            logger.info("GEMINI LIVE chosen_path=%s text_len=%d audio_len=%d", 
+                       chosen_path, len(gemini_response.text), len(gemini_response.audio_data))
+
             # Emit final transcript for UI consumption (if any)
             if text:
                 await _send_json_safe(state.websocket, {"type": "transcript", "text": text, "isFinal": True, "tsMs": seg_end_ms})
+            
+            # Send segment info
             await _send_json_safe(state.websocket, payload)
-            # Also emit a response message for UI rendering without client changes
-            if gemini_text:
-                await _send_json_safe(state.websocket, {"type": "response", "text": gemini_text})
+            
+            # Send text response
+            if gemini_response.text:
+                await _send_json_safe(state.websocket, {"type": "response", "text": gemini_response.text})
+            
+            # Send audio response if available
+            if gemini_response.audio_data and state.audio_responses_enabled:
+                import base64
+                audio_b64 = base64.b64encode(gemini_response.audio_data).decode()
+                await _send_json_safe(state.websocket, {
+                    "type": "audio_response",
+                    "audioData": audio_b64,
+                    "audioFormat": gemini_response.audio_format,
+                    "sampleRate": gemini_response.sample_rate,
+                    "filename": audio_filename,
+                    "segmentStartMs": seg_start_ms,
+                    "segmentEndMs": seg_end_ms,
+                })
+
     except Exception as exc:
-        # log the concrete ffmpeg/encode failure for diagnosis
-        logger.exception("ENCODE failed in segment [%.1f, %.1f]", seg_start_ms, seg_end_ms)
-        # provide error plus fallback response if possible
+        # log the concrete error for diagnosis
+        logger.exception("SEGMENT FINALIZATION failed in segment [%.1f, %.1f]", seg_start_ms, seg_end_ms)
+        
+        # Provide error response with basic fallback
         try:
-            gemini_text = generate_video_response(None, text)
+            fallback_response = await generate_live_audio_response(
+                transcript_text=text or "I apologize, there was an error processing your request.",
+                response_modalities=["TEXT"],  # Text only for error cases
+            )
+            fallback_text = fallback_response.text
         except Exception:
-            gemini_text = ""
+            fallback_text = "I'm sorry, I encountered an error while processing your request."
+        
         await _send_json_safe(state.websocket, {
             "type": "segment",
             "segmentStartMs": seg_start_ms,
             "segmentEndMs": seg_end_ms,
             "transcript": text,
             "encoded": False,
-            "error": f"encode_failed:{exc}",
-            "responseText": gemini_text,
+            "error": f"processing_failed:{exc}",
+            "responseText": fallback_text,
+            "chosenPath": "error_fallback",
         })
-        if gemini_text:
-            await _send_json_safe(state.websocket, {"type": "response", "text": gemini_text})
+        
+        if fallback_text:
+            await _send_json_safe(state.websocket, {"type": "response", "text": fallback_text})
 
 
 def _latest_ts(state: ConnectionState) -> float:

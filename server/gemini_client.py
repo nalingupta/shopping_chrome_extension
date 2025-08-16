@@ -1,12 +1,18 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Dict, Any, AsyncGenerator, Tuple
+from dataclasses import dataclass
 
 import os
+import io
+import asyncio
+import wave
 from pathlib import Path
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
+import soundfile as sf
+import librosa
 
 
 _CLIENT: genai.Client | None = None
@@ -37,6 +43,19 @@ DEFAULT_SYSTEM_PROMPT = (
     "session along with an optional user transcription. Understand the user's shopping intent and provide "
     "a helpful, concise text response. Respond in plain text only."
 )
+
+DEFAULT_AUDIO_SYSTEM_PROMPT = (
+    "You are a helpful shopping assistant. Answer in a friendly tone and provide concise, "
+    "helpful responses about shopping queries, product recommendations, and browsing assistance."
+)
+
+@dataclass
+class AudioTextResponse:
+    """Response containing both text and audio data."""
+    text: str = ""
+    audio_data: bytes = b""
+    audio_format: str = "wav"
+    sample_rate: int = 24000
 
 
 def generate_video_response(
